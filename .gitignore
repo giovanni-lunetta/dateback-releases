@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+*.dmg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+python/build/
+python/dist/
+
+# OS
+.DS_Store

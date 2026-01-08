@@ -1,0 +1,98 @@
+MIT License
+
+Copyright (c) 2025 Giovanni Lunetta
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+THIRD-PARTY LICENSES
+================================================================================
+
+This software uses the following third-party components:
+
+--------------------------------------------------------------------------------
+FFmpeg
+--------------------------------------------------------------------------------
+This software bundles FFmpeg, a multimedia framework licensed under the 
+GNU General Public License version 2.0 or later (GPL v2.0+).
+
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.
+
+The bundled FFmpeg binary (version 8.0.1) is configured with GPL-licensed codecs:
+- libx264 (H.264 encoder) - GPL v2.0+
+- libx265 (HEVC encoder) - GPL v2.0+
+
+FFmpeg Source Code: https://github.com/FFmpeg/FFmpeg (tag: n8.0.1)
+FFmpeg Legal Information: https://ffmpeg.org/legal.html
+
+Complete source package including FFmpeg, x264, and x265:
+https://savemymemories.app/licenses/ffmpeg-source.zip
+SHA256: 286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a
+
+The GPL v2.0 license text is included in this distribution at:
+licenses/GPL-2.0.txt
+
+Or visit: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+GPL NOTICE:
+FFmpeg is distributed WITHOUT ANY WARRANTY; without even the implied warranty 
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General 
+Public License for more details.
+
+--------------------------------------------------------------------------------
+Electron
+--------------------------------------------------------------------------------
+MIT License - https://github.com/electron/electron/blob/main/LICENSE
+
+--------------------------------------------------------------------------------
+Python
+--------------------------------------------------------------------------------
+Python Software Foundation License - https://docs.python.org/3/license.html
+
+--------------------------------------------------------------------------------
+Pillow (PIL Fork)
+--------------------------------------------------------------------------------
+Historical Permission Notice and Disclaimer (HPND) License
+https://github.com/python-pillow/Pillow/blob/main/LICENSE
+
+--------------------------------------------------------------------------------
+Requests
+--------------------------------------------------------------------------------
+Apache License 2.0 - https://github.com/psf/requests/blob/main/LICENSE
+
+--------------------------------------------------------------------------------
+adm-zip
+--------------------------------------------------------------------------------
+MIT License - https://github.com/cthackers/adm-zip/blob/master/LICENSE
+
+--------------------------------------------------------------------------------
+axios
+--------------------------------------------------------------------------------
+MIT License - https://github.com/axios/axios/blob/v1.x/LICENSE
+
+--------------------------------------------------------------------------------
+electron-store
+--------------------------------------------------------------------------------
+MIT License - https://github.com/sindresorhus/electron-store/blob/main/license
+
+--------------------------------------------------------------------------------
+check-disk-space
+--------------------------------------------------------------------------------
+MIT License - https://github.com/Alex-AK-A/check-disk-space/blob/master/LICENSE
+

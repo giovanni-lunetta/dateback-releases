@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://api.lemonsqueezy.com https://formspree.io">
+    <title>MemSavr</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <!-- Title Bar Drag Region (macOS) -->
+    <div class="titlebar"></div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-top">
+                <h1>MemSavr</h1>
+                <div class="header-buttons">
+                    <button id="btn-show-instructions" class="btn-help-icon" title="How to get your data">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" />
+                            <path d="M10 14V10M10 7V6.5" stroke="currentColor" stroke-width="1.5"
+                                stroke-linecap="round" />
+                        </svg>
+                    </button>
+                    <button id="btn-contact-support" class="btn-help-icon" title="Contact Support">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M2 6L10 11L18 6M2 6V14C2 14.5304 2.21071 15.0391 2.58579 15.4142C2.96086 15.7893 3.46957 16 4 16H16C16.5304 16 17.0391 15.7893 17.4142 15.4142C17.7893 15.0391 18 14.5304 18 14V6M2 6L10 1L18 6"
+                                stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <p class="subtitle">Archive Memories the Right Way</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Step 1: ZIP Selection with Drag & Drop -->
+            <section class="input-section">
+                <label class="section-label">1. Select Data Source <span class="label-hint">(mydata.zip)</span></label>
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="drop-icon">📁</span>
+                        <p class="drop-text">Drag & drop your ZIP file here</p>
+                        <p class="drop-subtext">or click to browse</p>
+                    </div>
+                    <input type="text" id="zip-path" class="text-input hidden" readonly>
+                </div>
+                <!-- Auto-Search Button (Outside drop zone to prevent event bubbling) -->
+                <button id="btn-find-zip" class="btn btn-secondary" style="margin-top: 12px; width: 100%;">
+                    🔍 Find My Zip Automatically
+                </button>
+                <div id="file-selected" class="file-selected hidden">
+                    <span class="file-icon">📦</span>
+                    <span id="file-name" class="file-name"></span>
+                    <button id="btn-clear-file" class="btn-clear">✕</button>
+                </div>
+                <div id="zip-validation" class="zip-validation hidden">
+                    <span id="validation-status" class="validation-status"></span>
+                    <button id="btn-validation-help" class="btn btn-small btn-warning hidden">What do I do?</button>
+                </div>
+            </section>
+
+            <!-- Step 2: Output Location -->
+            <section class="input-section">
+                <label class="section-label">2. Output Location <span class="label-hint">(This is where your images will
+                        be stored)</span></label>
+                <div class="input-group">
+                    <input type="text" id="output-path" class="text-input" placeholder="/path/to/output" readonly>
+                    <button id="btn-browse-output" class="btn btn-secondary">Change</button>
+                </div>
+            </section>
+
+            <!-- Storage Check Section -->
+            <section id="storage-check" class="input-section hidden">
+                <label class="section-label">3. Storage Check</label>
+                <div class="storage-stats">
+                    <div class="stat-box">
+                        <span class="stat-title">Total Memories</span>
+                        <span id="storage-count" class="stat-value-large">-</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-title">Available Space</span>
+                        <div class="stat-value-row">
+                            <span id="storage-available" class="stat-value-large">-</span>
+                            <span id="storage-status-icon" class="status-icon-inline">⏳</span>
+                        </div>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-title">Est. Required</span>
+                        <span id="storage-required" class="stat-value-large">-</span>
+                    </div>
+                </div>
+                <div id="storage-warning" class="storage-warning hidden">
+                    ⚠️ <strong>Warning:</strong> You might run out of space! Please free up some storage.
+                </div>
+            </section>
+
+            <!-- Processing Options -->
+            <section class="options-section">
+                <label class="checkbox-label checkbox-option">
+                    <input type="checkbox" id="pause-between-batches">
+                    <span class="checkbox-custom"></span>
+                    <span class="checkbox-text">Optimize for Cloud / Low Storage (Pause between batches)</span>
+                    <button id="btn-cloud-mode-info" class="btn-info-icon" title="What does this do?">
+                        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" />
+                            <path d="M10 14V10M10 7V6.5" stroke="currentColor" stroke-width="1.5"
+                                stroke-linecap="round" />
+                        </svg>
+                    </button>
+                </label>
+            </section>
+
+            <!-- Start/Stop Buttons -->
+            <div class="button-group">
+                <button id="btn-start" class="btn btn-primary btn-large">
+                    START PROCESSING
+                </button>
+                <button id="btn-stop" class="btn btn-danger-outline btn-large hidden">
+                    Pause Processing
+                </button>
+                <div id="resume-restart-container" class="button-group hidden" style="margin-top: 0;">
+                    <button id="btn-resume-proc" class="btn btn-primary btn-large">
+                        Resume Processing
+                    </button>
+                    <button id="btn-continue-later" class="btn btn-secondary btn-large">
+                        Continue Later
+                    </button>
+                    <button id="btn-restart-proc" class="btn btn-danger-outline btn-large">
+                        Start Over
+                    </button>
+                </div>
+                <button id="btn-restart-complete" class="btn btn-secondary btn-large hidden">
+                    Restart
+                </button>
+            </div>
+
+            <!-- Progress Section -->
+            <section class="progress-section">
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <div class="progress-info">
+                    <p id="progress-text" class="progress-text">
+                        <span id="progress-text-content">Ready</span>
+                    </p>
+                    <p id="progress-eta" class="progress-eta"></p>
+                </div>
+            </section>
+
+            <!-- Log Section (Collapsible) -->
+            <section class="log-section">
+                <button id="btn-toggle-log" class="btn-log-toggle">
+                    <svg class="log-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"
+                        xmlns="http://www.w3.org/2000/svg">
+                        <path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" />
+                    </svg>
+                    <span>View Log</span>
+                    <svg class="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"
+                        xmlns="http://www.w3.org/2000/svg">
+                        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                </button>
+                <div id="log-container" class="log-container hidden">
+                    <pre id="log-output"></pre>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <button id="btn-view-summary" class="btn btn-secondary hidden">
+                View Summary
+            </button>
+            <button id="btn-open-folder" class="btn btn-primary" disabled>
+                Open Output Folder
+            </button>
+        </footer>
+    </div>
+
+    <!-- Instructions Modal -->
+    <div id="instructions-modal" class="modal">
+        <div class="modal-content modal-welcome">
+            <!-- Hero Welcome Section -->
+            <div class="welcome-header">
+                <h1 class="welcome-title">Welcome to MemSavr</h1>
+                <img src="../assets/icon.png" alt="MemSavr" class="welcome-icon">
+                <p class="welcome-subtitle">Archive Memories the Right Way</p>
+            </div>
+
+            <!-- Collapsible Instructions -->
+            <button id="btn-toggle-instructions" class="btn-instructions-toggle">
+                <span class="toggle-text">📖 How to Export Your Snapchat Data</span>
+                <svg class="chevron-icon" width="16" height="16" viewBox="0 0 16 16" fill="none"
+                    xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+            </button>
+
+            <div id="instructions-content" class="instructions-content hidden">
+                <div class="steps">
+                    <div class="step warning-step">
+                        <h3>⚠️ Important: "My Eyes Only" Memories</h3>
+                        <p>Photos/videos in <strong>"My Eyes Only"</strong> <strong>cannot be
+                                exported</strong> unless you unhide them first!</p>
+                        <p class="warning-action">Before requesting your data from Snapchat:<br>
+                            Open Snapchat → My Eyes Only → Select → Select All → Three Dots → <strong>Unhide
+                                Snaps</strong></p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Login to Snapchat</h3>
+                        <p>Go to the download page and log in.<br><em>(You can do this on your phone or computer)</em>
+                        </p>
+                    </div>
+
+                    <button id="btn-open-snapchat" class="btn btn-snapchat">
+                        Open Snapchat Data Page →
+                    </button>
+
+                    <div class="step">
+                        <h3>Go to <span class="ui-element">My Data</span></h3>
+                        <p>The link above should bring you directly to the <span class="ui-element">My Data</span> tab.
+                        </p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Select Data to Include</h3>
+                        <p>Toggle <span class="ui-element">Export your Memories</span> and <span
+                                class="ui-element">Export
+                                JSON Files</span>.<br>Then scroll down and hit <span class="ui-element">Next</span>.</p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Choose Date Range</h3>
+                        <p>Under <span class="ui-element">Choose date range</span>, select <span class="ui-element">All
+                                Time</span>.<br>Confirm your email address, and hit <span
+                                class="ui-element">Submit</span>.
+                        </p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Wait for Email</h3>
+                        <p>Snapchat will email you when your data is ready (usually 10-20 minutes).</p>
+                    </div>
+
+                    <div class="step warning-step time-warning">
+                        <h3>⏰ Time Sensitive!</h3>
+                        <p>Download links expire in <strong>7 days</strong> after the email.</p>
+                        <p class="warning-action">Download the ZIP and run this app as soon as possible.<br>If links
+                            expire,
+                            you'll need to request your data again.</p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Return to Download Page</h3>
+                        <p>Once you get the email, click the link inside or go back to the page above.</p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Download Data</h3>
+                        <p>Under <span class="ui-element">Your Exports</span>, click <span class="ui-element">See
+                                exports</span> then <span class="ui-element">Download</span>.</p>
+                    </div>
+
+                    <div class="step">
+                        <h3>Start Organizing</h3>
+                        <p>That's it! Once downloaded, select the ZIP file in this app and click <span
+                                class="ui-element">Start Processing</span>.</p>
+                    </div>
+                </div>
+            </div>
+
+            <p class="walkthrough-link">
+                📖 <a href="#" id="link-walkthrough">See Full Walkthrough on our Website!</a>
+            </p>
+
+            <label class="checkbox-label-simple">
+                <input type="checkbox" id="dont-show-again">
+                <span class="checkbox-custom"></span>
+                <span class="checkbox-text">Don't show this again</span>
+            </label>
+
+            <button id="btn-close-modal" class="btn btn-primary btn-large">
+                I'm Ready!
+            </button>
+        </div>
+    </div>
+
+    <!-- Success Modal -->
+    <div id="success-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 class="success-title">🎉 Congratulations!</h2>
+            <p class="success-subtitle">Your Snapchat Memories are safely stored.</p>
+            <p class="modal-subtext"></p>
+
+            <div id="stats-container" class="stats-container">
+                <!-- Stats will be inserted here by JS -->
+            </div>
+
+            <p class="thanks">Thanks for using MemSavr!</p>
+
+            <div class="modal-buttons">
+                <button id="btn-next-steps-guide" class="btn btn-primary">What's Next?</button>
+                <button id="btn-retry-corrupted" class="btn btn-warning hidden">🔄 Retry Corrupted Files</button>
+                <button id="btn-close-success" class="btn btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Next Steps Guide Modal -->
+    <div id="next-steps-modal" class="modal hidden">
+        <div class="modal-content modal-wide">
+            <h2>What's Next?</h2>
+
+            <div class="guide-section local-storage">
+                <h3>
+                    <svg class="section-icon" width="20" height="20" viewBox="0 0 20 20" fill="none"
+                        xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="10" cy="10" r="9" fill="var(--accent-green)" stroke="var(--accent-green)"
+                            stroke-width="1.5" />
+                        <path d="M6 10L9 13L14 7" stroke="white" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    Keeping Files Locally?
+                </h3>
+                <p>You're all set! Your memories are organized in the output folder. Feel free to browse, share, or back
+                    them up however you'd like.</p>
+            </div>
+
+            <div class="guide-section cloud-upload">
+                <h3>☁️ Uploading to the Cloud?</h3>
+                <p>Your memories are already organized in <strong>Batch</strong> folders (500 files each) for easy
+                    upload.</p>
+
+                <div class="guide-tabs">
+                    <div class="tab active" data-tab="google">📷 Google Photos</div>
+                    <div class="tab" data-tab="icloud">🍎 iCloud Photos</div>
+                </div>
+
+                <div class="tab-content" id="tab-google">
+                    <h4>Option 1:</h4>
+                    <ol>
+                        <li>Open <a href="https://photos.google.com" id="link-google-photos">photos.google.com</a> in
+                            your browser</li>
+                        <li>Navigate to your <a href="#" id="link-folder-google" class="folder-link">Output Folder</a>
+                        </li>
+                        <li>Drag and drop <strong>Batch_01</strong> folder into Google Photos</li>
+                        <li>Wait for upload to complete</li>
+                        <li>Repeat for each batch folder</li>
+                    </ol>
+
+                    <h4>Option 2:</h4>
+                    <ol>
+                        <li>Open <a href="https://photos.google.com" id="link-google-photos-2">photos.google.com</a> in
+                            your browser</li>
+                        <li>Click the <strong>+</strong> button at the top right of the screen</li>
+                        <li>Click <strong>Import Photos</strong></li>
+                        <li>Navigate to your <a href="#" id="link-folder-google-2" class="folder-link">Output Folder</a>
+                        </li>
+                        <li>Open <strong>Batch_01</strong> and select all files (Cmd+A)</li>
+                        <li>Wait for upload to complete</li>
+                        <li>Repeat for each batch folder</li>
+                    </ol>
+                    <p class="tip">💡 <strong>Tip:</strong> Google Photos allows up to 15GB free storage. Check your
+                        storage before uploading!</p>
+                </div>
+
+                <div class="tab-content hidden" id="tab-icloud">
+                    <ol>
+                        <li>Open the <strong>Photos</strong> app on your Mac</li>
+                        <li>Go to <strong>File</strong> → <strong>Import</strong></li>
+                        <li>Navigate to your <a href="#" id="link-folder-icloud" class="folder-link">Output Folder</a>
+                        </li>
+                        <li>Select <strong>Batch_01</strong> folder and click <strong>Review for Import</strong></li>
+                        <li>Click <strong>Import All New Items</strong></li>
+                        <li>Wait for sync to complete, then repeat for each batch</li>
+                    </ol>
+                    <p class="tip">💡 <strong>Tip:</strong> Make sure iCloud Photos is enabled in System Settings →
+                        Apple ID → iCloud → Photos.</p>
+                </div>
+            </div>
+
+            <div class="guide-section storage-tip">
+                <div class="storage-tip-content">
+                    <div class="storage-tip-text">
+                        <h3>💡 Pro Tip: Free Up Space</h3>
+                        <p>Once your memories are safely in the cloud, delete the local folder to reclaim disk space.
+                        </p>
+                    </div>
+                    <button id="btn-open-folder-tip" class="btn btn-secondary btn-small">📂 Open Output Folder</button>
+                </div>
+            </div>
+
+            <button id="btn-close-next-steps" class="btn btn-primary btn-large">Got it!</button>
+        </div>
+    </div>
+
+    <!-- Stop Confirmation Modal -->
+    <div id="stop-confirm-modal" class="modal hidden">
+        <div class="modal-content modal-small">
+            <h2>Pause Processing?</h2>
+            <p class="modal-message">Any memories saved so far will be kept.</p>
+            <div class="modal-buttons">
+                <button id="btn-resume" class="btn btn-primary">Resume</button>
+                <button id="btn-confirm-stop" class="btn btn-danger-outline">Pause</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Battery Warning Modal -->
+    <div id="battery-warning-modal" class="modal hidden">
+        <div class="modal-content modal-small">
+            <h2>⚠️ High Power Usage</h2>
+            <p class="modal-message">We strongly recommend connecting to a charger before processing gigabytes of data.
+            </p>
+            <div class="modal-buttons">
+                <button id="btn-cancel-battery" class="btn btn-secondary">Cancel</button>
+                <button id="btn-continue-battery" class="btn btn-primary">Continue Anyway</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Offline Warning Modal -->
+    <div id="offline-warning-modal" class="modal hidden">
+        <div class="modal-content modal-small">
+            <h2>⚠️ No Internet Connection</h2>
+            <p class="modal-message">You selected a cloud folder, but you are offline. Your hard drive may fill up
+                because files cannot upload.</p>
+            <p class="modal-message">We strongly recommend connecting to Wi-Fi first.</p>
+            <div class="modal-buttons">
+                <button id="btn-continue-offline" class="btn btn-primary">Continue Anyway</button>
+                <button id="btn-cancel-offline" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Over Confirmation Modal -->
+    <div id="restart-confirm-modal" class="modal hidden">
+        <div class="modal-content modal-small">
+            <h2>Start Over?</h2>
+            <p class="modal-message warning">This will <strong>delete all processed files</strong> and start completely
+                fresh. Your original ZIP file will not be affected.</p>
+            <p class="modal-subtext">If you just want to continue where you left off, click Cancel and use "Resume
+                Processing" instead.</p>
+            <div class="modal-buttons">
+                <button id="btn-confirm-restart" class="btn btn-danger">🗑️ Delete & Start Over</button>
+                <button id="btn-cancel-restart" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Resume Mode Modal -->
+    <div id="resume-mode-modal" class="modal hidden">
+        <div class="modal-content modal-medium">
+            <div style="position: relative;">
+                <h2>Resume Options</h2>
+                <button id="btn-resume-info" class="btn-help-icon" style="position: absolute; top: 0; right: 0;"
+                    title="What do these options mean?">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" />
+                        <path d="M10 14V10M10 7V6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                    </svg>
+                </button>
+            </div>
+            <p id="resume-mode-summary" class="modal-message"></p>
+
+            <!-- Info tooltip (hidden by default) -->
+            <div id="resume-mode-info" class="info-tooltip hidden">
+                <p><strong>Skip Files Already Processed:</strong> Fast resume using saved progress. Works even if files
+                    are uploaded to iCloud and removed locally.</p>
+                <p><strong>Verify Files:</strong> Double-checks which files exist on disk before resuming. Safer but
+                    slower.</p>
+                <p><strong>Start Fresh:</strong> Clears all progress and starts processing from the beginning.</p>
+            </div>
+
+            <div class="modal-buttons resume-mode-buttons">
+                <button id="btn-resume-trust" class="btn btn-primary btn-large">Skip Files Already Processed</button>
+                <button id="btn-resume-verify" class="btn btn-secondary btn-large">Verify Files</button>
+                <button id="btn-resume-start-fresh" class="btn btn-danger-outline btn-large">Start Fresh</button>
+            </div>
+            <div class="modal-buttons" style="margin-top: 16px;">
+                <button id="btn-resume-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch Pause Modal (for Cloud Sync) -->
+    <div id="batch-pause-modal" class="modal hidden">
+        <div class="modal-content modal-small">
+            <h2>Batch Complete</h2>
+            <p id="batch-pause-message" class="modal-message">Batch 1 of X complete. Paused for cloud sync.</p>
+            <p class="modal-subtext">Upload the current batch to your cloud service, then continue or pause.</p>
+            <div class="modal-buttons">
+                <button id="btn-continue-batch" class="btn btn-primary btn-large">Continue to Next Batch</button>
+                <button id="btn-pause-after-batch" class="btn btn-secondary btn-large">Pause for Now</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cloud Mode Info Modal -->
+    <div id="cloud-mode-info-modal" class="modal hidden">
+        <div class="modal-content modal-medium">
+            <h2>☁️ Cloud Mode Explained</h2>
+            <div class="info-content">
+                <p class="modal-message">What is Cloud Mode?</p>
+                <p class="modal-subtext">This feature processes your memories in small batches (500 files each), pausing
+                    between batches to let you upload them to cloud storage and free up disk space.</p>
+
+                <div class="info-section">
+                    <p class="info-title">🎯 Perfect For:</p>
+                    <ul class="info-list">
+                        <li>Users with limited hard drive space</li>
+                        <li>Large exports (10,000+ memories)</li>
+                        <li>Uploading to Google Photos, iCloud, Dropbox, etc.</li>
+                    </ul>
+                </div>
+
+                <div class="info-section">
+                    <p class="info-title">⚙️ How It Works:</p>
+                    <ol class="info-list">
+                        <li>Process Batch 1 (500 files)</li>
+                        <li>App pauses and shows a modal</li>
+                        <li>You upload the batch folder to your cloud</li>
+                        <li>Delete the batch folder from your drive</li>
+                        <li>Click "Continue" to process the next batch</li>
+                    </ol>
+                </div>
+
+                <div class="info-section info-highlight">
+                    <p class="info-title">💡 Pro Tip:</p>
+                    <p>If you have plenty of space (50GB+), leave this OFF for faster processing.</p>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button id="btn-close-cloud-info" class="btn btn-primary">Got it!</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Storage Warning Modal -->
+    <div id="storage-warning-modal" class="modal hidden">
+        <div class="modal-content modal-medium">
+            <h2 id="storage-warning-title">⚠️ Storage Warning</h2>
+            <p id="storage-warning-text" class="modal-message"></p>
+            <p id="storage-warning-subtext" class="modal-subtext"></p>
+            <div class="modal-buttons">
+                <button id="btn-storage-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="btn-storage-continue" class="btn btn-primary">Continue Anyway</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generic Message Modal -->
+    <div id="message-modal" class="modal hidden">
+        <div class="modal-content modal-small">
+            <h2 id="message-modal-title">Notice</h2>
+            <p id="message-modal-text" class="modal-message"></p>
+            <div class="modal-buttons">
+                <button id="btn-message-ok" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Expired Links Modal -->
+    <div id="expired-link-modal" class="modal hidden">
+        <div class="modal-content modal-medium" style="text-align: center;">
+            <h2 id="expired-link-title">⚠️ Download Links Expired</h2>
+            <p class="modal-message">Your Snapchat download links are no longer valid (they expire after 7 days).</p>
+
+            <div class="modal-section">
+                <p class="modal-subheading" style="margin-bottom: 12px; font-weight: 600; color: var(--text-main);">To
+                    fix this:</p>
+                <ol class="modal-list" style="color: var(--text-muted); margin-left: 20px;">
+                    <li>Go to Snapchat's <strong>Download My Data</strong> page</li>
+                    <li>Request your data again</li>
+                    <li>Wait for the new email and download the ZIP</li>
+                    <li>Run this app with the new ZIP</li>
+                </ol>
+            </div>
+
+            <p class="modal-note" style="font-size: 0.9em; opacity: 0.8; margin-bottom: 24px;">📁 <strong>Note:</strong>
+                Files already processed are safe.</p>
+
+            <div class="modal-buttons" style="display: flex; justify-content: center;">
+                <button id="btn-expired-link-ok" class="btn btn-primary" style="min-width: 140px;">Got it</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- License Activation Modal -->
+    <div id="license-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2>🔑 Activate MemSavr</h2>
+            <p class="modal-message">Ready to archive your memories? Enter your license key below.</p>
+
+            <div class="form-group" style="margin: 20px 0;">
+                <label for="license-key-input" style="display: block; margin-bottom: 8px; font-weight: 500;">License
+                    Key</label>
+                <input type="text" id="license-key-input" class="text-input" placeholder="XXXX-XXXX-XXXX-XXXX"
+                    style="width: 100%; font-family: 'Courier New', monospace; text-transform: uppercase;">
+            </div>
+
+            <div id="license-status" class="hidden"
+                style="margin-bottom: 20px; padding: 12px; border-radius: 8px; font-size: 14px;">
+                <!-- Status messages appear here -->
+            </div>
+
+            <div class="modal-buttons">
+                <button id="btn-buy-license" class="btn btn-primary">
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none"
+                        style="margin-right: 6px; vertical-align: middle;">
+                        <path d="M3 3h14v14H3V3z" stroke="currentColor" stroke-width="1.5" fill="none" />
+                        <path d="M7 10h6M10 7v6" stroke="currentColor" stroke-width="1.5" />
+                    </svg>
+                    Buy License ($15.00)
+                </button>
+                <button id="btn-activate-license" class="btn btn-secondary">Activate</button>
+            </div>
+
+            <p style="text-align: center; margin-top: 20px; font-size: 12px; color: var(--text-secondary);">
+                Having trouble? Contact <a href="mailto:support@savemymemories.app"
+                    style="color: var(--accent-green); text-decoration: none;">support@savemymemories.app</a>
+            </p>
+        </div>
+    </div>
+
+
+    <!-- Contact Support Modal -->
+    <!-- Contact Support Modal -->
+    <div id="contact-modal" class="contact-modal">
+        <div class="contact-modal-content">
+            <span id="contact-modal-close-btn" class="contact-modal-close">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+            </span>
+            <h2>Contact Support</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 24px;">
+                Have a question or need help? Send us an email and we'll get back to you soon.
+            </p>
+
+            <button id="btn-email-support" class="btn btn-primary" style="width: 100%; margin-bottom: 16px;">
+                <svg style="vertical-align: middle; margin-right: 8px;" width="20" height="20" viewBox="0 0 24 24"
+                    fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    <polyline points="22,6 12,13 2,6" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
+                </svg>
+                Email Support
+            </button>
+
+            <p style="color: var(--text-secondary); font-size: 0.9em; text-align: center; margin-top: 8px;">
+                Opens in your default email app. You can attach screenshots, logs, or other files.
+            </p>
+
+            <div
+                style="margin-top: 20px; padding: 16px; background: rgba(59, 142, 208, 0.1); border: 1px solid rgba(59, 142, 208, 0.3); border-radius: 8px;">
+                <p style="color: var(--text-secondary); font-size: 0.85em; margin: 0;">
+                    💡 <strong>Tip:</strong> If you're experiencing an error, export your support logs via <strong>Help
+                        → Export Support Logs</strong> and attach the ZIP file to your email for faster troubleshooting.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Support Logs Export Success Modal -->
+    <div id="logs-export-modal" class="contact-modal">
+        <div class="contact-modal-content" style="max-width: 580px; padding: 40px;">
+            <span id="logs-export-modal-close-btn" class="contact-modal-close">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+            </span>
+
+            <!-- Success Icon -->
+            <div style="text-align: center; margin-bottom: 28px;">
+                <div
+                    style="width: 88px; height: 88px; margin: 0 auto; background: linear-gradient(135deg, #2cc069 0%, #3b8ed0 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 12px 32px rgba(44, 192, 105, 0.5), 0 0 0 8px rgba(44, 192, 105, 0.1);">
+                    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M20 6L9 17l-5-5" stroke="white" stroke-width="3" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Title -->
+            <h2 style="margin: 0 0 12px 0; font-size: 32px; text-align: center; font-weight: 700;">Logs Exported!</h2>
+            <p
+                style="color: var(--text-secondary); margin: 0 0 32px 0; font-size: 15px; text-align: center; line-height: 1.5;">
+                Your diagnostic logs have been packaged and saved
+            </p>
+
+            <!-- File Location Box -->
+            <div
+                style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+                <p
+                    style="color: var(--text-secondary); margin: 0 0 10px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">
+                    📁 File Location
+                </p>
+                <p id="logs-export-filename"
+                    style="color: var(--text-main); font-weight: 600; font-size: 15px; margin: 0; word-break: break-all; font-family: 'SF Mono', 'Monaco', 'Courier New', monospace; line-height: 1.6;">
+                    MemSavr-SupportLogs-2026-01-03.zip
+                </p>
+            </div>
+
+            <!-- Email Instruction Box -->
+            <div
+                style="background: linear-gradient(135deg, rgba(59, 142, 208, 0.15) 0%, rgba(44, 192, 105, 0.15) 100%); border: 1.5px solid rgba(59, 142, 208, 0.5); border-radius: 14px; padding: 28px; margin-bottom: 28px; text-align: center;">
+                <p
+                    style="color: var(--text-main); font-size: 15px; margin: 0 0 16px 0; line-height: 1.6; font-weight: 500;">
+                    📧 <strong>Next Step:</strong> Attach this ZIP to your support email
+                </p>
+                <button id="logs-support-email"
+                    style="all: unset; color: white; cursor: pointer; font-weight: 700; font-size: 17px; display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #3b8ed0 0%, #2cc069 100%); border-radius: 10px; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(59, 142, 208, 0.4); letter-spacing: 0.3px;">
+                    support@savemymemories.app
+                </button>
+            </div>
+
+            <!-- Close Button -->
+            <button id="btn-logs-export-ok" class="btn btn-primary btn-large"
+                style="box-shadow: 0 4px 16px rgba(44, 192, 105, 0.25);">
+                Got it!
+            </button>
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+
+</html>

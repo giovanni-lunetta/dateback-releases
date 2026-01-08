@@ -1,0 +1,75 @@
+{
+    "name": "memsavr",
+    "version": "1.0.6",
+    "description": "MemSavr - Archive Memories the Right Way",
+    "main": "main.js",
+    "scripts": {
+        "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+        "build": "env -u ELECTRON_RUN_AS_NODE electron-builder --mac",
+        "build:mac": "env -u ELECTRON_RUN_AS_NODE electron-builder --mac"
+    },
+    "author": "Giovanni Lunetta",
+    "license": "MIT",
+    "devDependencies": {
+        "electron": "^39.2.7",
+        "electron-builder": "^26.0.12"
+    },
+    "build": {
+        "appId": "com.giovannilunetta.memsavr",
+        "productName": "MemSavr",
+        "publish": {
+            "provider": "github",
+            "owner": "giovanni-lunetta",
+            "repo": "memsavr-releases",
+            "private": true
+        },
+        "mac": {
+            "category": "public.app-category.utilities",
+            "icon": "assets/MemSavr.icns",
+            "hardenedRuntime": true,
+            "gatekeeperAssess": false,
+            "entitlements": "build/entitlements.mac.plist",
+            "entitlementsInherit": "build/entitlements.mac.plist",
+            "notarize": true,
+            "target": {
+                "target": "dmg",
+                "arch": [
+                    "arm64"
+                ]
+            }
+        },
+        "files": [
+            "main.js",
+            "preload.js",
+            "src/**/*",
+            "assets/**/*",
+            "!assets/bin/**/*",
+            "LICENSE",
+            "licenses/**/*",
+            "THIRD_PARTY_NOTICES.txt"
+        ],
+        "extraResources": [
+            {
+                "from": "assets/bin",
+                "to": "bin",
+                "filter": [
+                    "**/*"
+                ]
+            }
+        ],
+        "asarUnpack": [
+            "assets/bin/**/*"
+        ],
+        "dmg": {
+            "sign": true
+        }
+    },
+    "dependencies": {
+        "adm-zip": "^0.5.16",
+        "axios": "^1.13.2",
+        "check-disk-space": "^3.4.0",
+        "electron-store": "^8.1.0",
+        "electron-updater": "^6.6.2",
+        "glob": "^13.0.0"
+    }
+}
