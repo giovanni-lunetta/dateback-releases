@@ -1575,9 +1575,10 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 sys.exit(0)
     
     print(f"\nAll batches processed.")
-    
-    # Clear batch progress since we completed successfully
-    clear_batch_progress()
+
+    # Keep manifest after completion - allows user to choose Skip/Verify/Start Fresh on next run
+    # This prevents duplicate processing and gives users control
+    # clear_batch_progress()
 
     # Cleanup 0-byte placeholders (skip if aborted)
     if not ABORT_PROCESSING.is_set():
@@ -1660,7 +1661,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 pass
     
     print(f"Total files in all batches: {success_count} ({images_count} images, {videos_count} videos)")
-    
+
     # Load manifest to get accurate processed_count (source of truth for total across runs)
     manifest_processed_count = None
     manifest_path = os.path.join(OUTPUT_DIR, '.batch_progress.json')
@@ -1671,9 +1672,25 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 manifest_processed_count = manifest_data.get('processed_count')
         except Exception as e:
             print(f"Warning: Could not read manifest processed_count: {e}", flush=True)
-            
+
+    # Count actual files on disk for verification
+    actual_files_on_disk = 0
+    try:
+        for root, _, files in os.walk(OUTPUT_DIR):
+            for f in files:
+                if f.startswith('.'):
+                    continue  # Skip hidden files
+                filepath = os.path.join(root, f)
+                try:
+                    if os.path.getsize(filepath) > 0:
+                        actual_files_on_disk += 1
+                except OSError:
+                    pass
+    except Exception:
+        actual_files_on_disk = -1  # Signal that count failed
+
     stats = {
-        "success": success_count,  # Total across all runs
+        "success": success_count,  # Total files on disk (unique)
         "duplicates": duplicate_count,  # Duplicates from current run
         "missing": missing_count,
         "skipped": skipped_count,
@@ -1681,21 +1698,50 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         "images": images_count,
         "videos": videos_count,
         "total_size": total_size,
-        "current_run_new": current_run_success,  # Files processed this run only
+        "current_run_new": current_run_success,  # Success entries in report (may include timestamp duplicates)
         "current_run_skipped": current_run_duplicates,  # Duplicates detected this run
         "current_run_images": current_run_images,
         "current_run_videos": current_run_videos,
         "used_trust_manifest": used_trust_manifest,
         "previously_processed": previously_processed,
         "manifest_total_files": manifest_total_files,
-        "manifest_processed_count": manifest_processed_count  # From manifest (source of truth)
+        "manifest_processed_count": manifest_processed_count,  # From manifest (source of truth)
+        "actual_files_on_disk": actual_files_on_disk,  # Verification count (should match success)
+        "report_success_count": current_run_success  # Number of success entries in report
     }
 
     with open(REPORT_FILE, 'w') as f:
         json.dump(results, f, indent=2)
-        
+
     print(f"Done! Detailed report saved to {REPORT_FILE}", flush=True)
     print(f"Stats: Success={success_count}, Duplicates={duplicate_count}, Missing={missing_count}, Skipped={skipped_count}, Errors={error_count}", flush=True)
+
+    # Print verification summary to reassure users
+    print(f"\n✅ Verification Summary:", flush=True)
+    if actual_files_on_disk > 0:
+        print(f"   Files on disk: {actual_files_on_disk}", flush=True)
+
+    # Count entries in detailed report for comparison
+    report_success_entries = sum(1 for r in results if r.get('status') == 'Success')
+    total_processed = success_count + duplicate_count + missing_count + skipped_count + error_count
+
+    print(f"   Total memories from export: {manifest_total_files}", flush=True)
+    print(f"   Total accounted for: {len(results)} (Success={success_count}, Duplicates={duplicate_count}, Errors={error_count})", flush=True)
+
+    # Check for timestamp collisions (same filename from different memories)
+    if report_success_entries > success_count:
+        collisions = report_success_entries - success_count
+        print(f"   Note: {collisions} memories share identical timestamps (created at exact same second)", flush=True)
+        print(f"         The later file overwrote the earlier one. Both are in the report.", flush=True)
+
+    if len(results) == manifest_total_files:
+        print(f"   ✅ All {manifest_total_files} memories accounted for!", flush=True)
+    else:
+        diff = manifest_total_files - len(results)
+        if diff > 0:
+            print(f"   ⚠️  {diff} memories missing from report (likely had no date in export)", flush=True)
+        else:
+            print(f"   ⚠️  Report has {-diff} more entries than expected", flush=True)
     
     return stats
 

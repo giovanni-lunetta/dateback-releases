@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['process_snapchat_memories.py'],
+    ['cli.py'],
     pathex=[],
     binaries=[],
     datas=[],

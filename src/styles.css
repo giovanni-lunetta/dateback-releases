@@ -1902,13 +1902,140 @@ textarea {
     justify-content: center;
 }
 
-.resume-mode-buttons {
-    flex-direction: column;
-    align-items: stretch;
+/* Resume Modal - Stats Section */
+.resume-stats {
+    margin: 16px 0 20px 0;
 }
 
-.resume-mode-buttons .btn {
+.resume-summary {
+    font-size: 18px;
+    margin: 0 0 6px 0;
+    color: #e5e7eb;
+}
+
+.resume-summary strong {
+    color: #4ade80;
+    font-weight: 600;
+}
+
+.resume-last-run {
+    font-size: 14px;
+    color: #9ca3af;
+    margin: 0;
+}
+
+/* Resume Modal - Card Layout */
+.resume-options-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+}
+
+.resume-card {
+    position: relative;
     width: 100%;
+    padding: 18px 20px;
+    border-radius: 12px;
+    border: 2px solid transparent;
+    background: #2d3748;
+    color: white;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.resume-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+.resume-card-content {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.resume-card-icon {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    color: currentColor;
+    margin-top: 2px;
+}
+
+.resume-card-text {
+    flex: 1;
+}
+
+.resume-card-text h3 {
+    margin: 0 0 4px 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: white;
+}
+
+.resume-card-text p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.75);
+}
+
+/* Recommended Card */
+.resume-card-recommended {
+    background: linear-gradient(135deg, #10b981 0%, #06b6d4 100%);
+    border-color: transparent;
+}
+
+.resume-card-recommended:hover {
+    background: linear-gradient(135deg, #059669 0%, #0891b2 100%);
+}
+
+.resume-card-badge {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    background: rgba(255, 255, 255, 0.25);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: white;
+}
+
+/* Neutral Card */
+.resume-card-neutral {
+    background: #2d3748;
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.resume-card-neutral:hover {
+    background: #374151;
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Destructive Card */
+.resume-card-destructive {
+    background: #1a1f2e;
+    border-color: #ef4444;
+}
+
+.resume-card-destructive:hover {
+    background: #252b3d;
+    border-color: #dc2626;
+}
+
+.resume-card-destructive .resume-card-text h3 {
+    color: #f87171;
+}
+
+.resume-card-destructive .resume-card-text p {
+    color: rgba(255, 255, 255, 0.7);
 }
 
 .info-tooltip {

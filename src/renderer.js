@@ -665,29 +665,25 @@ function showResumeModeModal(manifest, zipMatch) {
     const totalFiles = typeof manifest.total_files === 'number' ? manifest.total_files : currentMemoryCount;
     const lastRun = formatResumeDate(manifest.timestamp);
 
-    // Create nicer formatted summary with HTML
-    const totalText = totalFiles ? `<span style="opacity: 0.6;"> / ${totalFiles.toLocaleString()}</span>` : '';
-    resumeModeSummary.innerHTML = `
-        <div style="margin-bottom: 4px;">
-            <span style="color: var(--text-muted); font-size: 13px;">Previously processed:</span>
-            <span style="font-size: 20px; font-weight: 600; color: var(--accent-green); margin-left: 8px;">${processedCount.toLocaleString()}</span>${totalText}
-        </div>
-        <div style="color: var(--text-muted); font-size: 13px;">
-            Last run: ${lastRun}
-        </div>
-    `;
+    // Populate stats in new layout
+    const totalText = totalFiles ? ` / ${totalFiles.toLocaleString()}` : '';
+    resumeModeSummary.innerHTML = `<strong>${processedCount.toLocaleString()}</strong>${totalText} files processed`;
+
+    const lastRunElement = document.getElementById('resume-last-run');
+    if (lastRunElement) {
+        lastRunElement.textContent = `Last run: ${lastRun}`;
+    }
 
     const trustAvailable = processedCount > 0 && zipMatch !== false;
     btnResumeTrust.disabled = !trustAvailable;
-    btnResumeTrust.textContent = trustAvailable ? 'Skip Files Already Processed' : 'Skip Files Already Processed (Unavailable)';
 
-    if (zipMatch === false) {
-        // Show warning in info tooltip
-        const infoTooltip = document.getElementById('resume-mode-info');
-        if (infoTooltip) {
-            infoTooltip.classList.remove('hidden');
-            infoTooltip.innerHTML = '<p style="color: var(--accent-orange);"><strong>⚠️ Warning:</strong> Selected ZIP does not match the previous run. "Skip Files Already Processed" is disabled.</p>';
-        }
+    // Add opacity to disabled card
+    if (!trustAvailable) {
+        btnResumeTrust.style.opacity = '0.5';
+        btnResumeTrust.style.cursor = 'not-allowed';
+    } else {
+        btnResumeTrust.style.opacity = '1';
+        btnResumeTrust.style.cursor = 'pointer';
     }
 
     resumeModeModal.classList.remove('hidden');
@@ -695,22 +691,6 @@ function showResumeModeModal(manifest, zipMatch) {
 
 function closeResumeModeModal() {
     resumeModeModal.classList.add('hidden');
-    // Hide info tooltip when closing
-    const infoTooltip = document.getElementById('resume-mode-info');
-    if (infoTooltip) {
-        infoTooltip.classList.add('hidden');
-    }
-}
-
-// Info button toggle
-const btnResumeInfo = document.getElementById('btn-resume-info');
-const resumeModeInfo = document.getElementById('resume-mode-info');
-
-if (btnResumeInfo && resumeModeInfo) {
-    btnResumeInfo.addEventListener('click', (e) => {
-        e.preventDefault();
-        resumeModeInfo.classList.toggle('hidden');
-    });
 }
 
 // Start Processing (Initial)
@@ -1496,16 +1476,28 @@ function showSuccessModal(stats) {
     }
 
     // Build stats using safe DOM creation
-    statsContainer.appendChild(createStatRow('Total Memories Found:', total.toLocaleString()));
+    // Always show manifest total if available (source of truth from JSON export)
+    const displayTotal = manifestTotalFiles || total;
+    statsContainer.appendChild(createStatRow('Total Memories in Export:', displayTotal.toLocaleString()));
+
     if (usedTrustManifest && manifestTotalFiles) {
         statsContainer.appendChild(createStatRow('Total Processed Across All Runs:', `${totalProcessedAcrossRuns.toLocaleString()} / ${manifestTotalFiles.toLocaleString()}`, 'green', true));
         statsContainer.appendChild(createStatRow('Images Saved (This Run):', currentRunImages.toLocaleString(), 'blue', true));
         statsContainer.appendChild(createStatRow('Videos Saved (This Run):', currentRunVideos.toLocaleString(), 'blue'));
         statsContainer.appendChild(createStatRow('Previously Processed:', previousProcessed.toLocaleString(), 'blue', true));
     } else {
-        statsContainer.appendChild(createStatRow('Images Saved:', (stats.images || 0).toLocaleString(), 'blue', true));
-        statsContainer.appendChild(createStatRow('Videos Saved:', (stats.videos || 0).toLocaleString(), 'blue'));
+        statsContainer.appendChild(createStatRow('Images Downloaded:', (stats.images || 0).toLocaleString(), 'blue', true));
+        statsContainer.appendChild(createStatRow('Videos Downloaded:', (stats.videos || 0).toLocaleString(), 'blue'));
+
+        // Show "Unique Memories Downloaded" if we have timestamp collisions
+        const reportSuccessCount = typeof stats.report_success_count === 'number' ? stats.report_success_count : stats.success;
+        const actualFilesOnDisk = typeof stats.actual_files_on_disk === 'number' ? stats.actual_files_on_disk : stats.success;
+
+        if (reportSuccessCount > actualFilesOnDisk) {
+            statsContainer.appendChild(createStatRow('Unique Memories Downloaded:', actualFilesOnDisk.toLocaleString(), 'blue'));
+        }
     }
+
     statsContainer.appendChild(createStatRow('Already Existed (Skipped):', stats.duplicates.toLocaleString(), 'orange', true));
 
     // Duplicate info note (if applicable)
@@ -1518,7 +1510,37 @@ function showSuccessModal(stats) {
 
     statsContainer.appendChild(createStatRow('Corrupted/Errors:', stats.errors.toString(), 'red'));
 
-    // REMOVED: "Downloaded from Cloud" - redundant with Images/Videos this run
+    // Add timestamp collision note and "all accounted for" message
+    // Use cumulative totals if in resume mode, otherwise current run totals
+    const cumulativeSuccessCount = usedTrustManifest && typeof stats.manifest_processed_count === 'number'
+        ? stats.manifest_processed_count
+        : (typeof stats.report_success_count === 'number' ? stats.report_success_count : stats.success);
+
+    const actualFilesOnDisk = typeof stats.actual_files_on_disk === 'number' ? stats.actual_files_on_disk : stats.success;
+
+    // Show timestamp collision note if applicable
+    if (cumulativeSuccessCount > actualFilesOnDisk) {
+        const timestampCollisions = cumulativeSuccessCount - actualFilesOnDisk;
+        const collisionDiv = document.createElement('div');
+        collisionDiv.className = 'stat-note info';
+        collisionDiv.style.marginTop = '12px';
+        collisionDiv.textContent = `ℹ️ ${timestampCollisions} ${timestampCollisions === 1 ? 'memory shares' : 'memories share'} identical timestamps - saved as single ${timestampCollisions === 1 ? 'file' : 'files'}`;
+        statsContainer.appendChild(collisionDiv);
+    }
+
+    // Add "All Memories Accounted For" message if everything matches
+    if (manifestTotalFiles) {
+        // Count total entries in report: cumulative_success + duplicates + errors
+        const totalAccountedFor = cumulativeSuccessCount + stats.duplicates + stats.errors;
+        if (totalAccountedFor === manifestTotalFiles) {
+            const allAccountedDiv = document.createElement('div');
+            allAccountedDiv.className = 'stat-note success';
+            allAccountedDiv.style.marginTop = '12px';
+            allAccountedDiv.style.fontWeight = '600';
+            allAccountedDiv.textContent = `✅ All ${manifestTotalFiles.toLocaleString()} memories accounted for!`;
+            statsContainer.appendChild(allAccountedDiv);
+        }
+    }
 
     successModal.classList.remove('hidden');
     btnOpenFolder.disabled = false;
