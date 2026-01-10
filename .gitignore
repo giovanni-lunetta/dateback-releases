@@ -3,6 +3,11 @@ dist/
 build/
 *.dmg
 
+# Environment variables (sensitive!)
+.env
+.env.local
+.env.*.local
+
 # Python
 __pycache__/
 *.py[cod]

@@ -145,10 +145,22 @@ def is_allowed_download_url(url):
 
 def safe_extract(zf, extract_dir):
     """
-    Extract ZIP with Zip Slip protection.
+    Extract ZIP with Zip Slip protection and symlink blocking.
     Validates all paths before extraction to prevent path traversal attacks.
+    SECURITY: Blocks symlink entries to prevent local file disclosure.
     """
     for member in zf.namelist():
+        # Get the ZipInfo object for this member
+        member_info = zf.getinfo(member)
+        
+        # SECURITY: Check for symlinks (Unix file type in external_attr)
+        # Symlinks have file type 0xA (S_IFLNK) in the high byte
+        # external_attr format: (file_mode << 16) | dos_attributes
+        unix_mode = member_info.external_attr >> 16
+        if unix_mode & 0xA000 == 0xA000:  # S_IFLNK = 0xA000
+            print(f"⚠️  SECURITY: Blocked symlink entry in ZIP: {member}", flush=True)
+            continue  # Skip this entry instead of raising to allow rest of extraction
+        
         # Normalize and check for path traversal
         member_path = os.path.normpath(member)
         if member_path.startswith('..') or os.path.isabs(member_path):
@@ -308,12 +320,19 @@ def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, outp
 def get_remote_file_size(url, retries=5):
     """
     Fetches the Content-Length with exponential backoff.
+    SECURITY: Validates URL before making network request to prevent SSRF.
     """
+    # SECURITY: Validate URL BEFORE any network request
+    if not is_allowed_download_url(url):
+        print(f"Blocked HEAD request to disallowed URL: {url}", flush=True)
+        return None
+    
     wait = 1
     for i in range(retries):
         try:
             session = get_requests_session()
-            response = session.head(url, allow_redirects=True, timeout=15)
+            # SECURITY: Disable redirects to prevent redirect-based SSRF
+            response = session.head(url, allow_redirects=False, timeout=15)
             if response.status_code == 200:
                 size = response.headers.get('Content-Length')
                 if size is None:
@@ -790,7 +809,8 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
              
              if not os.path.exists(dl_path) or (remote_size is not None and os.path.getsize(dl_path) != remote_size):
                  session = get_requests_session()
-                 with session.get(download_url, stream=True, timeout=30) as r:
+                  # SECURITY: Disable redirects during download to prevent redirect-based attacks
+                 with session.get(download_url, stream=True, timeout=30, allow_redirects=False) as r:
                      if r.status_code == 403 or r.status_code == 410:
                          with expired_link_lock:
                              expired_link_counter += 1

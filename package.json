@@ -1,6 +1,6 @@
 {
     "name": "memsavr",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "description": "MemSavr - Archive Memories the Right Way",
     "main": "main.js",
     "scripts": {

@@ -60,7 +60,7 @@ const linkGooglePhotos = document.getElementById('link-google-photos');
 // License Modal elements
 const licenseModal = document.getElementById('license-modal');
 const licenseKeyInput = document.getElementById('license-key-input');
-const btnBuyLicense = document.getElementById('btn-buy-license');
+// Buy license button removed - users get app after purchase
 const btnActivateLicense = document.getElementById('btn-activate-license');
 const licenseStatus = document.getElementById('license-status');
 
@@ -1099,7 +1099,8 @@ function showBatchPauseModal(batchNum, totalBatches) {
 btnContinueBatch.addEventListener('click', async () => {
     console.log('[Cloud Mode] Continue Batch button clicked');
     batchPauseModal.classList.add('hidden');
-    // Don't set "Resuming..." text - it will update automatically with the next progress message
+    // Update UI to show we're resuming
+    progressTextContent.textContent = '▶️ Resuming next batch...';
 
     try {
         console.log('[Cloud Mode] Calling resumeBatch API');
@@ -1832,10 +1833,7 @@ function showLicenseStatus(message, isError = false) {
     licenseStatus.appendChild(document.createTextNode(message));
 }
 
-// Buy License button
-btnBuyLicense.addEventListener('click', () => {
-    window.api.openUrl('https://memsavr.lemonsqueezy.com/checkout/buy/19bf4156-9c6d-4bbf-9592-37d3e09dba82');
-});
+// Buy License button removed - users receive license key via email after purchase from Polar.sh
 
 // Activate License button
 btnActivateLicense.addEventListener('click', async () => {

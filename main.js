@@ -10,6 +10,9 @@ const { autoUpdater } = require('electron-updater');
 const Logger = require('./src/logger');
 const SupportLogs = require('./src/supportLogs');
 
+// Load environment variables from .env file
+require('dotenv').config();
+
 const store = new Store();
 
 // Configure auto-updater
@@ -676,7 +679,7 @@ ipcMain.handle('get-defaults', async (event) => {
     if (!validateSender(event)) {
         return { zipPath: null, outputDir: null, error: 'Unauthorized sender' };
     }
-    
+
     const homeDir = app.getPath('home');
     const downloadsDir = app.getPath('downloads');
 
@@ -1248,26 +1251,25 @@ ipcMain.handle('validate-license', async (event, licenseKey) => {
     }
 
     try {
-        // Lemon Squeezy License Validation API (uses form-urlencoded data)
-        // Documentation: https://docs.lemonsqueezy.com/help/licensing/license-api
+        // Polar.sh License Validation API (uses JSON data)
+        // Documentation: https://docs.polar.sh/api/license-keys
 
-        // Sanitize hostname: only allow alphanumeric characters and hyphens
-        const rawHostname = require('os').hostname();
-        const sanitizedHostname = rawHostname.replace(/[^a-zA-Z0-9-]/g, '') || 'unknown-device';
+        // Use environment variable in development, fallback to hardcoded production ID
+        const orgId = process.env.POLAR_ORG_ID || '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
 
-        const params = new URLSearchParams();
-        params.append('license_key', licenseKey);
-        params.append('instance_name', sanitizedHostname);
-
-        const response = await axios.post('https://api.lemonsqueezy.com/v1/licenses/activate', params, {
+        const response = await axios.post('https://api.polar.sh/v1/customer-portal/license-keys/validate', {
+            key: licenseKey,
+            organization_id: orgId
+        }, {
             headers: {
                 'Accept': 'application/json',
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Content-Type': 'application/json'
             },
             timeout: 15000
         });
 
-        if (response.data.activated || response.data.valid) {
+        // Polar.sh returns 200 OK if valid, with license data
+        if (response.status === 200 && response.data.id) {
             // Store the validated license
             store.set('license', {
                 key: licenseKey,
@@ -1286,7 +1288,7 @@ ipcMain.handle('validate-license', async (event, licenseKey) => {
             return {
                 success: true,
                 valid: false,
-                message: response.data.error || 'Invalid license key'
+                message: 'Invalid license key'
             };
         }
     } catch (error) {
