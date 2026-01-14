@@ -18,6 +18,8 @@ const store = new Store();
 // Configure auto-updater
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.allowDowngrade = false;  // Prevent downgrade attacks
+autoUpdater.allowPrerelease = false; // Only stable releases
 
 let mainWindow;
 let pythonProcess = null;
@@ -25,6 +27,41 @@ let caffeinateProcess = null; // Sleep prevention process
 let intentionalStop = false; // Track if user intentionally stopped processing
 let currentValidatedOutputDir = null; // Store validated output dir for secure resume
 let approvedOutputDirs = new Set(); // Track user-approved output directories
+
+// Rate Limiter for Security (prevent brute-force attacks)
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_MAX = 5; // 5 attempts per minute
+
+function checkRateLimit(identifier) {
+    const now = Date.now();
+    const record = rateLimitMap.get(identifier);
+
+    if (!record || now > record.resetTime) {
+        rateLimitMap.set(identifier, {
+            count: 1,
+            resetTime: now + RATE_LIMIT_WINDOW
+        });
+        return true;
+    }
+
+    if (record.count >= RATE_LIMIT_MAX) {
+        return false;
+    }
+
+    record.count++;
+    return true;
+}
+
+// Cleanup old rate limit entries every 5 minutes
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of rateLimitMap.entries()) {
+        if (now > record.resetTime) {
+            rateLimitMap.delete(key);
+        }
+    }
+}, 5 * 60 * 1000);
 
 // Support Logs System
 let logger = null;
@@ -127,6 +164,68 @@ ipcMain.handle('validate-zip', async (event, zipPath) => {
     try {
         const zip = new AdmZip(zipPath);
         const zipEntries = zip.getEntries();
+
+        // ZIP BOMB PROTECTION
+        const MAX_ENTRIES = 100000;  // 100k files max
+        const MAX_ENTRY_SIZE = 500 * 1024 * 1024;  // 500MB per file
+        const MAX_TOTAL_SIZE = 50 * 1024 * 1024 * 1024;  // 50GB total uncompressed
+
+        // Check entry count
+        if (zipEntries.length > MAX_ENTRIES) {
+            return {
+                found: false,
+                error: `ZIP contains too many files (${zipEntries.length.toLocaleString()}). Maximum allowed: 100,000 files.`,
+                count: 0
+            };
+        }
+
+        // Check individual file sizes and total size
+        let totalSize = 0;
+        for (const entry of zipEntries) {
+            const size = entry.header.size;
+            if (size > MAX_ENTRY_SIZE) {
+                return {
+                    found: false,
+                    error: `ZIP contains file larger than 500MB: ${entry.entryName}`,
+                    count: 0
+                };
+            }
+            totalSize += size;
+        }
+
+        if (totalSize > MAX_TOTAL_SIZE) {
+            const sizeGB = (totalSize / (1024 * 1024 * 1024)).toFixed(2);
+            return {
+                found: false,
+                error: `ZIP total uncompressed size (${sizeGB}GB) exceeds 50GB limit.`,
+                count: 0
+            };
+        }
+
+        // PATH TRAVERSAL PROTECTION (Zip Slip)
+        for (const entry of zipEntries) {
+            const normalized = path.normalize(entry.entryName);
+
+            // Block path traversal attempts
+            if (normalized.includes('..') || path.isAbsolute(normalized)) {
+                return {
+                    found: false,
+                    error: 'ZIP contains invalid file paths (path traversal detected). Please use a legitimate Snapchat export.',
+                    count: 0
+                };
+            }
+
+            // Block dangerous hidden files
+            const basename = path.basename(normalized);
+            if (basename.match(/^\.(bash|zsh|ssh|gnupg|git)/)) {
+                return {
+                    found: false,
+                    error: 'ZIP contains potentially dangerous system files.',
+                    count: 0
+                };
+            }
+        }
+
         const jsonEntry = zipEntries.find(entry => entry.entryName.endsWith('memories_history.json'));
 
         let count = 0;
@@ -344,17 +443,23 @@ function cleanupOrphanedProcesses() {
             // Dev mode: process_snapchat_memories.py (use full path for safety)
             try {
                 const scriptPath = path.join(__dirname, 'python', 'process_snapchat_memories.py');
-                execSync(`pkill -f "${scriptPath}"`);
+                // Use spawn to prevent command injection
+                const { spawnSync } = require('child_process');
+                spawnSync('pkill', ['-f', scriptPath], { shell: false });
                 console.log('✓ Killed orphaned process_snapchat_memories.py');
             } catch (e) { /* No process found */ }
 
             // Prod mode: memory-organizer binary
             try {
-                execSync('pkill -x "memory-organizer"');
+                const { spawnSync } = require('child_process');
+                spawnSync('pkill', ['-x', 'memory-organizer'], { shell: false });
                 console.log('✓ Killed orphaned memory-organizer binary');
             } catch (e) { /* No process found */ }
         } else if (process.platform === 'win32') {
-            try { execSync('taskkill /F /IM memory-organizer.exe /T'); } catch (e) { }
+            try {
+                const { spawnSync } = require('child_process');
+                spawnSync('taskkill', ['/F', '/IM', 'memory-organizer.exe', '/T'], { shell: false });
+            } catch (e) { }
         }
     } catch (e) {
         console.warn('[Cleanup] Error during process cleanup:', e.message);
@@ -787,7 +892,9 @@ ipcMain.handle('check-battery-status', async (event) => {
     }
 
     try {
-        const output = execSync('pmset -g batt').toString();
+        const { spawnSync } = require('child_process');
+        const result = spawnSync('pmset', ['-g', 'batt'], { shell: false, encoding: 'utf8' });
+        const output = result.stdout || '';
         const isOnBattery = output.includes("'Battery Power'") || output.includes("discharging");
         const isOnAC = output.includes("'AC Power'") || output.includes("AC attached");
         return {
@@ -858,8 +965,35 @@ ipcMain.handle('clear-output-folder', async (event, { outputDir }) => {
                         fs.unlinkSync(itemPath);
                         console.log(`[START OVER] Unlinked symlink: ${item}`);
                     } else if (stat.isDirectory()) {
-                        fs.rmSync(itemPath, { recursive: true, force: true });
-                        console.log(`[START OVER] Deleted directory: ${item}`);
+                        // SECURITY: Validate directory tree has no symlinks before recursive delete
+                        const walkAndValidate = (dir) => {
+                            const items = fs.readdirSync(dir);
+                            for (const subItem of items) {
+                                const subPath = path.join(dir, subItem);
+                                const subStat = fs.lstatSync(subPath);  // Use lstat to detect symlinks
+
+                                if (subStat.isSymbolicLink()) {
+                                    throw new Error(`Found symlink inside directory: ${subPath}`);
+                                }
+
+                                if (subStat.isDirectory()) {
+                                    walkAndValidate(subPath);  // Recurse into subdirectories
+                                }
+                            }
+                        };
+
+                        try {
+                            walkAndValidate(itemPath);
+                            fs.rmSync(itemPath, { recursive: true, force: true });
+                            console.log(`[START OVER] Deleted directory: ${item}`);
+                        } catch (e) {
+                            console.error(`[SECURITY] ${e.message}`);
+                            if (logger) {
+                                logger.warn('Blocked recursive delete due to symlink', { path: itemPath });
+                            }
+                            // Just unlink the top-level directory entry (don't recurse)
+                            fs.unlinkSync(itemPath);
+                        }
                     } else {
                         fs.unlinkSync(itemPath);
                         console.log(`[START OVER] Deleted file: ${item}`);
@@ -947,14 +1081,27 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
     // Ensure directory exists (create if needed)
     try {
         if (!fs.existsSync(canonicalOutputDir)) {
-            fs.mkdirSync(canonicalOutputDir, { recursive: true });
-            // Re-canonicalize after creation to be sure
-            // FIX: Use the variable we already have to re-resolve
-            canonicalOutputDir = getCanonicalPath(canonicalOutputDir);
+            fs.mkdirSync(canonicalOutputDir, { recursive: true, mode: 0o700 });
         }
-        const stat = fs.statSync(canonicalOutputDir);
+
+        // TOCTOU PROTECTION: Re-validate AFTER creation
+        const postCreateCanonical = fs.realpathSync(canonicalOutputDir);
+        if (postCreateCanonical !== canonicalOutputDir) {
+            console.error(`[SECURITY] Directory path changed after creation - possible symlink attack`);
+            return {
+                success: false,
+                error: 'Security validation failed: directory path changed after creation'
+            };
+        }
+
+        // Use lstat (not stat) to detect if target is a symlink
+        const stat = fs.lstatSync(canonicalOutputDir);
         if (!stat.isDirectory()) {
             return { success: false, error: 'Output path exists but is not a directory' };
+        }
+        if (stat.isSymbolicLink()) {
+            console.error(`[SECURITY] Output path is a symlink - blocked for security`);
+            return { success: false, error: 'Symbolic links are not allowed for output directory' };
         }
     } catch (e) {
         console.error(`[SECURITY] Failed to validate/create output directory: ${e.message}`);
@@ -984,10 +1131,33 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
             console.warn('Caffeinate not available:', e.message);
         }
 
+        // SECURITY: Validate zipPath before passing to subprocess
+        if (!zipPath || typeof zipPath !== 'string') {
+            return { success: false, error: 'Invalid ZIP path provided' };
+        }
+
+        // Verify ZIP file exists and is a regular file (not symlink)
+        try {
+            const zipStat = fs.lstatSync(zipPath);
+            if (!zipStat.isFile() || zipStat.isSymbolicLink()) {
+                return { success: false, error: 'ZIP path must be a regular file, not a symlink' };
+            }
+        } catch (e) {
+            return { success: false, error: `Cannot access ZIP file: ${e.message}` };
+        }
+
+        // Resolve to canonical path to prevent symlink tricks
+        const canonicalZipPath = fs.realpathSync(zipPath);
+
+        // Block paths with special characters that could cause argument injection
+        if (canonicalZipPath.includes('\n') || canonicalZipPath.includes('\0')) {
+            return { success: false, error: 'ZIP path contains invalid characters' };
+        }
+
         // Build CLI arguments
-        // CRITICAL SECURITY: Pass the CANONICAL path to the CLI
+        // CRITICAL SECURITY: Pass the CANONICAL paths to the CLI
         const cliArgs = [
-            '--zip', zipPath,
+            '--zip', canonicalZipPath,  // Use validated canonical path
             '--output', canonicalOutputDir // Use validated canonical path
         ];
 
@@ -1248,6 +1418,15 @@ ipcMain.handle('retry-corrupted', async (event, { outputDir }) => {
 ipcMain.handle('validate-license', async (event, licenseKey) => {
     if (!validateSender(event)) {
         return { success: false, valid: false, message: 'Unauthorized sender' };
+    }
+
+    // Rate limiting to prevent brute-force attacks
+    if (!checkRateLimit('license-validation')) {
+        return {
+            success: false,
+            valid: false,
+            message: 'Too many validation attempts. Please wait 60 seconds and try again.'
+        };
     }
 
     try {

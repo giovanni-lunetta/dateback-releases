@@ -1,0 +1,43 @@
+# Python Dependencies for MemSavr Memory Organizer
+# Generated: 2026-01-13
+# Purpose: Track exact versions for security auditing and reproducible builds
+
+# Image processing
+Pillow==12.0.0
+# CVE Status: Clean (checked 2026-01-13)
+# Previous CVEs (fixed): CVE-2024-28219, CVE-2023-50447
+# License: HPND
+
+# HTTP client for downloading from Snapchat CDN
+requests==2.32.5
+# CVE Status: Clean (checked 2026-01-13)
+# Previous CVEs (fixed): CVE-2023-32681
+# License: Apache 2.0
+
+# PyInstaller for building standalone binary
+PyInstaller==6.11.1
+# CVE Status: Clean (checked 2026-01-13)
+# License: GPL 2.0 (with exception for bundled apps)
+
+# Standard library modules (bundled with Python 3.10+)
+# No external dependencies needed for:
+# - json, os, sys, shutil, zipfile
+# - subprocess, datetime, time, threading
+# - mimetypes, secrets, re, errno
+# - concurrent.futures, signal
+
+# INSTRUCTIONS:
+# 1. Place this file in: MemSavr_App_Source/python/requirements.txt
+# 2. Install dependencies: pip install -r requirements.txt
+# 3. Update versions: pip install --upgrade Pillow requests PyInstaller
+# 4. Regenerate this file: pip freeze > requirements.txt
+#
+# Security Scanning:
+# - Run pip-audit: pip-audit -r requirements.txt
+# - Check for CVEs: python -m pip_audit --desc
+#
+# Before each release:
+# 1. Run: pip-audit -r requirements.txt
+# 2. Update any packages with known CVEs
+# 3. Test the build thoroughly
+# 4. Document changes in release notes
