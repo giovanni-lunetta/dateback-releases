@@ -299,7 +299,7 @@ class SupportLogs {
         lines.push('');
         lines.push('To resolve this issue:');
         lines.push('1. Try the "Export Support Logs" feature (Help menu)');
-        lines.push('2. Email the generated ZIP file to support@savemymemories.app');
+        lines.push('2. Email the generated ZIP file to support@dateback.app');
         lines.push('3. Include this error report in your email');
 
         return lines.join('\n');

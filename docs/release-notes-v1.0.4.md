@@ -34,7 +34,7 @@ DateBack v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly
 - Created `ffmpeg-8.0.1-gpl-source.zip` (18 MB)
 - Includes: FFmpeg n8.0.1, x264, x265 source code
 - Includes: BUILD_INFO.txt with full configuration and binary provenance
-- Hosted at: https://savemymemories.app/licenses/ffmpeg-source.zip
+- Hosted at: https://dateback.app/licenses/ffmpeg-source.zip
 - SHA256: `286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a`
 
 **4. Binary Verification:**
@@ -46,7 +46,7 @@ DateBack v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly
 - ✅ Fully GPL-compliant for commercial distribution
 - ✅ No LGPL misrepresentation
 - ✅ Source code publicly accessible
-- ✅ Ready for paid download on savemymemories.app
+- ✅ Ready for paid download on dateback.app
 
 ### User Experience
 
@@ -141,11 +141,11 @@ DateBack v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly
 ## 🆘 Support
 
 **Issues or Questions?**
-- Visit: https://savemymemories.app
-- Email: support@savemymemories.app
+- Visit: https://dateback.app
+- Email: support@dateback.app
 
 **FFmpeg Source Code:**
-- Download: https://savemymemories.app/licenses/ffmpeg-source.zip
+- Download: https://dateback.app/licenses/ffmpeg-source.zip
 - Upstream: https://github.com/FFmpeg/FFmpeg (tag: n8.0.1)
 
 ---

@@ -141,7 +141,7 @@ Contact Information
 ================================================================================
 
 For questions about this source package or GPL compliance:
-support@savemymemories.app
+support@dateback.app
 
 For questions about the FFmpeg binary build:
 https://www.martin-riedl.de

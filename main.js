@@ -339,7 +339,7 @@ Licensed under MIT License`,
                 {
                     label: 'Support',
                     click: () => {
-                        openExternalSafely('mailto:support@savemymemories.app');
+                        openExternalSafely('mailto:support@dateback.app');
                     }
                 },
                 { type: 'separator' },
@@ -403,7 +403,7 @@ Licensed under MIT License`,
   Includes GPL-licensed codecs (libx264, libx265)
   Source: https://github.com/FFmpeg/FFmpeg
   License: See licenses/GPL-2.0.txt in app bundle
-  Complete source package: https://savemymemories.app/licenses/ffmpeg-source.zip
+  Complete source package: https://dateback.app/licenses/ffmpeg-source.zip
   https://ffmpeg.org
 
 • Electron - MIT License

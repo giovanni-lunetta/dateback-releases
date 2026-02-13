@@ -20,7 +20,7 @@ Source Code: https://github.com/FFmpeg/FFmpeg (tag: n8.0.1)
 License Text: See licenses/GPL-2.0.txt in this application bundle
 
 COMPLETE SOURCE PACKAGE:
-Download: https://savemymemories.app/licenses/ffmpeg-source.zip
+Download: https://dateback.app/licenses/ffmpeg-source.zip
 Includes: FFmpeg 8.0.1, x264, x265, and build information
 SHA256: 286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a
 
@@ -68,6 +68,6 @@ Requests - Apache License 2.0
 ================================================================================
 
 For questions or source code requests, contact:
-support@savemymemories.app
+support@dateback.app
 
 Last Updated: January 2, 2026

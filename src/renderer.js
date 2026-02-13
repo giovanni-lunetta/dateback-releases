@@ -1728,7 +1728,7 @@ const linkWalkthrough = document.getElementById('link-walkthrough');
 if (linkWalkthrough) {
     linkWalkthrough.addEventListener('click', (e) => {
         e.preventDefault();
-        window.api.openUrl('https://savemymemories.app/#export-guide');
+        window.api.openUrl('https://dateback.app/#export-guide');
     });
 }
 
@@ -1898,7 +1898,7 @@ if (btnEmailSupport) {
     btnEmailSupport.addEventListener('click', () => {
         const subject = encodeURIComponent('DateBack Support Request');
         const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nDateBack Version: 1.0.4\nPlatform: macOS');
-        window.api.openExternal(`mailto:support@savemymemories.app?subject=${subject}&body=${body}`);
+        window.api.openExternal(`mailto:support@dateback.app?subject=${subject}&body=${body}`);
         closeContactModal(); // Close modal after opening email
     });
 } else {
@@ -1955,7 +1955,7 @@ if (logsSupportEmail) {
     logsSupportEmail.addEventListener('click', () => {
         const subject = encodeURIComponent('DateBack Support Request - Logs Attached');
         const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nDateBack Version: 1.0.4\nPlatform: macOS\n\nSupport logs are attached to this email.');
-        window.api.openExternal(`mailto:support@savemymemories.app?subject=${subject}&body=${body}`);
+        window.api.openExternal(`mailto:support@dateback.app?subject=${subject}&body=${body}`);
     });
 }
 

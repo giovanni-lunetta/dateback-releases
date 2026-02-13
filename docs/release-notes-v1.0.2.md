@@ -98,7 +98,7 @@ The built-in auto-updater will notify you of this update. Simply click "Download
 4. Open DateBack and select the ZIP file
 5. Click "Start Processing" and let DateBack do the rest!
 
-**Need Help?** Visit our [export guide](https://savemymemories.app/#export-guide) for detailed instructions.
+**Need Help?** Visit our [export guide](https://dateback.app/#export-guide) for detailed instructions.
 
 ---
 

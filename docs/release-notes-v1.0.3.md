@@ -118,7 +118,7 @@ For complete technical documentation and implementation details, see:
 
 ## 🆘 Support
 
-- **Email:** support@savemymemories.app
+- **Email:** support@dateback.app
 - **Issues:** Report bugs via email
 - **Updates:** Auto-update will notify existing users
 
