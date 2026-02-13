@@ -72,7 +72,7 @@ body::before {
     transform: translate(-50%, -50%);
     width: 600px;
     height: 600px;
-    background: radial-gradient(circle, rgba(44, 192, 105, 0.08) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(136, 189, 242, 0.08) 0%, transparent 70%);
     pointer-events: none;
     z-index: 0;
 }
@@ -172,7 +172,7 @@ textarea {
     border-color: var(--accent-secondary);
     color: white;
     transform: scale(1.1);
-    box-shadow: 0 4px 16px rgba(59, 142, 208, 0.4);
+    box-shadow: 0 4px 16px rgba(106, 137, 167, 0.4);
 }
 
 .btn-help-icon:active {
@@ -204,8 +204,8 @@ textarea {
 }
 
 .checkbox-label:hover {
-    background: rgba(59, 142, 208, 0.08);
-    border-color: rgba(44, 192, 105, 0.3);
+    background: rgba(106, 137, 167, 0.08);
+    border-color: rgba(136, 189, 242, 0.3);
     transform: translateY(-2px);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
 }
@@ -235,13 +235,13 @@ textarea {
 
 .checkbox-label:hover .checkbox-custom {
     border-color: var(--accent-primary);
-    box-shadow: 0 0 12px rgba(44, 192, 105, 0.2);
+    box-shadow: 0 0 12px rgba(136, 189, 242, 0.2);
 }
 
 .checkbox-label input[type="checkbox"]:checked~.checkbox-custom {
     background: var(--gradient-main);
     border-color: transparent;
-    box-shadow: 0 0 16px rgba(44, 192, 105, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    box-shadow: 0 0 16px rgba(136, 189, 242, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
 }
 
 /* Checkmark */
@@ -297,8 +297,8 @@ textarea {
 }
 
 .btn-info-icon {
-    background: rgba(59, 142, 208, 0.15);
-    border: 1px solid rgba(59, 142, 208, 0.4);
+    background: rgba(106, 137, 167, 0.15);
+    border: 1px solid rgba(106, 137, 167, 0.4);
     font-size: 18px;
     cursor: pointer;
     padding: 4px;
@@ -314,7 +314,7 @@ textarea {
 }
 
 .btn-info-icon:hover {
-    background: rgba(59, 142, 208, 0.25);
+    background: rgba(106, 137, 167, 0.25);
     border-color: var(--accent-secondary);
     transform: scale(1.1);
 }
@@ -361,13 +361,13 @@ textarea {
 
 .checkbox-label-simple:hover .checkbox-custom {
     border-color: var(--accent-primary);
-    box-shadow: 0 0 12px rgba(44, 192, 105, 0.2);
+    box-shadow: 0 0 12px rgba(136, 189, 242, 0.2);
 }
 
 .checkbox-label-simple input[type="checkbox"]:checked~.checkbox-custom {
     background: var(--gradient-main);
     border-color: transparent;
-    box-shadow: 0 0 16px rgba(44, 192, 105, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    box-shadow: 0 0 16px rgba(136, 189, 242, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
 }
 
 .checkbox-label-simple .checkbox-custom::after {
@@ -447,8 +447,8 @@ textarea {
 
 .text-input:focus {
     border-color: var(--accent-secondary);
-    background: rgba(59, 142, 208, 0.08);
-    box-shadow: 0 0 0 3px rgba(59, 142, 208, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1);
+    background: rgba(106, 137, 167, 0.08);
+    box-shadow: 0 0 0 3px rgba(106, 137, 167, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1);
     transform: translateY(-1px);
 }
 
@@ -494,7 +494,7 @@ textarea {
 
 .drop-zone:hover {
     border-color: var(--accent-secondary);
-    background: linear-gradient(135deg, rgba(59, 142, 208, 0.08) 0%, rgba(59, 142, 208, 0.15) 100%);
+    background: linear-gradient(135deg, rgba(106, 137, 167, 0.08) 0%, rgba(106, 137, 167, 0.15) 100%);
     transform: translateY(-2px);
     box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
 }
@@ -505,9 +505,9 @@ textarea {
 
 .drop-zone.drag-over {
     border-color: var(--accent-primary);
-    background: linear-gradient(135deg, rgba(44, 192, 105, 0.1) 0%, rgba(44, 192, 105, 0.2) 100%);
+    background: linear-gradient(135deg, rgba(136, 189, 242, 0.1) 0%, rgba(136, 189, 242, 0.2) 100%);
     transform: scale(1.02);
-    box-shadow: 0 12px 24px rgba(44, 192, 105, 0.2);
+    box-shadow: 0 12px 24px rgba(136, 189, 242, 0.2);
 }
 
 .drop-zone.drag-over::before {
@@ -553,15 +553,15 @@ textarea {
     background: var(--glass-bg);
     backdrop-filter: blur(var(--glass-blur));
     -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1.5px solid rgba(44, 192, 105, 0.4);
+    border: 1.5px solid rgba(136, 189, 242, 0.4);
     border-radius: 12px;
     margin-top: 10px;
-    box-shadow: 0 4px 16px rgba(44, 192, 105, 0.15), 0 0 20px rgba(44, 192, 105, 0.1);
+    box-shadow: 0 4px 16px rgba(136, 189, 242, 0.15), 0 0 20px rgba(136, 189, 242, 0.1);
     transition: all 0.3s ease;
 }
 
 .file-selected:hover {
-    box-shadow: 0 8px 24px rgba(44, 192, 105, 0.25), 0 0 30px rgba(44, 192, 105, 0.15);
+    box-shadow: 0 8px 24px rgba(136, 189, 242, 0.25), 0 0 30px rgba(136, 189, 242, 0.15);
     transform: translateY(-2px);
     border-color: var(--accent-primary);
 }
@@ -637,7 +637,7 @@ textarea {
 .btn-primary {
     background: var(--gradient-main);
     color: white;
-    box-shadow: 0 4px 20px rgba(44, 192, 105, 0.4), 0 2px 8px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 20px rgba(136, 189, 242, 0.4), 0 2px 8px rgba(0, 0, 0, 0.1);
     position: relative;
     overflow: hidden;
 }
@@ -659,13 +659,13 @@ textarea {
 
 .btn-primary:hover:not(:disabled) {
     background: linear-gradient(135deg, var(--accent-primary-hover) 0%, #3b8ed0 100%);
-    box-shadow: 0 8px 30px rgba(44, 192, 105, 0.5), 0 4px 16px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 8px 30px rgba(136, 189, 242, 0.5), 0 4px 16px rgba(0, 0, 0, 0.15);
     transform: translateY(-2px);
 }
 
 .btn-primary:active:not(:disabled) {
     transform: translateY(0);
-    box-shadow: 0 2px 8px rgba(44, 192, 105, 0.4);
+    box-shadow: 0 2px 8px rgba(136, 189, 242, 0.4);
 }
 
 .btn-primary.processing {
@@ -721,7 +721,7 @@ textarea {
 }
 
 .btn-warning {
-    background: var(--accent-orange);
+    background: var(--accent-primary);
     color: white;
 }
 
@@ -754,7 +754,7 @@ textarea {
 }
 
 .zip-validation.valid {
-    background: rgba(44, 192, 105, 0.15);
+    background: rgba(136, 189, 242, 0.15);
     border: 1px solid var(--accent-primary);
 }
 
@@ -804,7 +804,7 @@ textarea {
 
 .stat-box {
     flex: 1;
-    background: linear-gradient(135deg, var(--input-bg) 0%, rgba(59, 142, 208, 0.05) 100%);
+    background: linear-gradient(135deg, var(--input-bg) 0%, rgba(106, 137, 167, 0.05) 100%);
     padding: 16px;
     border-radius: 12px;
     border: 1px solid var(--border-color);
@@ -876,7 +876,7 @@ textarea {
 /* Green hover when storage is good */
 .stat-box.storage-ok:hover {
     border-color: var(--accent-primary) !important;
-    box-shadow: 0 8px 16px rgba(44, 192, 105, 0.2) !important;
+    box-shadow: 0 8px 16px rgba(136, 189, 242, 0.2) !important;
 }
 
 /* Red gradient for critical/low storage */
@@ -921,7 +921,7 @@ textarea {
 }
 
 .status-icon.warning {
-    color: var(--accent-orange);
+    color: var(--accent-primary);
 }
 
 .stat-value-row {
@@ -947,7 +947,7 @@ textarea {
 }
 
 .status-icon-inline.warning {
-    color: var(--accent-orange);
+    color: var(--accent-primary);
 }
 
 .storage-warning {
@@ -964,8 +964,8 @@ textarea {
 }
 
 .storage-tip {
-    background: rgba(44, 192, 105, 0.1);
-    border: 1px solid rgba(44, 192, 105, 0.3);
+    background: rgba(136, 189, 242, 0.1);
+    border: 1px solid rgba(136, 189, 242, 0.3);
     padding: 10px;
     border-radius: 6px;
     font-size: 12px;
@@ -1045,7 +1045,7 @@ textarea {
 
 /* Ready state - subtle glow */
 .progress-bar.ready {
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2), 0 0 20px rgba(44, 192, 105, 0.3);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2), 0 0 20px rgba(136, 189, 242, 0.3);
     animation: readyPulse 2s ease-in-out infinite;
 }
 
@@ -1053,11 +1053,11 @@ textarea {
 
     0%,
     100% {
-        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 10px rgba(44, 192, 105, 0.2);
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 10px rgba(136, 189, 242, 0.2);
     }
 
     50% {
-        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 20px rgba(44, 192, 105, 0.4);
+        box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 20px rgba(136, 189, 242, 0.4);
     }
 }
 
@@ -1131,8 +1131,8 @@ textarea {
 
 .ui-element {
     display: inline-block;
-    background: rgba(44, 192, 105, 0.1);
-    border: 1px solid rgba(44, 192, 105, 0.3);
+    background: rgba(136, 189, 242, 0.1);
+    border: 1px solid rgba(136, 189, 242, 0.3);
     padding: 2px 8px;
     border-radius: 4px;
     font-weight: 600;
@@ -1209,7 +1209,7 @@ textarea {
 }
 
 .btn-log-toggle:hover {
-    background: rgba(59, 142, 208, 0.08);
+    background: rgba(106, 137, 167, 0.08);
     border-color: var(--accent-secondary);
     color: var(--text-primary);
 }
@@ -1220,7 +1220,7 @@ textarea {
 }
 
 .btn-log-toggle.expanded {
-    background: rgba(59, 142, 208, 0.12);
+    background: rgba(106, 137, 167, 0.12);
     border-color: var(--accent-secondary);
     color: var(--accent-secondary);
 }
@@ -1319,7 +1319,7 @@ textarea {
     max-width: 700px;
     max-height: 80vh;
     overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 40px rgba(44, 192, 105, 0.1);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 40px rgba(136, 189, 242, 0.1);
 }
 
 .modal-content.modal-medium {
@@ -1346,21 +1346,21 @@ textarea {
 
 .info-section:hover {
     background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(44, 192, 105, 0.2);
+    border-color: rgba(136, 189, 242, 0.2);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
     transform: translateY(-2px);
 }
 
 .info-section.info-highlight {
-    background: rgba(44, 192, 105, 0.05);
-    border: 1px solid rgba(44, 192, 105, 0.2);
+    background: rgba(136, 189, 242, 0.05);
+    border: 1px solid rgba(136, 189, 242, 0.2);
     border-left: 3px solid var(--accent-primary);
 }
 
 .info-section.info-highlight:hover {
-    background: rgba(44, 192, 105, 0.08);
-    border-color: rgba(44, 192, 105, 0.3);
-    box-shadow: 0 8px 20px rgba(44, 192, 105, 0.15);
+    background: rgba(136, 189, 242, 0.08);
+    border-color: rgba(136, 189, 242, 0.3);
+    box-shadow: 0 8px 20px rgba(136, 189, 242, 0.15);
 }
 
 .info-title {
@@ -1394,7 +1394,7 @@ textarea {
 
 .info-list li:hover {
     background: rgba(255, 255, 255, 0.04);
-    border-color: rgba(44, 192, 105, 0.15);
+    border-color: rgba(136, 189, 242, 0.15);
     transform: translateX(4px);
 }
 
@@ -1414,7 +1414,7 @@ textarea {
     font-weight: 700;
     font-size: 12px;
     color: white;
-    box-shadow: 0 2px 8px rgba(44, 192, 105, 0.3);
+    box-shadow: 0 2px 8px rgba(136, 189, 242, 0.3);
 }
 
 .info-section ul.info-list li::before {
@@ -1532,7 +1532,7 @@ textarea {
     height: 80px;
     border-radius: 20px;
     margin-bottom: 16px;
-    box-shadow: 0 8px 24px rgba(44, 192, 105, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 24px rgba(136, 189, 242, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1);
     transition: transform 0.3s ease;
 }
 
@@ -1568,7 +1568,7 @@ textarea {
 }
 
 .btn-instructions-toggle:hover {
-    background: rgba(59, 142, 208, 0.08);
+    background: rgba(106, 137, 167, 0.08);
     border-color: var(--accent-secondary);
     transform: translateY(-1px);
 }
@@ -1590,7 +1590,7 @@ textarea {
 }
 
 .btn-instructions-toggle.expanded {
-    background: rgba(59, 142, 208, 0.12);
+    background: rgba(106, 137, 167, 0.12);
     border-color: var(--accent-secondary);
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
@@ -1633,7 +1633,7 @@ textarea {
 
 .step:hover {
     background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(44, 192, 105, 0.2);
+    border-color: rgba(136, 189, 242, 0.2);
     transform: translateX(4px);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
 }
@@ -1654,7 +1654,7 @@ textarea {
     font-weight: 700;
     font-size: 14px;
     color: white;
-    box-shadow: 0 2px 8px rgba(44, 192, 105, 0.3);
+    box-shadow: 0 2px 8px rgba(136, 189, 242, 0.3);
 }
 
 .step h3 {
@@ -1676,7 +1676,7 @@ textarea {
 .step strong {
     color: var(--accent-primary);
     font-weight: 600;
-    background: rgba(44, 192, 105, 0.1);
+    background: rgba(136, 189, 242, 0.1);
     padding: 2px 6px;
     border-radius: 4px;
 }
@@ -1768,7 +1768,7 @@ textarea {
 }
 
 .stats-container {
-    background: linear-gradient(135deg, var(--input-bg) 0%, rgba(59, 142, 208, 0.05) 100%);
+    background: linear-gradient(135deg, var(--input-bg) 0%, rgba(106, 137, 167, 0.05) 100%);
     border-radius: 16px;
     padding: 24px;
     margin-bottom: 24px;
@@ -1785,7 +1785,7 @@ textarea {
 }
 
 .stat-row:hover {
-    background: rgba(59, 142, 208, 0.03);
+    background: rgba(106, 137, 167, 0.03);
     margin: 0 -12px;
     padding: 12px 12px;
     border-radius: 8px;
@@ -1825,7 +1825,7 @@ textarea {
 }
 
 .stat-value.orange {
-    color: var(--accent-orange);
+    color: var(--accent-primary);
 }
 
 .stat-value.red {
@@ -1838,7 +1838,7 @@ textarea {
 
 /* Positive message for duplicates */
 .stat-note.success {
-    background: rgba(44, 192, 105, 0.15);
+    background: rgba(136, 189, 242, 0.15);
     border: 1px solid var(--accent-primary);
     border-radius: 8px;
     padding: 10px;
@@ -1850,7 +1850,7 @@ textarea {
 
 /* Informational message */
 .stat-note.info {
-    background: rgba(59, 142, 208, 0.15);
+    background: rgba(106, 137, 167, 0.15);
     border: 1px solid var(--accent-secondary);
     border-radius: 8px;
     padding: 10px;
@@ -1890,7 +1890,7 @@ textarea {
 }
 
 .next-steps li.warning {
-    color: var(--accent-orange);
+    color: var(--accent-primary);
 }
 
 .thanks {
@@ -2043,10 +2043,10 @@ textarea {
 }
 
 .info-tooltip {
-    background: rgba(59, 142, 208, 0.08);
+    background: rgba(106, 137, 167, 0.08);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    border: 1.5px solid rgba(59, 142, 208, 0.3);
+    border: 1.5px solid rgba(106, 137, 167, 0.3);
     border-radius: 12px;
     padding: 16px;
     margin: 12px 0;
@@ -2104,7 +2104,7 @@ textarea {
 }
 
 .guide-section {
-    background: linear-gradient(135deg, var(--input-bg) 0%, rgba(59, 142, 208, 0.03) 100%);
+    background: linear-gradient(135deg, var(--input-bg) 0%, rgba(106, 137, 167, 0.03) 100%);
     border-radius: 16px;
     padding: 24px;
     margin-bottom: 20px;
@@ -2151,12 +2151,12 @@ textarea {
 }
 
 .guide-section.storage-tip {
-    border-left: 4px solid var(--accent-orange);
+    border-left: 4px solid var(--accent-primary);
     background: linear-gradient(135deg, var(--input-bg) 0%, rgba(255, 165, 0, 0.03) 100%);
 }
 
 .guide-section.storage-tip:hover {
-    border-color: var(--accent-orange);
+    border-color: var(--accent-primary);
 }
 
 .storage-tip-content {
@@ -2184,7 +2184,7 @@ textarea {
 }
 
 .highlight-step {
-    background: rgba(44, 192, 105, 0.1);
+    background: rgba(136, 189, 242, 0.1);
     border: 1px solid var(--accent-primary);
     border-radius: 8px;
     padding: 15px;
@@ -2229,7 +2229,7 @@ textarea {
 .guide-tabs .tab:hover {
     color: var(--text-main);
     background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(44, 192, 105, 0.3);
+    border-color: rgba(136, 189, 242, 0.3);
     transform: translateY(-2px);
 }
 
@@ -2237,7 +2237,7 @@ textarea {
     background: var(--gradient-main);
     color: white;
     border-color: transparent;
-    box-shadow: 0 8px 24px rgba(44, 192, 105, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    box-shadow: 0 8px 24px rgba(136, 189, 242, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
     transform: translateY(-2px);
 }
 
@@ -2285,7 +2285,7 @@ textarea {
 
 .tab-content li:hover {
     background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(44, 192, 105, 0.2);
+    border-color: rgba(136, 189, 242, 0.2);
     transform: translateX(4px);
 }
 
@@ -2305,33 +2305,33 @@ textarea {
     font-weight: 700;
     font-size: 13px;
     color: white;
-    box-shadow: 0 2px 8px rgba(44, 192, 105, 0.3);
+    box-shadow: 0 2px 8px rgba(136, 189, 242, 0.3);
 }
 
 .tab-content li strong {
     color: var(--accent-primary);
     font-weight: 600;
-    background: rgba(44, 192, 105, 0.1);
+    background: rgba(136, 189, 242, 0.1);
     padding: 2px 6px;
     border-radius: 4px;
 }
 
 .tab-content code {
-    background: rgba(59, 142, 208, 0.15);
+    background: rgba(106, 137, 167, 0.15);
     color: var(--accent-secondary);
     padding: 3px 8px;
     border-radius: 4px;
     font-family: 'SF Mono', Monaco, monospace;
     font-size: 13px;
     font-weight: 600;
-    border: 1px solid rgba(59, 142, 208, 0.2);
+    border: 1px solid rgba(106, 137, 167, 0.2);
 }
 
 .tab-content a {
     color: var(--accent-secondary);
     text-decoration: none;
     font-weight: 600;
-    border-bottom: 1px solid rgba(59, 142, 208, 0.3);
+    border-bottom: 1px solid rgba(106, 137, 167, 0.3);
     transition: all 0.2s ease;
 }
 
@@ -2343,8 +2343,8 @@ textarea {
 .tab-content .tip {
     margin-top: 15px;
     padding: 12px 16px;
-    background: rgba(44, 192, 105, 0.1);
-    border: 1px solid rgba(44, 192, 105, 0.2);
+    background: rgba(136, 189, 242, 0.1);
+    border: 1px solid rgba(136, 189, 242, 0.2);
     border-radius: 8px;
     font-size: 13px;
     color: var(--accent-primary);
@@ -2467,8 +2467,8 @@ textarea {
 
 .form-status.success {
     display: block;
-    background: rgba(44, 192, 105, 0.1);
-    border: 1px solid rgba(44, 192, 105, 0.3);
+    background: rgba(136, 189, 242, 0.1);
+    border: 1px solid rgba(136, 189, 242, 0.3);
     color: var(--accent-primary);
 }
 

@@ -221,10 +221,10 @@ async function checkStorage(count) {
             }
         } else {
             storageWarning.classList.add('hidden');
-            storageAvailable.style.color = 'var(--accent-green)';
+            storageAvailable.style.color = 'var(--accent-primary)';
             storageStatusIcon.innerHTML = `
                 <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="10" cy="10" r="9" fill="var(--accent-green)" stroke="var(--accent-green)" stroke-width="1.5"/>
+                    <circle cx="10" cy="10" r="9" fill="var(--accent-primary)" stroke="var(--accent-primary)" stroke-width="1.5"/>
                     <path d="M6 10L9 13L14 7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             `;
@@ -263,7 +263,7 @@ async function validateZipFile(path) {
         validationStatus.classList.add('valid');
         validationStatus.innerHTML = `
             <svg class="status-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="10" cy="10" r="9" fill="var(--accent-green)" stroke="var(--accent-green)" stroke-width="1.5"/>
+                <circle cx="10" cy="10" r="9" fill="var(--accent-primary)" stroke="var(--accent-primary)" stroke-width="1.5"/>
                 <path d="M6 10L9 13L14 7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             memories_history.json found
@@ -596,7 +596,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                 } else {
                     progressTextContent.innerHTML = `
                         <svg class="status-icon" width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="10" cy="10" r="9" fill="var(--accent-green)" stroke="var(--accent-green)" stroke-width="1.5"/>
+                            <circle cx="10" cy="10" r="9" fill="var(--accent-primary)" stroke="var(--accent-primary)" stroke-width="1.5"/>
                             <path d="M6 10L9 13L14 7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                         Complete!
@@ -930,7 +930,7 @@ btnConfirmStop.addEventListener('click', async () => {
 
     // Show "Stopping..." state immediately
     progressTextContent.textContent = '⏸️ Pausing...';
-    progressFill.style.background = 'var(--accent-orange)';
+    progressFill.style.background = 'var(--accent-primary)';
     progressEta.textContent = '';
 
     // Show Resume/Restart options but DISABLED initially
@@ -1806,15 +1806,15 @@ function showLicenseStatus(message, isError = false) {
         svg.appendChild(path2);
     } else {
         licenseStatus.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
-        licenseStatus.style.color = 'var(--accent-green)';
+        licenseStatus.style.color = 'var(--accent-primary)';
 
         // Success checkmark icon
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', '10');
         circle.setAttribute('cy', '10');
         circle.setAttribute('r', '9');
-        circle.setAttribute('fill', 'var(--accent-green)');
-        circle.setAttribute('stroke', 'var(--accent-green)');
+        circle.setAttribute('fill', 'var(--accent-primary)');
+        circle.setAttribute('stroke', 'var(--accent-primary)');
         circle.setAttribute('stroke-width', '1.5');
 
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
