@@ -1,6 +1,6 @@
 {
     "name": "dateback",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "description": "DateBack - Archive Memories the Right Way",
     "main": "main.js",
     "scripts": {
