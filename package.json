@@ -1,7 +1,7 @@
 {
-    "name": "memsavr",
+    "name": "dateback",
     "version": "1.0.8",
-    "description": "MemSavr - Archive Memories the Right Way",
+    "description": "DateBack - Archive Memories the Right Way",
     "main": "main.js",
     "scripts": {
         "start": "env -u ELECTRON_RUN_AS_NODE electron .",
@@ -15,17 +15,17 @@
         "electron-builder": "^26.0.12"
     },
     "build": {
-        "appId": "com.giovannilunetta.memsavr",
-        "productName": "MemSavr",
+        "appId": "com.giovannilunetta.dateback",
+        "productName": "DateBack",
         "publish": {
             "provider": "github",
             "owner": "giovanni-lunetta",
-            "repo": "memsavr-releases",
+            "repo": "dateback-releases",
             "private": true
         },
         "mac": {
             "category": "public.app-category.utilities",
-            "icon": "assets/MemSavr.icns",
+            "icon": "assets/DateBack.icns",
             "hardenedRuntime": true,
             "gatekeeperAssess": false,
             "entitlements": "build/entitlements.mac.plist",

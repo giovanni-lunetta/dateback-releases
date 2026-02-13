@@ -1,5 +1,5 @@
 /**
- * logger.js - Privacy-first, non-blocking logging system for MemSavr
+ * logger.js - Privacy-first, non-blocking logging system for DateBack
  * 
  * Features:
  * - JSONL format (newline-delimited JSON)

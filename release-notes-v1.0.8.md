@@ -41,7 +41,7 @@
 
 ### Download
 
-[MemSavr-1.0.8-arm64.dmg](https://github.com/giovanni-lunetta/memsavr-releases/releases/download/v1.0.8/MemSavr-1.0.8-arm64.dmg) (164 MB)
+[DateBack-1.0.8-arm64.dmg](https://github.com/giovanni-lunetta/dateback-releases/releases/download/v1.0.8/DateBack-1.0.8-arm64.dmg) (164 MB)
 
 **Apple Silicon (M1/M2/M3) only**
 
@@ -58,8 +58,8 @@
 ### Installation
 
 1. Download the DMG above
-2. Open and drag MemSavr to Applications
-3. Launch MemSavr (macOS may verify on first launch)
+2. Open and drag DateBack to Applications
+3. Launch DateBack (macOS may verify on first launch)
 4. Enter your license key if prompted
 
 **Recommended for all users.**
@@ -68,4 +68,4 @@
 
 ### Full Documentation
 
-See [v1.0.8 Complete Documentation](https://github.com/giovanni-lunetta/memsavr-releases/blob/main/docs/MemSavr_v1.0.8_Complete_Documentation.md) for detailed security fix descriptions.
+See [v1.0.8 Complete Documentation](https://github.com/giovanni-lunetta/dateback-releases/blob/main/docs/DateBack_v1.0.8_Complete_Documentation.md) for detailed security fix descriptions.

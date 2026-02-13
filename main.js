@@ -280,12 +280,12 @@ function createMenu() {
             label: app.name,
             submenu: [
                 {
-                    label: 'About MemSavr',
+                    label: 'About DateBack',
                     click: () => {
                         dialog.showMessageBox(mainWindow, {
                             type: 'info',
-                            title: 'About MemSavr',
-                            message: 'MemSavr',
+                            title: 'About DateBack',
+                            message: 'DateBack',
                             detail: `Version: 1.0.6
 
 Archive Memories the Right Way
@@ -506,7 +506,7 @@ autoUpdater.on('update-available', (info) => {
         type: 'info',
         title: 'Update Available',
         message: `Version ${info.version} is available!`,
-        detail: 'A new version of MemSavr is ready to download. Would you like to download it now?',
+        detail: 'A new version of DateBack is ready to download. Would you like to download it now?',
         buttons: ['Download', 'Later'],
         defaultId: 0,
         cancelId: 1
@@ -533,7 +533,7 @@ autoUpdater.on('update-downloaded', () => {
         type: 'info',
         title: 'Update Ready',
         message: 'Update downloaded successfully!',
-        detail: 'The update will be installed when you restart MemSavr.',
+        detail: 'The update will be installed when you restart DateBack.',
         buttons: ['Restart Now', 'Later'],
         defaultId: 0,
         cancelId: 1
@@ -556,7 +556,7 @@ app.whenReady().then(() => {
     logger = new Logger('main');
     supportLogs = new SupportLogs(logger);
 
-    logger.info('MemSavr started', {
+    logger.info('DateBack started', {
         version: app.getVersion(),
         platform: process.platform,
         arch: process.arch
@@ -956,7 +956,7 @@ ipcMain.handle('clear-output-folder', async (event, { outputDir }) => {
                     item.startsWith('Corrupted_Memories') ||
                     item.startsWith('temp_processing') ||
                     item === 'detailed_report.json' ||
-                    item.startsWith('.memsavr')) {
+                    item.startsWith('.dateback')) {
 
                     // SECURITY: Use lstat to check for symlinks and NOT follow them
                     const stat = fs.lstatSync(itemPath);
@@ -1062,7 +1062,7 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
         let errorMsg;
         if (canonicalOutputDir.startsWith('/Volumes/')) {
             const driveName = path.basename(canonicalOutputDir);
-            errorMsg = `Cannot use external drive root. Please create a subfolder (e.g., /Volumes/${driveName}/MemSavr_Output)`;
+            errorMsg = `Cannot use external drive root. Please create a subfolder (e.g., /Volumes/${driveName}/DateBack_Output)`;
         } else {
             errorMsg = 'Please select a subfolder, not the root Documents/Downloads folder.';
         }
@@ -1181,7 +1181,7 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
 
         // Add logging directory if logger is initialized
         if (logger) {
-            processEnv.MEMSAVR_LOG_DIR = logger.getLogDirectory();
+            processEnv.DATEBACK_LOG_DIR = logger.getLogDirectory();
             logger.info('Starting processing', {
                 pauseBetweenBatches
             });
@@ -1292,7 +1292,7 @@ ipcMain.handle('resume-batch', async (event) => {
         return { success: false, error: 'No active processing session' };
     }
 
-    const signalFile = path.join(currentValidatedOutputDir, '.memsavr_resume_signal');
+    const signalFile = path.join(currentValidatedOutputDir, '.dateback_resume_signal');
 
     // Security: Double-check the signal file path is inside the validated directory
     if (!isPathInsideDir(signalFile, currentValidatedOutputDir)) {

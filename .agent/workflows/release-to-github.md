@@ -1,10 +1,10 @@
 ---
-description: Complete workflow for building, notarizing, and publishing MemSavr releases to GitHub
+description: Complete workflow for building, notarizing, and publishing DateBack releases to GitHub
 ---
 
-# MemSavr Release Workflow
+# DateBack Release Workflow
 
-This workflow covers the complete process of creating a new MemSavr release from build to GitHub publication.
+This workflow covers the complete process of creating a new DateBack release from build to GitHub publication.
 
 ## Prerequisites
 
@@ -19,12 +19,12 @@ Before starting, ensure you have:
 ## Step 1: Build the Production DMG
 
 ```bash
-cd /Users/giovanni-lunetta/MemSavr_Business/MemSavr_App_Source
+cd /Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source
 npm run build
 npm run make
 ```
 
-This creates the DMG in `out/make/MemSavr-X.X.X-arm64.dmg`
+This creates the DMG in `out/make/DateBack-X.X.X-arm64.dmg`
 
 ---
 
@@ -32,12 +32,12 @@ This creates the DMG in `out/make/MemSavr-X.X.X-arm64.dmg`
 
 ```bash
 codesign --force --deep --sign "Developer ID Application: Giovanni Lunetta (P5RF66U92A)" \
-  out/make/MemSavr-X.X.X-arm64.dmg
+  out/make/DateBack-X.X.X-arm64.dmg
 ```
 
 **Verify signature:**
 ```bash
-codesign -dv --verbose=4 out/make/MemSavr-X.X.X-arm64.dmg
+codesign -dv --verbose=4 out/make/DateBack-X.X.X-arm64.dmg
 ```
 
 ---
@@ -45,7 +45,7 @@ codesign -dv --verbose=4 out/make/MemSavr-X.X.X-arm64.dmg
 ## Step 3: Notarize with Apple
 
 ```bash
-xcrun notarytool submit out/make/MemSavr-X.X.X-arm64.dmg \
+xcrun notarytool submit out/make/DateBack-X.X.X-arm64.dmg \
   --apple-id giovanni.a.lunetta@gmail.com \
   --team-id P5RF66U92A \
   --password APPLE_APP_SPECIFIC_PASSWORD \
@@ -63,13 +63,13 @@ This will output a submission ID. The `--wait` flag will poll until notarization
 Once notarization succeeds:
 
 ```bash
-xcrun stapler staple out/make/MemSavr-X.X.X-arm64.dmg
+xcrun stapler staple out/make/DateBack-X.X.X-arm64.dmg
 ```
 
 **Verify stapling:**
 ```bash
-xcrun stapler validate out/make/MemSavr-X.X.X-arm64.dmg
-spctl --assess --type open --context context:primary-signature -v out/make/MemSavr-X.X.X-arm64.dmg
+xcrun stapler validate out/make/DateBack-X.X.X-arm64.dmg
+spctl --assess --type open --context context:primary-signature -v out/make/DateBack-X.X.X-arm64.dmg
 ```
 
 Should show: `accepted` and `source=Notarized Developer ID`
@@ -79,7 +79,7 @@ Should show: `accepted` and `source=Notarized Developer ID`
 ## Step 5: Move to Production Build Folder
 
 ```bash
-mv out/make/MemSavr-X.X.X-arm64.dmg ../MemSavr_Production_Build/
+mv out/make/DateBack-X.X.X-arm64.dmg ../DateBack_Production_Build/
 ```
 
 ---
@@ -96,11 +96,11 @@ Create the release:
 
 ```bash
 gh release create vX.X.X \
-  --repo giovanni-lunetta/memsavr-releases \
-  --title "MemSavr vX.X.X" \
+  --repo giovanni-lunetta/dateback-releases \
+  --title "DateBack vX.X.X" \
   --notes-file release-notes-vX.X.X.md \
   --latest=true \
-  ../MemSavr_Production_Build/MemSavr-X.X.X-arm64.dmg
+  ../DateBack_Production_Build/DateBack-X.X.X-arm64.dmg
 ```
 
 **Notes:**
@@ -114,10 +114,10 @@ gh release create vX.X.X \
 Check that the release appears on GitHub:
 
 ```bash
-gh release list --repo giovanni-lunetta/memsavr-releases
+gh release list --repo giovanni-lunetta/dateback-releases
 ```
 
-Visit: https://github.com/giovanni-lunetta/memsavr-releases/releases
+Visit: https://github.com/giovanni-lunetta/dateback-releases/releases
 
 ---
 
@@ -125,35 +125,35 @@ Visit: https://github.com/giovanni-lunetta/memsavr-releases/releases
 
 ```bash
 # 1. Build
-cd /Users/giovanni-lunetta/MemSavr_Business/MemSavr_App_Source
+cd /Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source
 npm run build
 npm run make
 
 # 2. Sign
 codesign --force --deep --sign "Developer ID Application: Giovanni Lunetta (P5RF66U92A)" \
-  out/make/MemSavr-X.X.X-arm64.dmg
+  out/make/DateBack-X.X.X-arm64.dmg
 
 # 3. Notarize
-xcrun notarytool submit out/make/MemSavr-X.X.X-arm64.dmg \
+xcrun notarytool submit out/make/DateBack-X.X.X-arm64.dmg \
   --apple-id giovanni.a.lunetta@gmail.com \
   --team-id P5RF66U92A \
   --password APPLE_APP_SPECIFIC_PASSWORD \
   --wait
 
 # 4. Staple
-xcrun stapler staple out/make/MemSavr-X.X.X-arm64.dmg
+xcrun stapler staple out/make/DateBack-X.X.X-arm64.dmg
 
 # 5. Move to production
-mv out/make/MemSavr-X.X.X-arm64.dmg ../MemSavr_Production_Build/
+mv out/make/DateBack-X.X.X-arm64.dmg ../DateBack_Production_Build/
 
 # 6. Publish to GitHub
 export GH_TOKEN=YOUR_GITHUB_TOKEN
 gh release create vX.X.X \
-  --repo giovanni-lunetta/memsavr-releases \
-  --title "MemSavr vX.X.X" \
+  --repo giovanni-lunetta/dateback-releases \
+  --title "DateBack vX.X.X" \
   --notes-file release-notes-vX.X.X.md \
   --latest=true \
-  ../MemSavr_Production_Build/MemSavr-X.X.X-arm64.dmg
+  ../DateBack_Production_Build/DateBack-X.X.X-arm64.dmg
 ```
 
 ---
@@ -185,5 +185,5 @@ gh release create vX.X.X \
 1. **Always test locally first**: Download the DMG after publishing and test it on a fresh Mac
 2. **Keep release notes clear**: Document what changed, what was fixed, and any breaking changes
 3. **Version incrementing**: Follow semantic versioning (MAJOR.MINOR.PATCH)
-4. **Archive old DMGs**: Keep copies in `MemSavr_Production_Build` for reference
+4. **Archive old DMGs**: Keep copies in `DateBack_Production_Build` for reference
 5. **Update auto-updater**: Ensure the app can detect and download the new version

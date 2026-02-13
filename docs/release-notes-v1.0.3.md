@@ -1,7 +1,7 @@
-# MemSavr v1.0.3 - Security Hardening & Polish
+# DateBack v1.0.3 - Security Hardening & Polish
 
 **Release Date:** December 31, 2025  
-**Download:** [MemSavr-1.0.3-arm64.dmg](https://github.com/giovanni-lunetta/memsavr-releases/releases/download/v1.0.3/MemSavr-1.0.3-arm64.dmg)
+**Download:** [DateBack-1.0.3-arm64.dmg](https://github.com/giovanni-lunetta/dateback-releases/releases/download/v1.0.3/DateBack-1.0.3-arm64.dmg)
 
 ---
 
@@ -82,9 +82,9 @@
 
 ## 📦 Installation
 
-1. Download `MemSavr-1.0.3-arm64.dmg`
+1. Download `DateBack-1.0.3-arm64.dmg`
 2. Open the DMG
-3. Drag MemSavr to Applications
+3. Drag DateBack to Applications
 4. Launch & activate with your license key
 
 **Minimum Requirements:** macOS 11+, Apple Silicon (M1/M2/M3)
@@ -95,7 +95,7 @@
 
 ### Notarization Changes
 Starting with v1.0.3, we follow Apple's recommended approach:
-- The **app bundle** (MemSavr.app) is notarized and stapled
+- The **app bundle** (DateBack.app) is notarized and stapled
 - The DMG is a container with the notarized app inside
 - Gatekeeper verifies the app when users open the DMG
 - This is the modern, recommended approach for electron-builder v26
@@ -111,7 +111,7 @@ Starting with v1.0.3, we follow Apple's recommended approach:
 ## 📝 Full Changelog
 
 For complete technical documentation and implementation details, see:
-- [Complete v1.0.3 Documentation](../docs/MemSavr_v1.0.3_Complete_Documentation.md)
+- [Complete v1.0.3 Documentation](../docs/DateBack_v1.0.3_Complete_Documentation.md)
 - [Implementation Walkthrough](../../../.gemini/antigravity/brain/50b7679a-345a-453c-bf9e-d685cccd49a5/walkthrough.md)
 
 ---
@@ -125,6 +125,6 @@ For complete technical documentation and implementation details, see:
 ---
 
 **Previous Releases:**
-- [v1.0.2](https://github.com/giovanni-lunetta/memsavr-releases/releases/tag/v1.0.2)
-- [v1.0.1](https://github.com/giovanni-lunetta/memsavr-releases/releases/tag/v1.0.1)
-- [v1.0.0](https://github.com/giovanni-lunetta/memsavr-releases/releases/tag/v1.0.0)
+- [v1.0.2](https://github.com/giovanni-lunetta/dateback-releases/releases/tag/v1.0.2)
+- [v1.0.1](https://github.com/giovanni-lunetta/dateback-releases/releases/tag/v1.0.1)
+- [v1.0.0](https://github.com/giovanni-lunetta/dateback-releases/releases/tag/v1.0.0)

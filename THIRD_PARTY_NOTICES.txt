@@ -1,5 +1,5 @@
 ================================================================================
-MemSavr v1.0.4 - Third-Party Software Notices
+DateBack v1.0.4 - Third-Party Software Notices
 ================================================================================
 
 This application incorporates third-party software. The following notices apply:

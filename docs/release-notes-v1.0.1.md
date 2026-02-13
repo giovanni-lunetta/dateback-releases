@@ -1,4 +1,4 @@
-# MemSavr v1.0.1
+# DateBack v1.0.1
 
 ## 🎨 UI Improvements
 - Complete glassmorphism redesign with modern glass effects
@@ -19,6 +19,6 @@
 - Optimized fast pass with existing_indices tracking
 
 ## 📥 Installation
-Download the DMG file below and drag MemSavr to your Applications folder.
+Download the DMG file below and drag DateBack to your Applications folder.
 
 **Note**: This update will automatically be delivered to existing v1.0.0 users via the built-in auto-updater! 🎉

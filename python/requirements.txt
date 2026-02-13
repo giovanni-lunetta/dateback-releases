@@ -1,4 +1,4 @@
-# Python Dependencies for MemSavr Memory Organizer
+# Python Dependencies for DateBack Memory Organizer
 # Generated: 2026-01-13
 # Purpose: Track exact versions for security auditing and reproducible builds
 
@@ -27,7 +27,7 @@ PyInstaller==6.11.1
 # - concurrent.futures, signal
 
 # INSTRUCTIONS:
-# 1. Place this file in: MemSavr_App_Source/python/requirements.txt
+# 1. Place this file in: DateBack_App_Source/python/requirements.txt
 # 2. Install dependencies: pip install -r requirements.txt
 # 3. Update versions: pip install --upgrade Pillow requests PyInstaller
 # 4. Regenerate this file: pip freeze > requirements.txt

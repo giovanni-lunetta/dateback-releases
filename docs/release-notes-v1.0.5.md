@@ -1,4 +1,4 @@
-# MemSavr v1.0.5 - Quality & Performance Release 🚀
+# DateBack v1.0.5 - Quality & Performance Release 🚀
 
 **Release Date:** January 3, 2026
 
@@ -52,7 +52,7 @@ This release brings **15 critical improvements** focused on code quality, securi
   - Home directory (`~`)
   - System folders (`~/Documents`, `~/Downloads`, `~/Desktop`, `~/Library`)
   
-Users must select a subfolder (e.g., `~/Documents/MemSavr_Output`) instead of top-level directories.
+Users must select a subfolder (e.g., `~/Documents/DateBack_Output`) instead of top-level directories.
 
 ### Silent Overwrite Prevention
 - Files moved to batch folders now avoid silent overwrites
@@ -75,7 +75,7 @@ Users must select a subfolder (e.g., `~/Documents/MemSavr_Output`) instead of to
 
 ## 📋 Full Changelog
 
-See [Complete Documentation](https://github.com/giovanni-lunetta/memsavr-releases/blob/main/docs/MemSavr_v1.0.5_Complete_Documentation.md) for detailed technical explanations and code examples.
+See [Complete Documentation](https://github.com/giovanni-lunetta/dateback-releases/blob/main/docs/DateBack_v1.0.5_Complete_Documentation.md) for detailed technical explanations and code examples.
 
 ---
 

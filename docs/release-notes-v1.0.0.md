@@ -1,4 +1,4 @@
-# MemSavr v1.0.0
+# DateBack v1.0.0
 
 ## 🎉 Initial Release
 
@@ -42,7 +42,7 @@ Archive memories the right way - 100% offline processing on your Mac.
 
 ## 📥 Installation
 
-Download the DMG file below and drag MemSavr to your Applications folder.
+Download the DMG file below and drag DateBack to your Applications folder.
 
 **Platform**: macOS (Apple Silicon arm64)  
 **Minimum**: macOS 11.0 Big Sur or later
@@ -52,7 +52,7 @@ Download the DMG file below and drag MemSavr to your Applications folder.
 1. Request your Snapchat data at [accounts.snapchat.com/accounts/downloadmydata](https://accounts.snapchat.com/accounts/downloadmydata)
 2. Wait for Snapchat to email you the download link (can take 1-2 weeks)
 3. Download `mydata.zip`
-4. Open MemSavr and drag the ZIP file into the app
-5. Click "Start Processing" and let MemSavr do the rest!
+4. Open DateBack and drag the ZIP file into the app
+5. Click "Start Processing" and let DateBack do the rest!
 
 **Note**: Future updates will be delivered automatically via the built-in auto-updater! 🎉

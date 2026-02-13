@@ -1,18 +1,18 @@
-# MemSavr v1.0.4 - GPL Compliance & Critical Bug Fixes
+# DateBack v1.0.4 - GPL Compliance & Critical Bug Fixes
 
 **Release Date:** January 2, 2026  
-**Download:** https://github.com/giovanni-lunetta/memsavr-releases/releases/tag/v1.0.4  
+**Download:** https://github.com/giovanni-lunetta/dateback-releases/releases/tag/v1.0.4  
 **Platform:** macOS (Apple Silicon arm64)
 
 ---
 
 ## 🔒 GPL Compliance Implementation (CRITICAL)
 
-This release corrects a critical licensing compliance issue and ensures MemSavr is fully GPL-compliant for commercial distribution.
+This release corrects a critical licensing compliance issue and ensures DateBack is fully GPL-compliant for commercial distribution.
 
 ### The Issue
 
-MemSavr v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly claimed it was LGPL v2.1 in multiple places. This was a legal compliance issue that needed immediate correction.
+DateBack v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly claimed it was LGPL v2.1 in multiple places. This was a legal compliance issue that needed immediate correction.
 
 **Background:**
 - Bundled FFmpeg binary (v8.0.1) was built with `--enable-gpl`, `--enable-libx264`, and `--enable-libx265`
@@ -50,7 +50,7 @@ MemSavr v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly 
 
 ### User Experience
 
-- Users see accurate licensing in Help → About MemSavr
+- Users see accurate licensing in Help → About DateBack
 - Users can download FFmpeg source via Help → View Licenses
 - **No functionality changes** - all existing features work exactly as before
 
@@ -71,13 +71,13 @@ MemSavr v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly 
 **Root Causes:**
 
 1. **Signal Filename Mismatch**
-   - main.js created: `.memsavr_resume_signal`
+   - main.js created: `.dateback_resume_signal`
    - Python expected: `.resume_signal`
    - Files never matched, so resume never triggered
 
 2. **Directory Path Mismatch** (Primary Issue)
-   - main.js created signal in parent directory: `/Pictures/SnapchatMemories/.memsavr_resume_signal`
-   - Python looked in subdirectory: `/Pictures/SnapchatMemories/Processed_Memories_2025-12-29/.memsavr_resume_signal`
+   - main.js created signal in parent directory: `/Pictures/SnapchatMemories/.dateback_resume_signal`
+   - Python looked in subdirectory: `/Pictures/SnapchatMemories/Processed_Memories_2025-12-29/.dateback_resume_signal`
    - Even with matching filenames, paths were different
 
 3. **Missing Import**
@@ -104,10 +104,10 @@ MemSavr v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly 
 
 ## 📦 Installation
 
-1. Download `MemSavr-1.0.4-arm64.dmg` from GitHub releases
+1. Download `DateBack-1.0.4-arm64.dmg` from GitHub releases
 2. Open the DMG file
-3. Drag MemSavr to your Applications folder
-4. Launch MemSavr and activate with your license key
+3. Drag DateBack to your Applications folder
+4. Launch DateBack and activate with your license key
 
 **Minimum Requirements:** 
 - macOS 11 (Big Sur) or later
@@ -132,7 +132,7 @@ MemSavr v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly 
 **Build Configuration:** Production with notarization
 
 **Checksums:**
-- MemSavr DMG: (verify with `shasum -a 256 MemSavr-1.0.4-arm64.dmg`)
+- DateBack DMG: (verify with `shasum -a 256 DateBack-1.0.4-arm64.dmg`)
 - FFmpeg Binary: `3b586ff896c0339e8fd574c143aaccac23c80789341e22d4202f8013a133d3a4`
 - FFmpeg Source Package: `286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a`
 
@@ -152,12 +152,12 @@ MemSavr v1.0.3 and earlier bundled a GPL-licensed FFmpeg binary but incorrectly 
 
 ## 📄 License
 
-**MemSavr Application:** MIT License  
+**DateBack Application:** MIT License  
 **FFmpeg (bundled):** GPL v2.0+ (includes GPL-licensed codecs: libx264, libx265)
 
 Full license details and third-party notices are included in the application bundle.
 
 ---
 
-**Previous Version:** [v1.0.3](https://github.com/giovanni-lunetta/memsavr-releases/releases/tag/v1.0.3)  
-**All Releases:** https://github.com/giovanni-lunetta/memsavr-releases/releases
+**Previous Version:** [v1.0.3](https://github.com/giovanni-lunetta/dateback-releases/releases/tag/v1.0.3)  
+**All Releases:** https://github.com/giovanni-lunetta/dateback-releases/releases

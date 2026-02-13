@@ -254,7 +254,7 @@ class SupportLogs {
         const now = new Date();
         const dateStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
         const timeStr = now.toISOString().split('T')[1].split('.')[0].replace(/:/g, ''); // HHMMSS
-        return `MemSavr-SupportLogs-${dateStr}-${timeStr}.zip`;
+        return `DateBack-SupportLogs-${dateStr}-${timeStr}.zip`;
     }
 
     /**
@@ -265,7 +265,7 @@ class SupportLogs {
      */
     generateErrorReport(error, step = 'Unknown', context = {}) {
         const lines = [
-            '=== MemSavr Error Report ===',
+            '=== DateBack Error Report ===',
             `App Version: ${app.getVersion()}`,
             `Platform: ${process.platform} ${process.arch}`,
             `OS: ${os.type()} ${os.release()}`,

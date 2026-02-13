@@ -491,7 +491,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         await showStorageWarningModal(
             '❌ Cannot Start Processing',
             `You only have ${formatBytes(disk.free)} free.`,
-            'MemSavr requires at least 5GB of free space to process files safely.\n\nPlease free up space and try again.',
+            'DateBack requires at least 5GB of free space to process files safely.\n\nPlease free up space and try again.',
             false // No continue option
         );
         return;
@@ -1896,8 +1896,8 @@ function closeContactModal() {
 // Handle email support button - opens user's default email client
 if (btnEmailSupport) {
     btnEmailSupport.addEventListener('click', () => {
-        const subject = encodeURIComponent('MemSavr Support Request');
-        const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nMemSavr Version: 1.0.4\nPlatform: macOS');
+        const subject = encodeURIComponent('DateBack Support Request');
+        const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nDateBack Version: 1.0.4\nPlatform: macOS');
         window.api.openExternal(`mailto:support@savemymemories.app?subject=${subject}&body=${body}`);
         closeContactModal(); // Close modal after opening email
     });
@@ -1953,8 +1953,8 @@ function closeLogsExportModal() {
 // Email link click handler
 if (logsSupportEmail) {
     logsSupportEmail.addEventListener('click', () => {
-        const subject = encodeURIComponent('MemSavr Support Request - Logs Attached');
-        const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nMemSavr Version: 1.0.4\nPlatform: macOS\n\nSupport logs are attached to this email.');
+        const subject = encodeURIComponent('DateBack Support Request - Logs Attached');
+        const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nDateBack Version: 1.0.4\nPlatform: macOS\n\nSupport logs are attached to this email.');
         window.api.openExternal(`mailto:support@savemymemories.app?subject=${subject}&body=${body}`);
     });
 }

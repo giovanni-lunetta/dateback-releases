@@ -1,5 +1,5 @@
 #!/bin/bash
-# Secret Protection Setup for Existing MemSavr Repository
+# Secret Protection Setup for Existing DateBack Repository
 # This adapts the security audit recommendations for your existing git repo
 
 set -e
@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}🔐 MemSavr Secret Protection Setup${NC}"
+echo -e "${BLUE}🔐 DateBack Secret Protection Setup${NC}"
 echo "======================================"
 echo ""
 
