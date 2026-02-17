@@ -38,15 +38,46 @@ const btnOpenSnapchat = document.getElementById('btn-open-snapchat');
 const btnCloseModal = document.getElementById('btn-close-modal');
 const btnCloseSuccess = document.getElementById('btn-close-success');
 const btnRetryCorrupted = document.getElementById('btn-retry-corrupted');
+const btnOpenStagingFolder = document.getElementById('btn-open-staging-folder');
 const statsContainer = document.getElementById('stats-container');
 const dontShowAgainCheckbox = document.getElementById('dont-show-again');
 const btnShowInstructions = document.getElementById('btn-show-instructions');
 
-// Cloud Mode Info Modal
-const cloudModeInfoModal = document.getElementById('cloud-mode-info-modal');
-const btnCloudModeInfo = document.getElementById('btn-cloud-mode-info');
-const btnCloseCloudInfo = document.getElementById('btn-close-cloud-info');
-const pauseBetweenBatchesCheckbox = document.getElementById('pause-between-batches');
+const computerModeCheckbox = document.getElementById('pause-between-batches');
+const cloudModeCheckbox = document.getElementById('auto-upload');
+const computerModeCard = document.getElementById('computer-card');
+const cloudModeCard = document.getElementById('cloud-card');
+const pauseAfterBatchCheckbox = document.getElementById('pause-after-batch');
+const computerModeSettings = document.getElementById('computer-suboptions') || document.getElementById('computer-mode-settings');
+const cloudDestinationSection = document.getElementById('cloud-destination-section');
+const autoUploadSettings = document.getElementById('auto-upload-settings');
+const destinationPathInput = document.getElementById('destination-path');
+const btnBrowseDestination = document.getElementById('btn-browse-destination');
+const syncFolderWarning = document.getElementById('sync-folder-warning');
+const cloudDestinationError = document.getElementById('cloud-destination-error');
+const workingFolderHelp = document.getElementById('working-folder-help');
+const storageSummary = document.getElementById('storage-summary');
+const stagingFreeSpaceText = document.getElementById('staging-free-space');
+const stagingCacheUsageText = document.getElementById('staging-cache-usage');
+const cacheGbInput = document.getElementById('cache-gb');
+const cacheLowGbInput = document.getElementById('cache-low-gb');
+const diskUsageAutoRadio = document.getElementById('disk-usage-auto');
+const diskUsageManualRadio = document.getElementById('disk-usage-manual');
+const autoUploadAdvancedDetails = document.getElementById('auto-upload-advanced');
+const cacheAutoHint = document.getElementById('cache-auto-hint');
+const autoCachePreview = document.getElementById('auto-cache-preview');
+const cacheLowSpaceWarning = document.getElementById('cache-low-space-warning');
+const manualCacheSettings = document.getElementById('manual-cache-settings');
+const uploadModeSelect = document.getElementById('upload-mode');
+const stagingPathInput = document.getElementById('staging-path');
+const btnBrowseStaging = document.getElementById('btn-browse-staging');
+const handoffHelperRow = document.querySelector('#auto-upload-settings .handoff-helper-row');
+const handoffHelperText = document.getElementById('handoff-helper-text');
+const handoffTooltip = document.getElementById('handoff-tooltip');
+const computerModeDescription = document.getElementById('computer-mode-description');
+const computerModeDisabledHint = document.getElementById('computer-mode-disabled-hint');
+const cloudModeDescription = document.getElementById('cloud-mode-description');
+const cloudModeDisabledHint = document.getElementById('cloud-mode-disabled-hint');
 
 // Next Steps Guide elements
 const nextStepsModal = document.getElementById('next-steps-modal');
@@ -79,6 +110,196 @@ let currentMemoryCount = 0;
 let isLicensed = false;
 let hadPartialRun = false;  // Track if user stopped mid-processing
 let lastProcessedCount = 0; // Track how many files were processed before stopping
+let lastUploadUiUpdateAt = 0;
+let isStorageCriticallyLow = false;
+let autoCachePreviewRequestId = 0;
+let storageSummaryRequestId = 0;
+let storageCheckRequestId = 0;
+let lastStorageEstimate = null;
+let lastStorageEstimateLogAt = 0;
+let lastStorageEstimateLogKind = null;
+let storageMode = 'NONE';
+
+const GIB = 1024 * 1024 * 1024;
+const AVG_FILE_BYTES = 8 * 1024 * 1024;
+const STORAGE_ESTIMATE_LOG_THROTTLE_MS = 500;
+
+function isDebugStorageEnabled() {
+    try {
+        return localStorage.getItem('DATEBACK_DEBUG_STORAGE') === '1';
+    } catch (e) {
+        return false;
+    }
+}
+
+window.DateBackDebug = window.DateBackDebug || {};
+window.DateBackDebug.setStorageDebug = (enabled) => {
+    try {
+        localStorage.setItem('DATEBACK_DEBUG_STORAGE', enabled ? '1' : '0');
+    } catch (e) {
+        // Ignore storage access failures in locked-down environments.
+    }
+    let value = 'unavailable';
+    try {
+        value = localStorage.getItem('DATEBACK_DEBUG_STORAGE');
+    } catch (e) {
+        // Keep fallback value.
+    }
+    console.log('DATEBACK_DEBUG_STORAGE=', value);
+};
+
+function roundOneDecimal(value) {
+    return Math.round(value * 10) / 10;
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function getDiskUsageMode() {
+    return diskUsageManualRadio && diskUsageManualRadio.checked ? 'manual' : 'automatic';
+}
+
+function syncStorageModeFromControls() {
+    const computerChecked = !!(computerModeCheckbox && computerModeCheckbox.checked);
+    const cloudChecked = !!(cloudModeCheckbox && cloudModeCheckbox.checked);
+    if (cloudChecked && !computerChecked) {
+        storageMode = 'CLOUD';
+    } else if (computerChecked && !cloudChecked) {
+        storageMode = 'COMPUTER';
+    } else {
+        storageMode = 'NONE';
+    }
+    return storageMode;
+}
+
+function getStorageMode() {
+    return syncStorageModeFromControls();
+}
+
+function isCloudModeSelected() {
+    return getStorageMode() === 'CLOUD';
+}
+
+function isComputerModeSelected() {
+    return getStorageMode() === 'COMPUTER';
+}
+
+function isPauseAfterBatchEnabled() {
+    return isComputerModeSelected() && !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked);
+}
+
+function getActiveProcessingModeName() {
+    const mode = getStorageMode();
+    if (mode === 'CLOUD') return 'Store Memories on Cloud';
+    if (mode === 'COMPUTER') return isPauseAfterBatchEnabled()
+        ? 'Store Memories on Computer (Pause After Batch)'
+        : 'Store Memories on Computer';
+    return 'No Storage Mode Selected';
+}
+
+function updateStartButtonState() {
+    if (isProcessing) {
+        btnStart.disabled = true;
+        return;
+    }
+
+    const mode = getStorageMode();
+    const hasZip = !!zipPathInput.value && zipValidation.classList.contains('valid');
+    const hasOutput = !!outputPathInput.value.trim();
+    const hasMode = mode === 'COMPUTER' || mode === 'CLOUD';
+    const cloudValidation = validateCloudDestinationForCurrentMode();
+    const hasDestination = mode !== 'CLOUD' || cloudValidation.valid;
+    btnStart.disabled = !(hasZip && hasOutput && hasMode && hasDestination && !isStorageCriticallyLow);
+}
+
+function computeAutoCacheValues(freeBytes) {
+    const free = Number.isFinite(freeBytes) ? Math.max(0, freeBytes) : 0;
+    const freeGiB = free / GIB;
+    if (free < (6 * GIB)) {
+        return {
+            freeGb: roundOneDecimal(freeGiB),
+            reserveGb: roundOneDecimal(Math.max(10, 0.10 * freeGiB)),
+            cacheGb: 1,
+            cacheLowGb: 0.5,
+            lowSpaceWarning: true
+        };
+    }
+
+    const reserve = Math.max(10 * GIB, 0.10 * free);
+    const usable = Math.max(0, free - reserve);
+    const raw = 0.25 * usable;
+    let cacheGb = roundOneDecimal(clamp(raw / GIB, 2, 20));
+    let cacheLowGb = Math.max(1, roundOneDecimal(cacheGb * 0.6));
+    if (cacheLowGb >= cacheGb) {
+        cacheLowGb = roundOneDecimal(Math.max(0.5, cacheGb - 0.1));
+    }
+    if (cacheLowGb >= cacheGb) {
+        cacheLowGb = roundOneDecimal(Math.max(0.1, cacheGb * 0.5));
+    }
+
+    return {
+        freeGb: roundOneDecimal(freeGiB),
+        reserveGb: roundOneDecimal(reserve / GIB),
+        cacheGb,
+        cacheLowGb,
+        lowSpaceWarning: false
+    };
+}
+
+function computeSafetyBufferGb(freeGb) {
+    return Math.max(10, roundOneDecimal(freeGb * 0.10));
+}
+
+function computeAutoUploadPreflight(cacheGb, freeBytes) {
+    const freeGb = freeBytes / GIB;
+    const safetyBufferGb = computeSafetyBufferGb(freeGb);
+    const requiredGb = cacheGb + safetyBufferGb;
+    return {
+        freeBytes,
+        freeGb,
+        safetyBufferGb,
+        requiredGb,
+        requiredBytes: requiredGb * GIB
+    };
+}
+
+async function evaluateAutoUploadPreflight(outputDir, stagingDir, cacheGbOverride = null) {
+    const stagingPathForCheck = stagingDir && stagingDir.trim().length > 0 ? stagingDir.trim() : outputDir;
+    if (!stagingPathForCheck) {
+        throw new Error('Output or staging folder is required to evaluate storage.');
+    }
+
+    const diskInfo = await window.api.getDiskFreeBytes(stagingPathForCheck);
+    if (!diskInfo || !diskInfo.success || !Number.isFinite(Number(diskInfo.freeBytes))) {
+        throw new Error(diskInfo?.error || 'Unable to read free space for staging volume');
+    }
+    const freeBytes = Number(diskInfo.freeBytes);
+
+    let cacheGbToUse = cacheGbOverride;
+    if (!Number.isFinite(cacheGbToUse)) {
+        if (getDiskUsageMode() === 'manual') {
+            const manualCacheGb = Number.parseFloat(cacheGbInput.value);
+            if (Number.isFinite(manualCacheGb) && manualCacheGb > 0) {
+                cacheGbToUse = manualCacheGb;
+            }
+        } else {
+            cacheGbToUse = computeAutoCacheValues(freeBytes).cacheGb;
+        }
+    }
+    if (!Number.isFinite(cacheGbToUse) || cacheGbToUse <= 0) {
+        throw new Error('Invalid cache size.');
+    }
+
+    const preflight = computeAutoUploadPreflight(cacheGbToUse, freeBytes);
+    return {
+        ok: freeBytes >= preflight.requiredBytes,
+        preflight,
+        cacheGb: cacheGbToUse,
+        path: stagingPathForCheck,
+        volumePath: diskInfo.volumePath || stagingPathForCheck
+    };
+}
 
 // Helper: Format bytes
 function formatBytes(bytes) {
@@ -90,7 +311,7 @@ function formatBytes(bytes) {
 }
 
 // Helper: Show Storage Warning Modal
-function showStorageWarningModal(title, text, subtext, allowContinue) {
+function showStorageWarningModal(title, text, subtext, allowContinue, options = {}) {
     return new Promise((resolve) => {
         storageWarningTitle.textContent = title;
 
@@ -126,11 +347,12 @@ function showStorageWarningModal(title, text, subtext, allowContinue) {
 
         if (allowContinue) {
             btnStorageContinue.style.display = 'inline-block';
-            btnStorageCancel.textContent = 'Cancel';
+            btnStorageContinue.textContent = options.continueLabel || 'Continue';
+            btnStorageCancel.textContent = options.cancelLabel || 'Cancel';
             btnStorageContinue.addEventListener('click', handleContinue);
         } else {
             btnStorageContinue.style.display = 'none';
-            btnStorageCancel.textContent = 'OK';
+            btnStorageCancel.textContent = options.cancelLabel || 'OK';
         }
 
         btnStorageCancel.addEventListener('click', handleCancel);
@@ -139,61 +361,110 @@ function showStorageWarningModal(title, text, subtext, allowContinue) {
 
 // Helper: Check Storage
 async function checkStorage(count) {
+    const requestId = ++storageCheckRequestId;
     storageCheckSection.classList.remove('hidden');
     if (storageCount) storageCount.textContent = count.toLocaleString();
 
-    // Check if Cloud Mode is enabled
-    const isCloudMode = pauseBetweenBatchesCheckbox.checked;
+    const activeMode = getStorageMode();
+    const isAutoUploadMode = activeMode === 'CLOUD';
+    const isPauseAfterBatchMode = activeMode === 'COMPUTER' && !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked);
+    const modeName = getActiveProcessingModeName();
 
-    // Estimate 8MB per file (conservative - videos can be large)
     let requiredBytes;
-    if (isCloudMode) {
-        // Cloud Mode: Only need space for ~2 batches (500 files each = 1000 files)
-        // This gives buffer for processing while uploading/deleting
-        const batchSize = 1000; // 2 batches worth
-        const filesNeeded = Math.min(count, batchSize);
-        requiredBytes = filesNeeded * 8 * 1024 * 1024;
+    let availableBytes = null;
+    let autoCacheGb = null;
+    let autoSafetyBufferGb = null;
+    let requiredText = '';
+    let estimateKind = 'STANDARD';
+
+    if (isAutoUploadMode) {
+        const outputDir = outputPathInput.value.trim();
+        const stagingDir = stagingPathInput.value.trim();
+        try {
+            const preflightResult = await evaluateAutoUploadPreflight(outputDir, stagingDir);
+            if (requestId !== storageCheckRequestId) return;
+            estimateKind = 'AUTO_PREFLIGHT';
+            // Auto Upload estimate is required FREE SPACE to start (cache + safety buffer),
+            // not an output-size estimate.
+            requiredBytes = preflightResult.preflight.requiredBytes;
+            availableBytes = preflightResult.preflight.freeBytes;
+            autoCacheGb = preflightResult.cacheGb;
+            autoSafetyBufferGb = preflightResult.preflight.safetyBufferGb;
+            requiredText = formatBytes(requiredBytes);
+        } catch (error) {
+            if (requestId !== storageCheckRequestId) return;
+            // Fallback display if preflight cannot be evaluated yet.
+            estimateKind = 'AUTO_FALLBACK';
+            const fallbackCacheGb = getDiskUsageMode() === 'manual'
+                ? Number.parseFloat(cacheGbInput.value) || 5
+                : 5;
+            const fallbackSafetyBufferGb = 10;
+            requiredBytes = (fallbackCacheGb + fallbackSafetyBufferGb) * GIB;
+            autoCacheGb = fallbackCacheGb;
+            autoSafetyBufferGb = fallbackSafetyBufferGb;
+            requiredText = formatBytes(requiredBytes);
+        }
+    } else if (isPauseAfterBatchMode) {
+        // Pause-after-batch mode: output-size heuristic capped to ~2 batches (1000 files).
+        estimateKind = 'MANUAL';
+        const filesNeeded = Math.min(count, 1000);
+        requiredBytes = filesNeeded * AVG_FILE_BYTES;
+        requiredText = `${formatBytes(requiredBytes)} per batch`;
     } else {
-        // Normal Mode: Need space for all files
-        requiredBytes = count * 8 * 1024 * 1024;
+        // Standard Processing: output-size heuristic for full run.
+        estimateKind = 'STANDARD';
+        requiredBytes = count * AVG_FILE_BYTES;
+        requiredText = formatBytes(requiredBytes);
     }
 
-    storageRequired.textContent = formatBytes(requiredBytes) + (isCloudMode ? ' (per batch)' : '');
+    storageRequired.textContent = requiredText;
 
     // Get storage status icon element
     const storageStatusIcon = document.getElementById('storage-status-icon');
 
-    // Get available space
-    let pathToCheck = outputPathInput.value;
-    if (!pathToCheck) {
-        // Fallback to defaults or won't work perfectly until path is set, 
-        // but we can try to guess based on existing input or current dir
-        const defaults = await window.api.getDefaults();
-        pathToCheck = defaults.outputDir || '.';
+    isStorageCriticallyLow = false;
+
+    if (!Number.isFinite(availableBytes) && !isAutoUploadMode) {
+        // For standard/manual modes, read output-volume free space.
+        let pathToCheck = outputPathInput.value;
+        if (!pathToCheck) {
+            const defaults = await window.api.getDefaults();
+            if (requestId !== storageCheckRequestId) return;
+            pathToCheck = defaults.outputDir || '.';
+        }
+        const disk = await window.api.getDiskSpace(pathToCheck);
+        if (requestId !== storageCheckRequestId) return;
+        if (disk.success) {
+            availableBytes = Number(disk.free);
+        }
     }
 
-    const disk = await window.api.getDiskSpace(pathToCheck);
-
-    if (disk.success) {
-        storageAvailable.textContent = formatBytes(disk.free);
+    if (Number.isFinite(availableBytes)) {
+        storageAvailable.textContent = formatBytes(availableBytes);
 
         // Minimum free space threshold: 5GB absolute minimum
         const absoluteMinimum = 5 * 1024 * 1024 * 1024; // 5GB
 
-        // Warning if free space is less than required (plus buffer)
-        const isCriticallyLow = disk.free < absoluteMinimum;
-        const isLowSpace = disk.free < requiredBytes;
+        // Warning if free space is less than required.
+        const isLowSpace = availableBytes < requiredBytes;
+        const showAbsoluteCritical = !isAutoUploadMode && availableBytes < absoluteMinimum;
+        const isCriticallyLow = isAutoUploadMode ? isLowSpace : showAbsoluteCritical;
+        isStorageCriticallyLow = isCriticallyLow;
 
         // Get the available space stat box
         const availableStatBox = storageAvailable.closest('.stat-box');
 
         if (isLowSpace || isCriticallyLow) {
+            const autoCacheText = Number.isFinite(autoCacheGb) ? `${roundOneDecimal(autoCacheGb)} GB` : 'configured cache';
+            const autoBufferText = Number.isFinite(autoSafetyBufferGb) ? `${roundOneDecimal(autoSafetyBufferGb)} GB` : 'safety buffer';
             storageWarning.classList.remove('hidden');
-            storageWarning.innerHTML = isCriticallyLow
+            storageWarning.innerHTML = showAbsoluteCritical
                 ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>CRITICAL:</strong> You need at least 5GB free to process files safely.'
-                : (isCloudMode
-                    ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Low space detected. Make sure to delete each batch after uploading!'
-                    : '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> You might run out of space! Consider enabling Cloud Mode or freeing up storage.');
+                : (isPauseAfterBatchMode
+                    ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after every batch is enabled. Upload and delete each batch before continuing.'
+                    : isAutoUploadMode
+                        ? `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Store on Cloud needs temporary cache + buffer (${autoCacheText} + ${autoBufferText}). Keep destination available.`
+                        : '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> You might run out of space. Choose a larger working drive or switch to Store on Cloud.');
             storageAvailable.style.color = 'var(--accent-red)';
             storageStatusIcon.innerHTML = `
                 <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -214,11 +485,6 @@ async function checkStorage(count) {
                 availableStatBox.classList.add('critical');
             }
 
-            // Disable START button and Cloud Mode checkbox if critically low
-            if (isCriticallyLow) {
-                btnStart.disabled = true;
-                pauseBetweenBatchesCheckbox.disabled = true;
-            }
         } else {
             storageWarning.classList.add('hidden');
             storageAvailable.style.color = 'var(--accent-primary)';
@@ -237,18 +503,343 @@ async function checkStorage(count) {
                 availableStatBox.classList.add('storage-ok');
             }
 
-            // Re-enable START button, Cloud Mode checkbox, and output location change if storage is OK (and validation passed)
-            pauseBetweenBatchesCheckbox.disabled = false;
+            // Re-enable output location change when storage is OK.
             btnBrowseOutput.disabled = false;
-            if (zipValidation.classList.contains('valid')) {
-                btnStart.disabled = false;
-            }
         }
     } else {
+        isStorageCriticallyLow = false;
         storageAvailable.textContent = 'Unknown';
         storageStatusIcon.textContent = '❓';
         storageStatusIcon.className = 'status-icon-inline';
     }
+
+    lastStorageEstimate = {
+        estimateKind,
+        modeName,
+        requiredBytes,
+        availableBytes,
+        autoCacheGb,
+        autoSafetyBufferGb
+    };
+
+    if (isDebugStorageEnabled()) {
+        const now = Date.now();
+        const shouldLog =
+            (now - lastStorageEstimateLogAt) >= STORAGE_ESTIMATE_LOG_THROTTLE_MS ||
+            estimateKind !== lastStorageEstimateLogKind;
+        if (shouldLog) {
+            const requiredGb = Number.isFinite(requiredBytes) ? roundOneDecimal(requiredBytes / GIB) : null;
+            const availableGb = Number.isFinite(availableBytes) ? roundOneDecimal(availableBytes / GIB) : null;
+            console.log(
+                `[STORAGE_ESTIMATE] kind=${estimateKind} mode=${modeName} required_gb=${requiredGb} available_gb=${availableGb} cacheGb=${autoCacheGb ?? 'n/a'} bufferGb=${autoSafetyBufferGb ?? 'n/a'}`
+            );
+            lastStorageEstimateLogAt = now;
+            lastStorageEstimateLogKind = estimateKind;
+        }
+    }
+
+    updateStartButtonState();
+}
+
+async function resolveAutoCacheForStart(outputDir, stagingDir) {
+    const volumePath = stagingDir && stagingDir.trim().length > 0
+        ? stagingDir.trim()
+        : outputDir;
+    const diskInfo = await window.api.getDiskFreeBytes(volumePath);
+    if (!diskInfo || !diskInfo.success || !Number.isFinite(Number(diskInfo.freeBytes))) {
+        const reason = diskInfo && diskInfo.error ? diskInfo.error : 'Unable to read disk free space';
+        throw new Error(reason);
+    }
+
+    const computed = computeAutoCacheValues(Number(diskInfo.freeBytes));
+    return {
+        ...computed,
+        volumePath: diskInfo.volumePath || volumePath
+    };
+}
+
+async function updateAutoCachePreview() {
+    if (!autoCachePreview) {
+        return;
+    }
+    const autoEnabled = isCloudModeSelected();
+    const advancedOpen = !!(autoUploadAdvancedDetails && autoUploadAdvancedDetails.open);
+    const automaticMode = getDiskUsageMode() === 'automatic';
+    if (!autoEnabled || !advancedOpen || !automaticMode) {
+        autoCachePreview.classList.add('hidden');
+        return;
+    }
+
+    const outputDir = outputPathInput.value.trim();
+    if (!outputDir) {
+        autoCachePreview.classList.add('hidden');
+        return;
+    }
+
+    const stagingDir = stagingPathInput.value.trim();
+    const requestId = ++autoCachePreviewRequestId;
+    try {
+        const autoCache = await resolveAutoCacheForStart(outputDir, stagingDir);
+        if (requestId !== autoCachePreviewRequestId) {
+            return;
+        }
+        autoCachePreview.textContent = `Automatic will use up to ${autoCache.cacheGb} GB for staging.`;
+        autoCachePreview.classList.remove('hidden');
+        if (cacheLowSpaceWarning) {
+            cacheLowSpaceWarning.classList.toggle('hidden', !autoCache.lowSpaceWarning);
+        }
+    } catch (error) {
+        autoCachePreview.classList.add('hidden');
+    }
+}
+
+async function updateStorageSummary() {
+    if (!storageSummary || !stagingFreeSpaceText || !stagingCacheUsageText) {
+        return;
+    }
+    const autoEnabled = isCloudModeSelected();
+    storageSummary.classList.toggle('hidden', !autoEnabled);
+    if (!autoEnabled) {
+        return;
+    }
+
+    const outputDir = outputPathInput.value.trim();
+    const stagingDir = stagingPathInput.value.trim();
+    if (!outputDir) {
+        stagingFreeSpaceText.textContent = 'Free space on staging drive: --';
+        stagingCacheUsageText.textContent = 'DateBack will use up to: -- temporary space';
+        return;
+    }
+
+    const requestId = ++storageSummaryRequestId;
+    try {
+        const preflight = await evaluateAutoUploadPreflight(outputDir, stagingDir);
+        if (requestId !== storageSummaryRequestId) {
+            return;
+        }
+        stagingFreeSpaceText.textContent = `Free space on staging drive: ${roundOneDecimal(preflight.preflight.freeGb)} GB`;
+        stagingCacheUsageText.textContent = `DateBack will use up to: ${roundOneDecimal(preflight.cacheGb)} GB temporary space`;
+    } catch (error) {
+        if (requestId !== storageSummaryRequestId) {
+            return;
+        }
+        stagingFreeSpaceText.textContent = 'Free space on staging drive: --';
+        stagingCacheUsageText.textContent = 'DateBack will use up to: -- temporary space';
+    }
+}
+
+function normalizeCloudPath(pathValue) {
+    return (pathValue || '').replace(/\\/g, '/');
+}
+
+const CLOUD_PROVIDER_DEFINITIONS = [
+    {
+        providerKey: 'DROPBOX',
+        displayName: 'Dropbox',
+        featureHint: 'Smart Sync / Online-Only',
+        patterns: [
+            /^\/Users\/[^/]+\/Dropbox(?:\/|$)/i,
+            /^\/Users\/[^/]+\/Library\/CloudStorage\/Dropbox(?:\/|$)/i,
+            /^[A-Z]:\/Users\/[^/]+\/Dropbox(?:\/|$)/i
+        ]
+    },
+    {
+        providerKey: 'GOOGLE_DRIVE',
+        displayName: 'Google Drive',
+        featureHint: 'Stream files (saves disk space)',
+        patterns: [
+            /^\/Users\/[^/]+\/Library\/CloudStorage\/GoogleDrive-[^/]+(?:\/|$)/i,
+            /^[A-Z]:\/Users\/[^/]+\/Google Drive(?:\/|$)/i
+        ]
+    },
+    {
+        providerKey: 'ONEDRIVE',
+        displayName: 'OneDrive',
+        featureHint: 'Files On-Demand',
+        patterns: [
+            /^\/Users\/[^/]+\/OneDrive(?:\/|$)/i,
+            /^\/Users\/[^/]+\/Library\/CloudStorage\/OneDrive[^/]*(?:\/|$)/i,
+            /^[A-Z]:\/Users\/[^/]+\/OneDrive[^/]*(?:\/|$)/i
+        ]
+    },
+    {
+        providerKey: 'ICLOUD',
+        displayName: 'iCloud Drive',
+        featureHint: 'Optimize Mac Storage',
+        patterns: [
+            /^\/Users\/[^/]+\/Library\/Mobile Documents\/com~apple~CloudDocs(?:\/|$)/i
+        ]
+    },
+    {
+        providerKey: 'BOX',
+        displayName: 'Box',
+        featureHint: 'Online-only files',
+        patterns: [
+            /^\/Users\/[^/]+\/Library\/CloudStorage\/Box-Box(?:\/|$)/i,
+            /^[A-Z]:\/Users\/[^/]+\/Box(?:\/|$)/i
+        ]
+    }
+];
+
+function detectCloudProvider(pathValue) {
+    const normalized = normalizeCloudPath(pathValue);
+    if (!normalized) {
+        return {
+            providerKey: 'UNKNOWN',
+            displayName: null,
+            featureHint: null
+        };
+    }
+
+    for (const provider of CLOUD_PROVIDER_DEFINITIONS) {
+        if (provider.patterns.some((pattern) => pattern.test(normalized))) {
+            return {
+                providerKey: provider.providerKey,
+                displayName: provider.displayName,
+                featureHint: provider.featureHint
+            };
+        }
+    }
+
+    return {
+        providerKey: 'UNKNOWN',
+        displayName: null,
+        featureHint: null
+    };
+}
+
+function isKnownSyncFolderPath(pathValue) {
+    return detectCloudProvider(pathValue).providerKey !== 'UNKNOWN';
+}
+
+function isAllowedCloudFolder(pathValue) {
+    return isKnownSyncFolderPath(pathValue);
+}
+
+function buildCloudHandoffTooltip(providerInfo) {
+    return [
+        'By default, staging uses your Working Folder in Step 2 (inside a hidden .staging folder).',
+        'Advanced staging lets you choose a different drive for staging.'
+    ].join('\n');
+}
+
+function buildCloudHandoffHelperText(providerInfo) {
+    return 'Cloud mode stages files temporarily, then copies them into your cloud folder.';
+}
+
+function updateCloudHandoffCopy() {
+    const providerInfo = detectCloudProvider(destinationPathInput.value.trim());
+    if (handoffHelperText) {
+        handoffHelperText.textContent = buildCloudHandoffHelperText(providerInfo);
+    }
+    if (handoffTooltip) {
+        const tooltipText = buildCloudHandoffTooltip(providerInfo);
+        handoffTooltip.title = tooltipText;
+        handoffTooltip.setAttribute('aria-label', tooltipText);
+    }
+}
+
+function validateCloudDestinationForCurrentMode() {
+    const autoEnabled = isCloudModeSelected();
+    const destination = destinationPathInput.value.trim();
+    if (!autoEnabled) {
+        return { valid: true, providerInfo: detectCloudProvider(destination), message: '' };
+    }
+
+    if (!destination) {
+        return {
+            valid: false,
+            providerInfo: detectCloudProvider(destination),
+            message: 'Choose a cloud destination folder (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box).'
+        };
+    }
+
+    const providerInfo = detectCloudProvider(destination);
+    if (providerInfo.providerKey === 'UNKNOWN') {
+        return {
+            valid: false,
+            providerInfo,
+            message: 'Not a recognized cloud folder. Choose iCloud Drive, Google Drive, OneDrive, Dropbox, or Box.'
+        };
+    }
+
+    return { valid: true, providerInfo, message: '' };
+}
+
+function updateSyncFolderWarning() {
+    const validation = validateCloudDestinationForCurrentMode();
+    if (cloudDestinationError) {
+        if (validation.valid) {
+            cloudDestinationError.classList.add('hidden');
+        } else {
+            cloudDestinationError.textContent = validation.message;
+            cloudDestinationError.classList.remove('hidden');
+        }
+    }
+
+    if (syncFolderWarning) {
+        syncFolderWarning.classList.add('hidden');
+    }
+
+    return validation.valid;
+}
+
+async function chooseStagingFolderAndRefresh() {
+    const selected = await window.api.selectFolder();
+    if (selected) {
+        stagingPathInput.value = selected;
+        updateAutoCachePreview();
+        updateStorageSummary();
+        if (currentMemoryCount > 0) {
+            await checkStorage(currentMemoryCount);
+        }
+    }
+    return selected;
+}
+
+async function showDiskSpaceBlockingModal(title, text, subtext) {
+    const pickStaging = await showStorageWarningModal(
+        title,
+        text,
+        subtext,
+        true,
+        {
+            continueLabel: 'Choose staging folder…',
+            cancelLabel: 'Cancel'
+        }
+    );
+    if (!pickStaging) {
+        return false;
+    }
+
+    const selected = await chooseStagingFolderAndRefresh();
+    if (!selected) {
+        return false;
+    }
+
+    const outputDir = outputPathInput.value.trim();
+    if (!outputDir || !isCloudModeSelected()) {
+        return true;
+    }
+    try {
+        const check = await evaluateAutoUploadPreflight(outputDir, stagingPathInput.value.trim());
+        if (!check.ok) {
+            await showStorageWarningModal(
+                '⚠️ Still Not Enough Space',
+                `Free: ${roundOneDecimal(check.preflight.freeGb)} GB\nRequired: ${roundOneDecimal(check.preflight.requiredGb)} GB (cache ${roundOneDecimal(check.cacheGb)} GB + buffer ${roundOneDecimal(check.preflight.safetyBufferGb)} GB).`,
+                'Pick another staging folder or free up more space before starting.',
+                false
+            );
+        }
+    } catch (error) {
+        await showStorageWarningModal(
+            '⚠️ Could Not Verify Staging Space',
+            error.message,
+            'Pick another staging folder or try again.',
+            false
+        );
+    }
+    return true;
 }
 
 // Helper: Validate ZIP file
@@ -269,21 +860,22 @@ async function validateZipFile(path) {
             memories_history.json found
         `;
         btnValidationHelp.classList.add('hidden');
-        btnStart.disabled = false;
 
         // Memory count and storage check
         if (result.count) {
             currentMemoryCount = result.count; // Store count for later re-checks
-            checkStorage(result.count);
+            await checkStorage(result.count);
         }
     } else {
         zipValidation.classList.add('invalid');
         validationStatus.classList.add('invalid');
         validationStatus.textContent = '❌ memories_history.json not found';
         btnValidationHelp.classList.remove('hidden');
-        btnStart.disabled = true;
         storageCheckSection.classList.add('hidden');
+        isStorageCriticallyLow = false;
     }
+
+    updateStartButtonState();
 }
 
 // Helper: Set file path and update UI
@@ -324,6 +916,7 @@ function clearFilePath() {
     if (btnFindZip) {
         btnFindZip.disabled = false;
     }
+    updateStartButtonState();
 }
 
 // Initialize
@@ -334,7 +927,7 @@ async function init() {
     // Get default paths
     const defaults = await window.api.getDefaults();
     if (defaults.zipPath) {
-        setFilePath(defaults.zipPath);
+        await setFilePath(defaults.zipPath);
     }
     if (defaults.outputDir) {
         outputPathInput.value = defaults.outputDir;
@@ -346,6 +939,9 @@ async function init() {
     if (!hasSeenInstructions) {
         instructionsModal.classList.remove('hidden');
     }
+
+    updateAutoUploadUiState();
+    updateStartButtonState();
 }
 
 // ==========================================
@@ -435,9 +1031,28 @@ btnBrowseOutput.addEventListener('click', async () => {
 
         // Re-check storage if we have a count
         if (currentMemoryCount > 0) {
-            checkStorage(currentMemoryCount);
+            await checkStorage(currentMemoryCount);
         }
+        updateAutoCachePreview();
+        updateStorageSummary();
+        updateStartButtonState();
     }
+});
+
+btnBrowseDestination.addEventListener('click', async () => {
+    const selected = await window.api.selectFolder();
+    if (selected) {
+        destinationPathInput.value = selected;
+        updateAutoCachePreview();
+        updateStorageSummary();
+        updateCloudHandoffCopy();
+        updateSyncFolderWarning();
+        updateStartButtonState();
+    }
+});
+
+btnBrowseStaging.addEventListener('click', async () => {
+    await chooseStagingFolderAndRefresh();
 });
 
 const btnResumeProc = document.getElementById('btn-resume-proc');
@@ -472,10 +1087,55 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         return;
     }
 
+    const storageMode = getStorageMode();
+    const autoUpload = storageMode === 'CLOUD';
+    const pauseBetweenBatches = storageMode === 'COMPUTER' && !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked);
+    const destinationDir = destinationPathInput.value.trim();
+    const stagingDir = stagingPathInput.value.trim();
+    const diskUsageMode = getDiskUsageMode();
+    const manualCacheGb = Number.parseFloat(cacheGbInput.value);
+    const manualCacheLowGb = Number.parseFloat(cacheLowGbInput.value);
+    const uploadMode = uploadModeSelect.value === 'move' ? 'move' : 'copy';
+    let resolvedCacheGb;
+    let resolvedCacheLowGb;
+    let cacheComputation;
+
+    if (storageMode === 'NONE') {
+        await showStorageWarningModal(
+            '❌ Choose Where to Store Memories',
+            'Select either "Store Memories on Computer" or "Store Memories on Cloud" before starting.',
+            'To switch modes later, deselect the current option first.',
+            false
+        );
+        return;
+    }
+
+    if (storageMode !== 'COMPUTER' && storageMode !== 'CLOUD') {
+        await showStorageWarningModal(
+            '❌ Invalid Mode Selection',
+            'Choose exactly one storage mode before starting.',
+            'Select one mode and try again.',
+            false
+        );
+        return;
+    }
+
+    const cloudDestinationValidation = validateCloudDestinationForCurrentMode();
+    if (autoUpload && !cloudDestinationValidation.valid) {
+        updateSyncFolderWarning();
+        await showStorageWarningModal(
+            '❌ Cloud Destination Required',
+            cloudDestinationValidation.message,
+            'Choose a recognized cloud sync folder and try again.',
+            false
+        );
+        return;
+    }
+
     // Connectivity Guard: Warn if offline and using cloud storage folder
     const isOffline = !navigator.onLine;
-    const cloudKeywords = ['Google Drive', 'iCloud', 'OneDrive', 'Dropbox', 'CloudStorage'];
-    const isCloudPath = cloudKeywords.some(keyword => outputDir.includes(keyword));
+    const pathForCloudConnectivityCheck = autoUpload ? destinationDir : outputDir;
+    const isCloudPath = isAllowedCloudFolder(pathForCloudConnectivityCheck);
 
     if (isOffline && isCloudPath) {
         const continueAnyway = await showOfflineWarning();
@@ -484,25 +1144,98 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         }
     }
 
-    // Hard block if less than 5GB free (absolute minimum)
-    const disk = await window.api.getDiskSpace(outputDir);
-    const absoluteMinimum = 5 * 1024 * 1024 * 1024; // 5GB
-    if (disk.success && disk.free < absoluteMinimum) {
-        await showStorageWarningModal(
-            '❌ Cannot Start Processing',
-            `You only have ${formatBytes(disk.free)} free.`,
-            'DateBack requires at least 5GB of free space to process files safely.\n\nPlease free up space and try again.',
-            false // No continue option
-        );
-        return;
+    if (autoUpload) {
+        if (diskUsageMode === 'manual') {
+            if (!Number.isFinite(manualCacheGb) || manualCacheGb <= 0) {
+                alert('Cache GB must be greater than 0.');
+                return;
+            }
+            if (!Number.isFinite(manualCacheLowGb) || manualCacheLowGb < 0 || manualCacheLowGb >= manualCacheGb) {
+                alert('Cache Low GB must be less than Cache GB.');
+                return;
+            }
+            resolvedCacheGb = manualCacheGb;
+            resolvedCacheLowGb = manualCacheLowGb;
+            cacheLowSpaceWarning.classList.add('hidden');
+        } else {
+            try {
+                const autoCache = await resolveAutoCacheForStart(outputDir, stagingDir);
+                resolvedCacheGb = autoCache.cacheGb;
+                resolvedCacheLowGb = autoCache.cacheLowGb;
+                cacheComputation = {
+                    mode: 'automatic',
+                    freeGb: autoCache.freeGb,
+                    reserveGb: autoCache.reserveGb,
+                    volumePath: autoCache.volumePath
+                };
+                cacheLowSpaceWarning.classList.toggle('hidden', !autoCache.lowSpaceWarning);
+            } catch (e) {
+                await showStorageWarningModal(
+                    '❌ Cannot Start Auto Upload',
+                    `Could not compute automatic cache size.\n\n${e.message}`,
+                    'Choose a valid output/staging folder and try again.',
+                    false
+                );
+                return;
+            }
+        }
+
+        try {
+            const stagingPathForCheck = stagingDir || outputDir;
+            const diskInfo = await window.api.getDiskFreeBytes(stagingPathForCheck);
+            if (!diskInfo || !diskInfo.success || !Number.isFinite(Number(diskInfo.freeBytes))) {
+                throw new Error(diskInfo?.error || 'Unable to read free space for staging volume');
+            }
+            const freeBytes = Number(diskInfo.freeBytes);
+            const preflight = computeAutoUploadPreflight(resolvedCacheGb, freeBytes);
+            if (freeBytes < preflight.requiredBytes) {
+                await showDiskSpaceBlockingModal(
+                    '❌ Cannot Start Auto Upload',
+                    `Insufficient space on staging volume.\n\nFree: ${roundOneDecimal(preflight.freeGb)} GB\nRequired: ${roundOneDecimal(preflight.requiredGb)} GB (cache ${roundOneDecimal(resolvedCacheGb)} GB + buffer ${roundOneDecimal(preflight.safetyBufferGb)} GB).`,
+                    'Free up space or choose an external staging folder.'
+                );
+                return;
+            }
+        } catch (e) {
+            await showDiskSpaceBlockingModal(
+                '❌ Cannot Start Auto Upload',
+                `Could not verify staging disk space.\n\n${e.message}`,
+                'Free up space or choose an external staging folder.'
+            );
+            return;
+        }
+    } else {
+        // Legacy hard block for non-auto-upload mode based on output volume.
+        const disk = await window.api.getDiskSpace(outputDir);
+        const absoluteMinimum = 5 * 1024 * 1024 * 1024; // 5GB
+        if (disk.success && disk.free < absoluteMinimum) {
+            await showStorageWarningModal(
+                '❌ Cannot Start Processing',
+                `You only have ${formatBytes(disk.free)} free.`,
+                'DateBack requires at least 5GB of free space to process files safely.\n\nPlease free up space and try again.',
+                false
+            );
+            return;
+        }
     }
 
     // Check for storage warning (soft warning, allows continuation)
     if (!storageWarning.classList.contains('hidden')) {
-        const isCloudMode = pauseBetweenBatchesCheckbox.checked;
-        const warningMsg = isCloudMode
-            ? "Cloud Mode is enabled, but storage is still tight.\n\nMake sure to upload and delete each batch immediately after it completes."
-            : "You may run out of space during processing.\n\nConsider enabling 'Cloud Mode' or freeing up storage.";
+        const estimate = lastStorageEstimate;
+        const estimatedRequiredGb = estimate && Number.isFinite(estimate.requiredBytes)
+            ? roundOneDecimal(estimate.requiredBytes / GIB)
+            : null;
+        const estimatedCacheGb = estimate && Number.isFinite(estimate.autoCacheGb)
+            ? roundOneDecimal(estimate.autoCacheGb)
+            : null;
+        const estimatedBufferGb = estimate && Number.isFinite(estimate.autoSafetyBufferGb)
+            ? roundOneDecimal(estimate.autoSafetyBufferGb)
+            : null;
+        const warningMsg = storageMode === 'COMPUTER' && pauseBetweenBatches
+            ? "Pause-after-batch is enabled, but storage is still tight.\n\nUpload and delete each batch immediately after it completes."
+            : storageMode === 'CLOUD'
+                ? `Store on Cloud is enabled, but storage is still tight.\n\nThis mode requires temporary cache + safety buffer${estimatedRequiredGb !== null ? ` (~${estimatedRequiredGb} GB)` : ''}${estimatedCacheGb !== null && estimatedBufferGb !== null ? ` (${estimatedCacheGb} GB + ${estimatedBufferGb} GB)` : ''}.\nKeep your sync app running and ensure the destination remains available.`
+                : "Store on Computer is selected and storage is tight.\n\nChoose a larger working drive, or use Store on Cloud.";
 
         const shouldContinue = await showStorageWarningModal(
             '⚠️ Storage Warning',
@@ -534,13 +1267,23 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     etaTimestamps = [];
     lastProgressCount = 0;
     lastProgressTime = Date.now();
+    lastUploadUiUpdateAt = 0;
 
     isProcessing = true;
     stoppedByUser = false; // Reset stop flag
 
-    // Disable Cloud Mode checkbox and output location change during processing
-    pauseBetweenBatchesCheckbox.disabled = true;
+    // Disable storage mode controls and path pickers during processing
+    computerModeCheckbox.disabled = true;
     btnBrowseOutput.disabled = true;
+    cloudModeCheckbox.disabled = true;
+    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = true;
+    btnBrowseDestination.disabled = true;
+    btnBrowseStaging.disabled = true;
+    cacheGbInput.disabled = true;
+    cacheLowGbInput.disabled = true;
+    uploadModeSelect.disabled = true;
+    if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = true;
+    if (diskUsageManualRadio) diskUsageManualRadio.disabled = true;
 
     // UI Updates
     btnStart.classList.add('hidden');
@@ -562,10 +1305,54 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     progressEta.textContent = '';
 
     // Get pause between batches preference
-    const pauseBetweenBatches = document.getElementById('pause-between-batches').checked;
+    const failStartValidation = (message, showAlert = true) => {
+        if (showAlert && message) {
+            alert(message);
+        }
+        isProcessing = false;
+        btnStop.classList.add('hidden');
+        btnStart.classList.remove('hidden');
+        btnBrowseOutput.disabled = false;
+        computerModeCheckbox.disabled = false;
+        cloudModeCheckbox.disabled = false;
+        if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
+        btnBrowseDestination.disabled = false;
+        btnBrowseStaging.disabled = false;
+        cacheGbInput.disabled = false;
+        cacheLowGbInput.disabled = false;
+        uploadModeSelect.disabled = false;
+        if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
+        if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
+        progressTextContent.textContent = 'Ready';
+        progressEta.textContent = '';
+        updateAutoUploadUiState();
+        updateStartButtonState();
+    };
+
+    if (autoUpload) {
+        if (!Number.isFinite(resolvedCacheGb) || resolvedCacheGb <= 0) {
+            failStartValidation('Cache GB must be greater than 0.');
+            return;
+        }
+        if (!Number.isFinite(resolvedCacheLowGb) || resolvedCacheLowGb < 0 || resolvedCacheLowGb >= resolvedCacheGb) {
+            failStartValidation('Cache Low GB must be less than Cache GB.');
+            return;
+        }
+    }
 
     try {
-        const args = { zipPath, outputDir, pauseBetweenBatches };
+        const args = {
+            zipPath,
+            outputDir,
+            pauseBetweenBatches,
+            autoUpload,
+            destinationDir: autoUpload ? destinationDir : '',
+            cacheGb: autoUpload ? resolvedCacheGb : undefined,
+            cacheLowGb: autoUpload ? resolvedCacheLowGb : undefined,
+            uploadMode: autoUpload ? uploadMode : undefined,
+            stagingDir: autoUpload ? stagingDir : '',
+            cacheComputation: autoUpload ? cacheComputation : undefined
+        };
         if (isResume) {
             args.resumeMode = resumeMode;
         }
@@ -609,6 +1396,51 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                     btnStart.classList.add('hidden');
                     document.getElementById('btn-restart-complete').classList.remove('hidden');
                 }
+            } else if (result.errorType === 'MODE_CONFLICT') {
+                await showStorageWarningModal(
+                    '❌ Invalid Mode Selection',
+                    result.message || 'Choose either Store on Cloud or Store on Computer (pause option) - not both.',
+                    'Please enable only one storage mode and try again.',
+                    false
+                );
+                cloudModeCheckbox.checked = false;
+                computerModeCheckbox.checked = false;
+                if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.checked = false;
+                syncStorageModeFromControls();
+                updateAutoUploadUiState();
+                if (currentMemoryCount > 0) {
+                    await checkStorage(currentMemoryCount);
+                }
+                failStartValidation('', false);
+                return;
+            } else if (result.errorType === 'DISK_SPACE') {
+                const details = result.details || {};
+                const freeGb = Number.isFinite(details.free_gb) ? details.free_gb : null;
+                const requiredGb = Number.isFinite(details.required_gb) ? details.required_gb : null;
+                const cacheGb = Number.isFinite(details.cache_gb) ? details.cache_gb : null;
+                const bufferGb = Number.isFinite(details.safety_buffer_gb) ? details.safety_buffer_gb : null;
+                const detailLines = [];
+                if (freeGb !== null) detailLines.push(`Free: ${freeGb} GB`);
+                if (requiredGb !== null) detailLines.push(`Required: ${requiredGb} GB`);
+                if (cacheGb !== null && bufferGb !== null) {
+                    detailLines.push(`Cache: ${cacheGb} GB + Buffer: ${bufferGb} GB`);
+                }
+                await showDiskSpaceBlockingModal(
+                    '❌ Cannot Start Auto Upload',
+                    `${result.message || 'Insufficient free disk space on staging volume.'}${detailLines.length ? `\n\n${detailLines.join('\n')}` : ''}`,
+                    'Free up space or choose an external staging folder.'
+                );
+                failStartValidation('', false);
+                return;
+            } else if (result.errorType === 'PATH_VALIDATION') {
+                await showStorageWarningModal(
+                    '❌ Invalid Folder Setup',
+                    result.message || result.error || 'Selected folders are not safe to use.',
+                    'Choose different destination/staging folders. Symlink folders are not allowed.',
+                    false
+                );
+                failStartValidation('', false);
+                return;
             } else {
                 // Error occurred - show Resume/Restart options (not Start)
                 progressTextContent.textContent = `❌ Error: ${result.error}`;
@@ -631,12 +1463,33 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         progressText.classList.remove('processing');
         progressBar.classList.add('ready'); // Restore ready pulse
 
-        // Only re-enable Cloud Mode checkbox and output change if not stopped by user
+        // Only re-enable storage mode checkboxes and output change if not stopped by user
         // If stopped, controls stay disabled until Restart is clicked
         if (!stoppedByUser) {
-            pauseBetweenBatchesCheckbox.disabled = false;
             btnBrowseOutput.disabled = false;
+            computerModeCheckbox.disabled = false;
+            cloudModeCheckbox.disabled = false;
+            if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
+            btnBrowseDestination.disabled = false;
+            btnBrowseStaging.disabled = false;
+            cacheGbInput.disabled = false;
+            cacheLowGbInput.disabled = false;
+            uploadModeSelect.disabled = false;
+            if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
+            if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
+        } else {
+            computerModeCheckbox.disabled = true;
+            cloudModeCheckbox.disabled = true;
+            if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = true;
+            btnBrowseDestination.disabled = true;
+            btnBrowseStaging.disabled = true;
+            cacheGbInput.disabled = true;
+            cacheLowGbInput.disabled = true;
+            uploadModeSelect.disabled = true;
+            if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = true;
+            if (diskUsageManualRadio) diskUsageManualRadio.disabled = true;
         }
+        updateAutoUploadUiState();
 
         // Note: We don't blindly show btnStart here anymore, handled in catch/success
         // If stopped by user, btnStart stays hidden and resume buttons show (handled in stop handler)
@@ -667,7 +1520,11 @@ function showResumeModeModal(manifest, zipMatch) {
 
     // Populate stats in new layout
     const totalText = totalFiles ? ` / ${totalFiles.toLocaleString()}` : '';
-    resumeModeSummary.innerHTML = `<strong>${processedCount.toLocaleString()}</strong>${totalText} files processed`;
+    resumeModeSummary.textContent = '';
+    const processedStrong = document.createElement('strong');
+    processedStrong.textContent = processedCount.toLocaleString();
+    resumeModeSummary.appendChild(processedStrong);
+    resumeModeSummary.appendChild(document.createTextNode(`${totalText} files processed`));
 
     const lastRunElement = document.getElementById('resume-last-run');
     if (lastRunElement) {
@@ -736,9 +1593,9 @@ btnResumeProc.addEventListener('click', async () => {
 
         if (result && result.success && result.manifest) {
             const isCloudMode = result.manifest.icloud_mode === true;
-            console.log('[Resume Processing] Cloud mode:', isCloudMode);
+            console.log('[Resume Processing] Pause-after-batch mode:', isCloudMode);
 
-            // If just paused and NOT in cloud mode, skip modal and go to verify
+            // If just paused and NOT in pause-after-batch mode, skip modal and go to verify
             if (justPaused && !isCloudMode) {
                 console.log('[Resume Processing] Non-cloud paused state - skipping modal, using verify');
                 justPaused = false; // Reset flag
@@ -746,7 +1603,7 @@ btnResumeProc.addEventListener('click', async () => {
                 return;
             }
 
-            // Otherwise show modal (cloud mode OR from start screen)
+            // Otherwise show modal (pause-after-batch mode OR from start screen)
             console.log('[Resume Processing] Showing resume modal');
             showResumeModeModal(result.manifest, result.zipMatch);
             return;
@@ -850,9 +1707,19 @@ function resetUIForNewRun() {
     btnStart.classList.remove('hidden');
     resumeRestartContainer.classList.add('hidden');
 
-    // Re-enable Cloud Mode checkbox and output location change on restart
-    pauseBetweenBatchesCheckbox.disabled = false;
+    // Re-enable storage mode controls and output location change on restart
     btnBrowseOutput.disabled = false;
+    computerModeCheckbox.disabled = false;
+    cloudModeCheckbox.disabled = false;
+    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
+    btnBrowseDestination.disabled = false;
+    btnBrowseStaging.disabled = false;
+    cacheGbInput.disabled = false;
+    cacheLowGbInput.disabled = false;
+    uploadModeSelect.disabled = false;
+    if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
+    if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
+    updateAutoUploadUiState();
 
     // Reset progress visuals
     progressFill.style.width = '0%';
@@ -889,6 +1756,17 @@ btnRestartComplete.addEventListener('click', () => {
     progressText.classList.remove('processing');
     progressEta.textContent = '';
     logOutput.textContent = '';
+    computerModeCheckbox.disabled = false;
+    cloudModeCheckbox.disabled = false;
+    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
+    btnBrowseDestination.disabled = false;
+    btnBrowseStaging.disabled = false;
+    cacheGbInput.disabled = false;
+    cacheLowGbInput.disabled = false;
+    uploadModeSelect.disabled = false;
+    if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
+    if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
+    updateAutoUploadUiState();
 });
 
 // Stop Processing
@@ -903,8 +1781,10 @@ const btnConfirmStop = document.getElementById('btn-confirm-stop');
 btnStop.addEventListener('click', async () => {
     if (!isProcessing) return;
 
-    // Ensure checkbox stays disabled
-    pauseBetweenBatchesCheckbox.disabled = true;
+    // Ensure mode toggles stay disabled
+    computerModeCheckbox.disabled = true;
+    cloudModeCheckbox.disabled = true;
+    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = true;
 
     // Show confirmation modal
     stopConfirmModal.classList.remove('hidden');
@@ -961,9 +1841,9 @@ btnConfirmStop.addEventListener('click', async () => {
                 progressTextContent.textContent = '⏹️ Paused';
                 btnOpenFolder.disabled = false;
 
-                // Cloud Mode UX: Hide "Start Over" if Cloud Mode is active to prevent accidental deletion
-                const isCloudMode = pauseBetweenBatchesCheckbox.checked;
-                if (isCloudMode) {
+                // Hide "Start Over" when either storage mode is selected to prevent accidental deletion.
+                const modeActive = getStorageMode() !== 'NONE';
+                if (modeActive) {
                     btnRestartProc.classList.add('hidden'); // Hide Start Over
                 } else {
                     btnRestartProc.classList.remove('hidden'); // Show Start Over
@@ -1091,31 +1971,31 @@ let lastTotalBatches = 0;
 function showBatchPauseModal(batchNum, totalBatches) {
     lastCompletedBatch = batchNum;
     lastTotalBatches = totalBatches;
-    batchPauseMessage.textContent = `Batch ${batchNum} of ${totalBatches} complete. Paused for cloud sync.`;
+    batchPauseMessage.textContent = `Batch ${batchNum} of ${totalBatches} complete. Paused for manual upload.`;
     batchPauseModal.classList.remove('hidden');
 }
 
 // Continue to Next Batch - sends resume signal to Python
 btnContinueBatch.addEventListener('click', async () => {
-    console.log('[Cloud Mode] Continue Batch button clicked');
+    console.log('[Pause-After-Batch] Continue Batch button clicked');
     batchPauseModal.classList.add('hidden');
     // Update UI to show we're resuming
     progressTextContent.textContent = '▶️ Resuming next batch...';
 
     try {
-        console.log('[Cloud Mode] Calling resumeBatch API');
+        console.log('[Pause-After-Batch] Calling resumeBatch API');
         const result = await window.api.resumeBatch();
-        console.log('[Cloud Mode] resumeBatch result:', result);
+        console.log('[Pause-After-Batch] resumeBatch result:', result);
         if (!result.success) {
-            console.error('[Cloud Mode] Failed to resume batch:', result.error);
+            console.error('[Pause-After-Batch] Failed to resume batch:', result.error);
             alert(`Failed to resume processing: ${result.error}\n\nPlease restart the application.`);
             progressTextContent.textContent = '⚠️ Resume failed';
         } else {
-            console.log('[Cloud Mode] Successfully resumed batch');
+            console.log('[Pause-After-Batch] Successfully resumed batch');
             // Progress will update automatically when Python sends next progress message
         }
     } catch (err) {
-        console.error('[Cloud Mode] Error resuming batch:', err);
+        console.error('[Pause-After-Batch] Error resuming batch:', err);
         alert(`Error resuming processing: ${err.message}\n\nPlease restart the application.`);
         progressTextContent.textContent = '⚠️ Resume error';
     }
@@ -1123,7 +2003,7 @@ btnContinueBatch.addEventListener('click', async () => {
 
 // Pause After Batch - User wants to stop and come back later
 btnPauseAfterBatch.addEventListener('click', async () => {
-    console.log('[Cloud Mode] Pause After Batch button clicked');
+    console.log('[Pause-After-Batch] Pause After Batch button clicked');
     batchPauseModal.classList.add('hidden');
     progressTextContent.textContent = 'Pausing...';
 
@@ -1131,7 +2011,7 @@ btnPauseAfterBatch.addEventListener('click', async () => {
         // Set stoppedByUser to prevent completion handler from overriding our pause state
         stoppedByUser = true;
 
-        console.log('[Cloud Mode] Stopping processing');
+        console.log('[Pause-After-Batch] Stopping processing');
 
         // Hide Cancel button immediately
         btnStop.classList.add('hidden');
@@ -1152,7 +2032,7 @@ btnPauseAfterBatch.addEventListener('click', async () => {
         hadPartialRun = true;
         // Use the actual progress count from the last update (not batch count)
         lastProcessedCount = lastProgressCount;
-        console.log('[Cloud Mode] Set hadPartialRun=true, lastProcessedCount=', lastProcessedCount);
+        console.log('[Pause-After-Batch] Set hadPartialRun=true, lastProcessedCount=', lastProcessedCount);
 
         // Update UI to show cleaning up state
         progressTextContent.textContent = '⏸️ Paused - Cleaning up...';
@@ -1170,9 +2050,9 @@ btnPauseAfterBatch.addEventListener('click', async () => {
                 progressTextContent.textContent = '⏹️ Paused';
                 btnOpenFolder.disabled = false;
 
-                // Cloud Mode UX: Hide "Start Over" button (since we are definitely in Cloud Mode here)
+                // Pause-after-batch UX: Hide "Start Over" button (since this modal is only for pause-after-batch flow)
                 btnRestartProc.classList.add('hidden');
-                console.log('[Cloud Mode] UI updated - showing Resume/Continue Later buttons');
+                console.log('[Pause-After-Batch] UI updated - showing Resume/Continue Later buttons');
             }
         }, 100); // Check every 100ms
 
@@ -1188,11 +2068,14 @@ btnPauseAfterBatch.addEventListener('click', async () => {
     }
 });
 
-// Open Output Folder
+// Open output folder (Store on Computer) or cloud destination folder (Store on Cloud).
 btnOpenFolder.addEventListener('click', () => {
-    const outputDir = outputPathInput.value;
-    if (outputDir) {
-        window.api.openFolder(outputDir);
+    const storageMode = getStorageMode();
+    const cloudDestinationDir = destinationPathInput.value.trim();
+    const outputDir = outputPathInput.value.trim();
+    const folderToOpen = storageMode === 'CLOUD' && cloudDestinationDir ? cloudDestinationDir : outputDir;
+    if (folderToOpen) {
+        window.api.openFolder(folderToOpen);
     }
 });
 
@@ -1241,35 +2124,228 @@ btnCloseSuccess.addEventListener('click', () => {
     }
 });
 
-// Cloud Mode Info - Show on info icon click
-btnCloudModeInfo.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    cloudModeInfoModal.classList.remove('hidden');
-});
+function enforceStorageModeExclusivity(source) {
+    const computerEnabled = !!(computerModeCheckbox && computerModeCheckbox.checked);
+    const cloudEnabled = !!(cloudModeCheckbox && cloudModeCheckbox.checked);
+    if (!computerEnabled || !cloudEnabled) {
+        return;
+    }
 
-// Cloud Mode Info - Close modal
-btnCloseCloudInfo.addEventListener('click', () => {
-    cloudModeInfoModal.classList.add('hidden');
-});
+    if (source === 'computer') {
+        cloudModeCheckbox.checked = false;
+    } else {
+        // Default and 'cloud' source: keep cloud on, disable computer mode.
+        computerModeCheckbox.checked = false;
+    }
+    syncStorageModeFromControls();
+}
 
-// Cloud Mode - Show info modal on first check (per session)
-let hasSeenCloudModeInfoThisSession = false;
+function updateAutoUploadUiState() {
+    const mode = getStorageMode();
+    const cloudEnabled = mode === 'CLOUD';
+    const computerEnabled = mode === 'COMPUTER';
 
-pauseBetweenBatchesCheckbox.addEventListener('change', (e) => {
-    if (e.target.checked) {
-        // Show modal on first check of this session
-        if (!hasSeenCloudModeInfoThisSession) {
-            cloudModeInfoModal.classList.remove('hidden');
-            hasSeenCloudModeInfoThisSession = true;
+    if (workingFolderHelp) {
+        if (mode === 'COMPUTER') {
+            workingFolderHelp.textContent = 'Your processed memories will be saved here.';
+        } else if (mode === 'CLOUD') {
+            workingFolderHelp.textContent = 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.';
+        } else {
+            workingFolderHelp.textContent = 'Select a storage mode below to continue.';
         }
     }
 
-    // Re-calculate storage requirements when Cloud Mode is toggled
+    if (pauseAfterBatchCheckbox) {
+        if (!computerEnabled && pauseAfterBatchCheckbox.checked) {
+            pauseAfterBatchCheckbox.checked = false;
+        }
+        pauseAfterBatchCheckbox.disabled = !computerEnabled || isProcessing;
+    }
+    if (computerModeSettings) {
+        computerModeSettings.classList.toggle('expanded', computerEnabled);
+    }
+
+    if (cloudDestinationSection) {
+        cloudDestinationSection.classList.toggle('hidden', !cloudEnabled);
+    }
+    autoUploadSettings.classList.toggle('hidden', !cloudEnabled);
+    if (handoffHelperRow) {
+        handoffHelperRow.classList.toggle('hidden', !cloudEnabled);
+    }
+
+    const advancedOpen = !!(autoUploadAdvancedDetails && autoUploadAdvancedDetails.open);
+    const manualMode = getDiskUsageMode() === 'manual';
+    if (manualCacheSettings) {
+        manualCacheSettings.classList.toggle('hidden', !cloudEnabled || !manualMode || !advancedOpen);
+    }
+    if (cacheAutoHint) {
+        cacheAutoHint.classList.toggle('hidden', !cloudEnabled || manualMode || !advancedOpen);
+    }
+    if (autoCachePreview) {
+        autoCachePreview.classList.toggle('hidden', !cloudEnabled || manualMode || !advancedOpen);
+    }
+    if ((!cloudEnabled || manualMode || !advancedOpen) && cacheLowSpaceWarning) {
+        cacheLowSpaceWarning.classList.add('hidden');
+    }
+
+    if (computerModeCheckbox) {
+        computerModeCheckbox.disabled = isProcessing || cloudEnabled;
+    }
+    if (cloudModeCheckbox) {
+        cloudModeCheckbox.disabled = isProcessing || computerEnabled;
+    }
+    if (computerModeCard && computerModeCheckbox) {
+        computerModeCard.classList.toggle('selected', computerEnabled);
+        computerModeCard.classList.toggle('disabled', computerModeCheckbox.disabled);
+    }
+    if (cloudModeCard && cloudModeCheckbox) {
+        cloudModeCard.classList.toggle('selected', cloudEnabled);
+        cloudModeCard.classList.toggle('disabled', cloudModeCheckbox.disabled);
+    }
+
+    if (computerModeDescription) {
+        computerModeDescription.classList.toggle('hidden', cloudEnabled);
+    }
+    if (computerModeDisabledHint) {
+        computerModeDisabledHint.classList.toggle('hidden', !cloudEnabled);
+    }
+    if (cloudModeDescription) {
+        cloudModeDescription.classList.toggle('hidden', computerEnabled);
+    }
+    if (cloudModeDisabledHint) {
+        cloudModeDisabledHint.classList.toggle('hidden', !computerEnabled);
+    }
+
+    if (!cloudEnabled && cloudDestinationError) {
+        cloudDestinationError.classList.add('hidden');
+    }
+    if (!cloudEnabled && syncFolderWarning) {
+        syncFolderWarning.classList.add('hidden');
+    }
+
+    updateAutoCachePreview();
+    updateStorageSummary();
+    if (cloudEnabled) {
+        updateCloudHandoffCopy();
+        updateSyncFolderWarning();
+    }
+    updateStartButtonState();
+}
+
+function bindModeCardClick(cardEl, checkboxEl, ignoreSelector = null) {
+    if (!cardEl || !checkboxEl) {
+        return;
+    }
+    cardEl.addEventListener('click', (e) => {
+        if (checkboxEl.disabled) {
+            return;
+        }
+        if (ignoreSelector && e.target.closest(ignoreSelector)) {
+            return;
+        }
+        if (e.target.closest('.mode-card-label')) {
+            return;
+        }
+        if (e.target.closest('input, button, select, textarea, a')) {
+            return;
+        }
+        checkboxEl.click();
+    });
+}
+
+bindModeCardClick(computerModeCard, computerModeCheckbox, '#computer-suboptions');
+bindModeCardClick(cloudModeCard, cloudModeCheckbox);
+
+cloudModeCheckbox.addEventListener('change', () => {
+    if (cloudModeCheckbox.disabled) {
+        return;
+    }
+    enforceStorageModeExclusivity('cloud');
+    syncStorageModeFromControls();
+    updateAutoUploadUiState();
     if (currentMemoryCount > 0) {
-        checkStorage(currentMemoryCount);
+        void checkStorage(currentMemoryCount);
     }
 });
+
+if (diskUsageAutoRadio) {
+    diskUsageAutoRadio.addEventListener('change', () => {
+        updateAutoUploadUiState();
+    });
+}
+
+if (diskUsageManualRadio) {
+    diskUsageManualRadio.addEventListener('change', () => {
+        updateAutoUploadUiState();
+    });
+}
+
+if (cacheGbInput) {
+    cacheGbInput.addEventListener('input', () => {
+        updateStorageSummary();
+    });
+}
+
+if (cacheLowGbInput) {
+    cacheLowGbInput.addEventListener('input', () => {
+        updateStorageSummary();
+    });
+}
+
+if (autoUploadAdvancedDetails) {
+    autoUploadAdvancedDetails.addEventListener('toggle', () => {
+        updateAutoUploadUiState();
+    });
+}
+
+computerModeCheckbox.addEventListener('change', () => {
+    if (computerModeCheckbox.disabled) {
+        return;
+    }
+    enforceStorageModeExclusivity('computer');
+    syncStorageModeFromControls();
+    updateAutoUploadUiState();
+    if (currentMemoryCount > 0) {
+        void checkStorage(currentMemoryCount);
+    }
+});
+
+if (pauseAfterBatchCheckbox) {
+    pauseAfterBatchCheckbox.addEventListener('change', () => {
+        updateAutoUploadUiState();
+        if (currentMemoryCount > 0) {
+            void checkStorage(currentMemoryCount);
+        }
+    });
+}
+
+// Keep initial mode unselected.
+if (computerModeCheckbox) computerModeCheckbox.checked = false;
+if (cloudModeCheckbox) cloudModeCheckbox.checked = false;
+if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.checked = false;
+syncStorageModeFromControls();
+updateAutoUploadUiState();
+
+// Keep support for keyboard toggles on disabled controls (no-op).
+computerModeCheckbox.addEventListener('click', (e) => {
+    if (computerModeCheckbox.disabled) {
+        e.preventDefault();
+    }
+});
+
+cloudModeCheckbox.addEventListener('click', (e) => {
+    if (cloudModeCheckbox.disabled) {
+        e.preventDefault();
+    }
+});
+
+if (pauseAfterBatchCheckbox) {
+    pauseAfterBatchCheckbox.addEventListener('click', (e) => {
+        if (pauseAfterBatchCheckbox.disabled) {
+            e.preventDefault();
+        }
+    });
+}
 
 // ETA calculation variables
 let etaTimestamps = [];
@@ -1353,6 +2429,36 @@ window.api.onProgressUpdate((data) => {
         // Note: signal file path is now handled by main process, not renderer
         showBatchPauseModal(data.batch, data.totalBatches);
 
+    } else if (data.type === 'upload_progress') {
+        const now = Date.now();
+        if (now - lastUploadUiUpdateAt < 250) {
+            return;
+        }
+        lastUploadUiUpdateAt = now;
+        const stagedCount = Number.isFinite(data.staged_count) ? data.staged_count : 0;
+        const stagingBytes = Number.isFinite(data.staging_bytes) ? data.staging_bytes : 0;
+        const uploadedCount = Number.isFinite(data.uploaded_count) ? data.uploaded_count : 0;
+        progressEta.textContent = `Upload: ${uploadedCount.toLocaleString()} uploaded, ${stagedCount.toLocaleString()} staged (${formatBytes(stagingBytes)})`;
+
+    } else if (data.type === 'auto_pause') {
+        const stagingGb = Number.isFinite(data.staging_gb) ? data.staging_gb : 0;
+        const cacheGb = Number.isFinite(data.cache_gb) ? data.cache_gb : 0;
+        progressEta.textContent = `Auto paused: staging cache ${stagingGb}GB / ${cacheGb}GB`;
+
+    } else if (data.type === 'auto_resume') {
+        const stagingGb = Number.isFinite(data.staging_gb) ? data.staging_gb : 0;
+        const lowGb = Number.isFinite(data.cache_low_gb) ? data.cache_low_gb : 0;
+        progressEta.textContent = `Auto resumed: staging ${stagingGb}GB <= ${lowGb}GB`;
+
+    } else if (data.type === 'upload_error') {
+        const attempt = Number.isFinite(data.attempt) ? data.attempt : 0;
+        progressEta.textContent = `Upload retry: attempt ${attempt} (${data.error || 'temporary error'})`;
+
+    } else if (data.type === 'upload_fatal') {
+        progressTextContent.textContent = `❌ Upload failed: ${data.message || 'Destination unavailable'}`;
+        progressFill.style.background = 'var(--accent-red)';
+        progressEta.textContent = data.last_error ? `Last error: ${data.last_error}` : '';
+
     } else if (data.type === 'complete') {
         progressEta.textContent = '';
         etaTimestamps = [];
@@ -1397,6 +2503,24 @@ let lastStats = null;
 
 function showSuccessModal(stats) {
     lastStats = stats; // Store for View Summary button
+    const isCloudModeStats = !!stats.auto_upload;
+    const hasCloudDeliveryStats = isCloudModeStats && (
+        typeof stats.upload_confirmed_in_destination === 'number' ||
+        typeof stats.upload_copied_this_run === 'number' ||
+        typeof stats.uploaded_to_destination === 'number' ||
+        typeof stats.upload_remaining_in_staging === 'number' ||
+        typeof stats.upload_error_events === 'number'
+    );
+    const confirmedInDestination = Number.isFinite(stats.upload_confirmed_in_destination)
+        ? stats.upload_confirmed_in_destination
+        : (Number.isFinite(stats.uploaded_to_destination) ? stats.uploaded_to_destination : 0);
+    const copiedThisRun = Number.isFinite(stats.upload_copied_this_run)
+        ? stats.upload_copied_this_run
+        : 0;
+    const alreadyInDestination = Math.max(0, confirmedInDestination - copiedThisRun);
+    const uploadErrorEvents = Number.isFinite(stats.upload_error_events) ? stats.upload_error_events : 0;
+    const cloudHasErrors = isCloudModeStats && Number(stats.errors || 0) > 0;
+
     const usedTrustManifest = !!stats.used_trust_manifest || (typeof stats.previously_processed === 'number' && stats.previously_processed > 0);
     const manifestTotalFiles = typeof stats.manifest_total_files === 'number' ? stats.manifest_total_files : null;
     const previousProcessed = typeof stats.previously_processed === 'number' ? stats.previously_processed : 0;
@@ -1443,9 +2567,34 @@ function showSuccessModal(stats) {
         subtext = 'No new memories found. All files in this export already exist in your destination folder.';
     }
 
+    if (isCloudModeStats) {
+        if (hasCloudDeliveryStats) {
+            headline = 'Cloud Processing Complete!';
+            if (cloudHasErrors) {
+                subtext = 'Completed with errors. You can retry corrupted files.';
+            } else {
+                subtext = 'Processing and cloud delivery completed.';
+            }
+        } else {
+            headline = 'Cloud Processing Complete!';
+            subtext = 'Processing complete. Cloud delivery details are unavailable for this run.';
+        }
+    }
+
     // Update modal headline
     const modalTitle = successModal.querySelector('h2');
     if (modalTitle) modalTitle.textContent = headline;
+
+    const subtitleEl = successModal.querySelector('.success-subtitle');
+    if (subtitleEl) {
+        if (isCloudModeStats) {
+            subtitleEl.textContent = '';
+            subtitleEl.style.display = 'none';
+        } else {
+            subtitleEl.textContent = 'Your Snapchat Memories are safely stored.';
+            subtitleEl.style.display = 'block';
+        }
+    }
 
     // Add subtext if we have one
     const subtextEl = successModal.querySelector('.modal-subtext');
@@ -1499,14 +2648,37 @@ function showSuccessModal(stats) {
         }
     }
 
-    statsContainer.appendChild(createStatRow('Already Existed (Skipped):', stats.duplicates.toLocaleString(), 'orange', true));
+    if (isCloudModeStats) {
+        statsContainer.appendChild(createStatRow(
+            'Delivered to Cloud Folder:',
+            confirmedInDestination.toLocaleString(),
+            cloudHasErrors ? 'orange' : 'green',
+            true
+        ));
+        statsContainer.appendChild(createStatRow(
+            'Copied this run:',
+            copiedThisRun.toLocaleString(),
+            cloudHasErrors ? 'orange' : 'green',
+        ));
+        statsContainer.appendChild(createStatRow(
+            'Already in Cloud Folder:',
+            alreadyInDestination.toLocaleString(),
+            cloudHasErrors ? 'orange' : 'green'
+        ));
+        if (uploadErrorEvents > 0) {
+            statsContainer.appendChild(createStatRow('Upload Error Events:', uploadErrorEvents.toLocaleString(), 'orange'));
+        }
+    }
+    if (!isCloudModeStats) {
+        statsContainer.appendChild(createStatRow('Already Existed (Skipped):', stats.duplicates.toLocaleString(), 'orange', true));
 
-    // Duplicate info note (if applicable)
-    if (stats.duplicates > 0) {
-        const noteDiv = document.createElement('div');
-        noteDiv.className = 'stat-note info';
-        noteDiv.textContent = `ℹ️ Skipped ${stats.duplicates.toLocaleString()} files that already exist in the destination folder.`;
-        statsContainer.appendChild(noteDiv);
+        // Duplicate info note (if applicable)
+        if (stats.duplicates > 0) {
+            const noteDiv = document.createElement('div');
+            noteDiv.className = 'stat-note info';
+            noteDiv.textContent = `ℹ️ Skipped ${stats.duplicates.toLocaleString()} files that already exist in the destination folder.`;
+            statsContainer.appendChild(noteDiv);
+        }
     }
 
     statsContainer.appendChild(createStatRow('Corrupted/Errors:', stats.errors.toString(), 'red'));
@@ -1530,7 +2702,7 @@ function showSuccessModal(stats) {
     }
 
     // Add "All Memories Accounted For" message if everything matches
-    if (manifestTotalFiles) {
+    if (manifestTotalFiles && !isCloudModeStats) {
         // Count total entries in report: cumulative_success + duplicates + errors
         const totalAccountedFor = cumulativeSuccessCount + stats.duplicates + stats.errors;
         if (totalAccountedFor === manifestTotalFiles) {
@@ -1542,10 +2714,23 @@ function showSuccessModal(stats) {
             statsContainer.appendChild(allAccountedDiv);
         }
     }
+    if (isCloudModeStats && hasCloudDeliveryStats && confirmedInDestination > 0) {
+        const cloudAccountingDiv = document.createElement('div');
+        cloudAccountingDiv.className = 'stat-note info';
+        cloudAccountingDiv.style.marginTop = '12px';
+        const prefix = cloudHasErrors ? 'ℹ️ Delivery summary:' : 'ℹ️ Delivered:';
+        cloudAccountingDiv.textContent = `${prefix} ${copiedThisRun.toLocaleString()} copied + ${alreadyInDestination.toLocaleString()} already present = ${confirmedInDestination.toLocaleString()} total. Errors: ${stats.errors.toLocaleString()}.`;
+        statsContainer.appendChild(cloudAccountingDiv);
+    }
 
     successModal.classList.remove('hidden');
     btnOpenFolder.disabled = false;
     btnViewSummary.classList.remove('hidden'); // Show View Summary button
+
+    if (btnOpenStagingFolder) {
+        btnOpenStagingFolder.classList.add('hidden');
+        delete btnOpenStagingFolder.dataset.stagingPath;
+    }
 
     // Show retry button if there were errors
     if (stats.errors > 0) {
@@ -1615,6 +2800,10 @@ function showPartialSummaryModal(processedCount, totalCount) {
 
     // Hide retry button
     btnRetryCorrupted.classList.add('hidden');
+    if (btnOpenStagingFolder) {
+        btnOpenStagingFolder.classList.add('hidden');
+        delete btnOpenStagingFolder.dataset.stagingPath;
+    }
 
     // Hide View Summary button (doesn't make sense for partial)
     btnViewSummary.classList.add('hidden');
@@ -1641,7 +2830,46 @@ btnRetryCorrupted.addEventListener('click', async () => {
     progressBar.classList.remove('ready');
 
     try {
-        const result = await window.api.retryCorrupted({ outputDir: currentOutputDir });
+        const outputDir = outputPathInput.value.trim() || currentOutputDir;
+        const storageMode = getStorageMode();
+        const autoUpload = storageMode === 'CLOUD';
+        const destinationDir = destinationPathInput.value.trim();
+        const stagingDir = stagingPathInput.value.trim();
+        const uploadMode = uploadModeSelect.value === 'move' ? 'move' : 'copy';
+
+        let retryCacheGb = Number.parseFloat(cacheGbInput.value);
+        let retryCacheLowGb = Number.parseFloat(cacheLowGbInput.value);
+        if (autoUpload) {
+            if (!destinationDir) {
+                progressTextContent.textContent = '❌ Retry failed: Choose a cloud destination folder first.';
+                return;
+            }
+            if (getDiskUsageMode() === 'automatic') {
+                const autoCache = await resolveAutoCacheForStart(outputDir, stagingDir);
+                retryCacheGb = autoCache.cacheGb;
+                retryCacheLowGb = autoCache.cacheLowGb;
+            }
+            if (!Number.isFinite(retryCacheGb) || retryCacheGb <= 0) {
+                retryCacheGb = 5.0;
+            }
+            if (!Number.isFinite(retryCacheLowGb) || retryCacheLowGb < 0 || retryCacheLowGb > retryCacheGb) {
+                retryCacheLowGb = Math.max(1, roundOneDecimal(retryCacheGb * 0.6));
+                if (retryCacheLowGb >= retryCacheGb) {
+                    retryCacheLowGb = Math.max(0, retryCacheGb - 0.1);
+                }
+            }
+        }
+
+        const result = await window.api.retryCorrupted({
+            outputDir,
+            autoUpload,
+            destinationDir: autoUpload ? destinationDir : '',
+            cacheGb: autoUpload ? retryCacheGb : undefined,
+            cacheLowGb: autoUpload ? retryCacheLowGb : undefined,
+            uploadMode: autoUpload ? uploadMode : undefined,
+            stagingDir: autoUpload ? stagingDir : '',
+            maxUploadRetries: 20
+        });
 
         if (result.success) {
             progressTextContent.textContent = '✅ Retry complete!';

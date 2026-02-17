@@ -24,6 +24,12 @@ def progress_callback(progress):
     if isinstance(progress, tuple):
         count, total = progress
         json_output("progress", {"count": count, "total": total})
+    elif isinstance(progress, dict):
+        msg_type = progress.get("type")
+        if msg_type:
+            print(json.dumps(progress), flush=True)
+        else:
+            json_output("progress", progress)
     else:
         json_output("progress", {"percent": progress})
 
@@ -34,10 +40,20 @@ def main():
     parser.add_argument('--limit', type=int, help='Limit number of memories to process')
     parser.add_argument('--pause-batches', action='store_true', help='Pause between batches for cloud sync')
     parser.add_argument('--trust-manifest', action='store_true', help='Trust manifest for resume (skip filesystem checks)')
+    parser.add_argument('--auto-upload', action='store_true', help='Enable automatic staging->upload->delete pipeline')
+    parser.add_argument('--destination-dir', help='Destination directory for auto-upload')
+    parser.add_argument('--cache-gb', type=float, default=5.0, help='Pause processing when staging cache reaches this size (GB)')
+    parser.add_argument('--cache-low-gb', type=float, default=3.0, help='Resume processing when staging cache drops below this size (GB)')
+    parser.add_argument('--upload-mode', choices=['copy', 'move'], default='copy', help='Upload mode for destination adapter')
+    parser.add_argument('--staging-dir', help='Optional staging directory path')
+    parser.add_argument('--max-upload-retries', type=int, default=20, help='Maximum upload retries per staged file before fatal exit')
     parser.add_argument('--retry-report', help='Path to detailed_report.json to retry failed entries')
     
     args = parser.parse_args()
     
+    if args.auto_upload and not args.destination_dir:
+        parser.error("--destination-dir is required with --auto-upload")
+
     # Handle retry from report
     if args.retry_report:
         if not args.output:
@@ -63,7 +79,14 @@ def main():
             stats = processor.retry_failed_entries(
                 failed_entries=failed_entries,
                 output_root=args.output,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                auto_upload=args.auto_upload,
+                destination_dir=args.destination_dir,
+                cache_gb=args.cache_gb,
+                cache_low_gb=args.cache_low_gb,
+                upload_mode=args.upload_mode,
+                staging_dir=args.staging_dir,
+                max_upload_retries=args.max_upload_retries
             )
             
             json_output("complete", {"stats": stats})
@@ -80,7 +103,7 @@ def main():
     
     if not args.output:
         parser.error("--output is required")
-    
+
     try:
         print(f"Starting processing...", flush=True)
         
@@ -90,7 +113,14 @@ def main():
             limit=args.limit,
             progress_callback=progress_callback,
             pause_batches=args.pause_batches,
-            trust_manifest=args.trust_manifest
+            trust_manifest=args.trust_manifest,
+            auto_upload=args.auto_upload,
+            destination_dir=args.destination_dir,
+            cache_gb=args.cache_gb,
+            cache_low_gb=args.cache_low_gb,
+            upload_mode=args.upload_mode,
+            staging_dir=args.staging_dir,
+            max_upload_retries=args.max_upload_retries
         )
         
         # Output final stats

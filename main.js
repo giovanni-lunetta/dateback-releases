@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron')
 const path = require('path');
 const fs = require('fs');
 const { spawn, execSync } = require('child_process');
+const { fileURLToPath } = require('url');
 const AdmZip = require('adm-zip');
 const checkDiskSpace = require('check-disk-space').default;
 const Store = require('electron-store');
@@ -27,6 +28,10 @@ let caffeinateProcess = null; // Sleep prevention process
 let intentionalStop = false; // Track if user intentionally stopped processing
 let currentValidatedOutputDir = null; // Store validated output dir for secure resume
 let approvedOutputDirs = new Set(); // Track user-approved output directories
+let trustedRendererDocumentKey = null;
+const TRUSTED_RENDERER_PROTOCOLS = new Set(['file:', 'app:']);
+const DEBUG_SECURITY = String(process.env.DATEBACK_DEBUG_SECURITY || '').toLowerCase();
+const SECURITY_DEBUG_ENABLED = DEBUG_SECURITY === '1' || DEBUG_SECURITY === 'true' || DEBUG_SECURITY === 'yes' || DEBUG_SECURITY === 'on';
 
 // Rate Limiter for Security (prevent brute-force attacks)
 const rateLimitMap = new Map();
@@ -70,15 +75,133 @@ let lastError = null;
 let isQuitting = false;
 let lastPythonSampleLogAt = 0; // Rate limit for Python stdout sampling
 
+// Security: Normalize renderer document URLs for strict trust checks across dev + packaged builds.
+function normalizeRendererDocumentKey(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return null;
+    }
+    try {
+        const parsed = new URL(rawUrl);
+        const protocol = (parsed.protocol || '').toLowerCase();
+        if (!TRUSTED_RENDERER_PROTOCOLS.has(protocol)) {
+            return null;
+        }
+        if (protocol === 'file:') {
+            let filePath = fileURLToPath(parsed);
+            filePath = path.normalize(filePath);
+            if (process.platform === 'win32') {
+                filePath = filePath.toLowerCase();
+            }
+            return `file://${filePath}`;
+        }
+
+        let pathname = parsed.pathname || '/';
+        try {
+            pathname = decodeURIComponent(pathname);
+        } catch {
+            // Keep encoded pathname when decode fails.
+        }
+        pathname = pathname.replace(/\/+$/, '') || '/';
+        return `${protocol}//${parsed.host.toLowerCase()}${pathname}`;
+    } catch {
+        return null;
+    }
+}
+
+function redactUrlForLog(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return '(none)';
+    }
+    try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol === 'file:') {
+            if (SECURITY_DEBUG_ENABLED) {
+                return parsed.toString();
+            }
+            let basename = '';
+            try {
+                basename = path.basename(fileURLToPath(parsed));
+            } catch {
+                basename = path.basename(parsed.pathname || '');
+            }
+            return basename ? `file://.../${basename}` : 'file://...(redacted)';
+        }
+        return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+    } catch {
+        return SECURITY_DEBUG_ENABLED ? String(rawUrl) : '(redacted)';
+    }
+}
+
+function currentMainWindowUrl() {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return '';
+    }
+    return mainWindow.webContents.getURL() || '';
+}
+
+function getTrustedRendererDocumentKey() {
+    return trustedRendererDocumentKey;
+}
+
+function logRejectedIpc(reason, event) {
+    const senderUrl = event?.senderFrame?.url || '';
+    const mainUrl = currentMainWindowUrl();
+    console.error(
+        `[SECURITY] Rejected IPC: ${reason}; senderFrame.url=${redactUrlForLog(senderUrl)}; mainWindow.url=${redactUrlForLog(mainUrl)}`
+    );
+}
+
 // Security: Validate IPC sender origin
 function validateSender(event) {
-    const senderUrl = event.senderFrame?.url || '';
-    // Only accept IPC from our local app pages (file:// protocol)
-    if (!senderUrl.startsWith('file://')) {
-        console.error(`[SECURITY] Rejected IPC from untrusted origin: ${senderUrl}`);
+    if (!event || !mainWindow || mainWindow.isDestroyed()) {
+        logRejectedIpc('main window unavailable', event);
+        return false;
+    }
+
+    if (event.sender !== mainWindow.webContents) {
+        logRejectedIpc('unexpected webContents', event);
+        return false;
+    }
+
+    const senderFrame = event.senderFrame;
+    const mainFrame = event.sender.mainFrame;
+    const senderRoutingId = Number(senderFrame?.routingId);
+    const mainRoutingId = Number(mainFrame?.routingId);
+    const senderTreeNodeId = Number(senderFrame?.frameTreeNodeId);
+    const mainTreeNodeId = Number(mainFrame?.frameTreeNodeId);
+    const hasRoutingIds = Number.isFinite(senderRoutingId) && Number.isFinite(mainRoutingId);
+    const hasTreeNodeIds = Number.isFinite(senderTreeNodeId) && Number.isFinite(mainTreeNodeId);
+    const isMainFrameSender = hasRoutingIds
+        ? senderRoutingId === mainRoutingId
+        : (hasTreeNodeIds ? senderTreeNodeId === mainTreeNodeId : senderFrame === mainFrame);
+
+    if (!senderFrame || !mainFrame || !isMainFrameSender) {
+        logRejectedIpc('non-main-frame sender', event);
+        return false;
+    }
+
+    const senderUrl = senderFrame.url || event.sender?.getURL?.() || '';
+    const senderKey = normalizeRendererDocumentKey(senderUrl);
+    const trustedKey = getTrustedRendererDocumentKey() || normalizeRendererDocumentKey(currentMainWindowUrl());
+    if (!senderKey || !trustedKey || senderKey !== trustedKey) {
+        logRejectedIpc('untrusted frame URL', event);
         return false;
     }
     return true;
+}
+
+function sanitizePathInput(value, label = 'Path') {
+    if (typeof value !== 'string') {
+        throw new Error(`${label} must be a string`);
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        throw new Error(`${label} is required`);
+    }
+    if (trimmed.includes('\0') || trimmed.includes('\n')) {
+        throw new Error(`${label} contains invalid characters`);
+    }
+    return trimmed;
 }
 
 // Security: Safely resolve path to canonical form (resolve symlinks)
@@ -99,6 +222,76 @@ function isPathInsideDir(filePath, allowedDir) {
     const canonicalFile = getCanonicalPath(filePath);
     const canonicalDir = getCanonicalPath(allowedDir);
     return canonicalFile.startsWith(canonicalDir + path.sep) || canonicalFile === canonicalDir;
+}
+
+function findNearestExistingPath(pathToCheck) {
+    let checkPath = pathToCheck;
+    while (checkPath && checkPath !== '/' && !fs.existsSync(checkPath)) {
+        checkPath = path.dirname(checkPath);
+    }
+    if (!checkPath || checkPath === '') {
+        checkPath = '/';
+    }
+    return checkPath;
+}
+
+async function getDiskFreeBytesForPath(pathToCheck) {
+    const checkPath = findNearestExistingPath(pathToCheck);
+
+    if (fs.promises && typeof fs.promises.statfs === 'function') {
+        const stats = await fs.promises.statfs(checkPath);
+        const blockSize = Number(stats.bsize ?? stats.frsize ?? 0);
+        const availableBlocks = Number(stats.bavail ?? stats.bfree ?? 0);
+        const freeBytes = blockSize * availableBlocks;
+        if (Number.isFinite(freeBytes) && freeBytes >= 0) {
+            return { freeBytes, volumePath: checkPath };
+        }
+    }
+
+    const diskSpace = await checkDiskSpace(checkPath);
+    return { freeBytes: diskSpace.free, volumePath: checkPath };
+}
+
+function ensureCanonicalWritableDirectory(dirPath, label = 'Directory') {
+    if (!dirPath || typeof dirPath !== 'string') {
+        throw new Error(`${label} path is required`);
+    }
+    if (dirPath.includes('\0') || dirPath.includes('\n')) {
+        throw new Error(`${label} contains invalid characters`);
+    }
+
+    const requestedPath = path.resolve(dirPath);
+    if (fs.existsSync(requestedPath)) {
+        const requestedStat = fs.lstatSync(requestedPath);
+        if (requestedStat.isSymbolicLink()) {
+            throw new Error(`${label} cannot be a symbolic link`);
+        }
+    }
+
+    let canonical = getCanonicalPath(requestedPath);
+
+    if (isSensitiveRoot(canonical)) {
+        throw new Error(`${label} must be a subfolder, not a root/system folder`);
+    }
+
+    if (!fs.existsSync(canonical)) {
+        fs.mkdirSync(canonical, { recursive: true, mode: 0o700 });
+    }
+
+    canonical = fs.realpathSync(canonical);
+    const stat = fs.lstatSync(canonical);
+    if (!stat.isDirectory()) {
+        throw new Error(`${label} path is not a directory`);
+    }
+    if (stat.isSymbolicLink()) {
+        throw new Error(`${label} cannot be a symbolic link`);
+    }
+
+    const probe = path.join(canonical, `.dateback_write_test_${Date.now()}_${Math.random().toString(16).slice(2)}`);
+    fs.writeFileSync(probe, 'ok', { encoding: 'utf8' });
+    fs.unlinkSync(probe);
+
+    return canonical;
 }
 
 // Security: Deny commonly unsafe roots to prevent accidental home directory wipes
@@ -162,7 +355,18 @@ ipcMain.handle('validate-zip', async (event, zipPath) => {
     }
 
     try {
-        const zip = new AdmZip(zipPath);
+        const normalizedZipPath = sanitizePathInput(zipPath, 'ZIP path');
+        const canonicalZipPath = getCanonicalPath(normalizedZipPath);
+        if (!canonicalZipPath.toLowerCase().endsWith('.zip')) {
+            return { found: false, error: 'Selected file is not a ZIP archive.', count: 0 };
+        }
+
+        const zipStat = fs.lstatSync(canonicalZipPath);
+        if (!zipStat.isFile() || zipStat.isSymbolicLink()) {
+            return { found: false, error: 'ZIP path must be a regular file (symlinks are blocked).', count: 0 };
+        }
+
+        const zip = new AdmZip(canonicalZipPath);
         const zipEntries = zip.getEntries();
 
         // ZIP BOMB PROTECTION
@@ -254,20 +458,29 @@ ipcMain.handle('get-disk-space', async (event, pathToCheck) => {
     }
 
     try {
-        // Traverse up to find nearest existing parent directory
-        // This is important for external drives where the target subfolder may not exist yet
-        let checkPath = pathToCheck;
-        while (checkPath && checkPath !== '/' && !fs.existsSync(checkPath)) {
-            checkPath = path.dirname(checkPath);
-        }
-
-        // Fallback to root if nothing found
-        if (!checkPath || checkPath === '') {
-            checkPath = '/';
-        }
-
+        const requestedPath = (typeof pathToCheck === 'string' && pathToCheck.trim())
+            ? sanitizePathInput(pathToCheck, 'Disk check path')
+            : app.getPath('home');
+        const { freeBytes } = await getDiskFreeBytesForPath(requestedPath);
+        const checkPath = findNearestExistingPath(requestedPath);
         const diskSpace = await checkDiskSpace(checkPath);
-        return { success: true, free: diskSpace.free, size: diskSpace.size };
+        return { success: true, free: freeBytes, size: diskSpace.size };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('get-disk-free-bytes', async (event, pathToCheck) => {
+    if (!validateSender(event)) {
+        return { success: false, error: 'Unauthorized sender' };
+    }
+
+    try {
+        const requestedPath = (typeof pathToCheck === 'string' && pathToCheck.trim())
+            ? sanitizePathInput(pathToCheck, 'Disk check path')
+            : app.getPath('home');
+        const { freeBytes, volumePath } = await getDiskFreeBytesForPath(requestedPath);
+        return { success: true, freeBytes, volumePath };
     } catch (error) {
         return { success: false, error: error.message };
     }
@@ -448,6 +661,12 @@ function cleanupOrphanedProcesses() {
                 spawnSync('pkill', ['-f', scriptPath], { shell: false });
                 console.log('✓ Killed orphaned process_snapchat_memories.py');
             } catch (e) { /* No process found */ }
+            try {
+                const cliPath = path.join(__dirname, 'python', 'cli.py');
+                const { spawnSync } = require('child_process');
+                spawnSync('pkill', ['-f', cliPath], { shell: false });
+                console.log('✓ Killed orphaned cli.py');
+            } catch (e) { /* No process found */ }
 
             // Prod mode: memory-organizer binary
             try {
@@ -466,7 +685,34 @@ function cleanupOrphanedProcesses() {
     }
 }
 
+function resolveOrganizerCommand(isDev, baseArgs = []) {
+    const binDir = isDev
+        ? path.join(__dirname, 'assets', 'bin')
+        : path.join(process.resourcesPath, 'bin');
+    const binaryPath = path.join(binDir, 'memory-organizer');
+    const ffmpegPath = path.join(binDir, 'ffmpeg');
+
+    if (isDev) {
+        const devCliPath = path.join(__dirname, 'python', 'cli.py');
+        if (fs.existsSync(devCliPath)) {
+            const pythonCmd = process.env.DATEBACK_PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
+            return {
+                command: pythonCmd,
+                args: [devCliPath, ...baseArgs],
+                ffmpegPath
+            };
+        }
+    }
+
+    return {
+        command: binaryPath,
+        args: baseArgs,
+        ffmpegPath
+    };
+}
+
 function createWindow() {
+    trustedRendererDocumentKey = null;
     mainWindow = new BrowserWindow({
         width: 900,
         height: 700,
@@ -476,7 +722,9 @@ function createWindow() {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            sandbox: true
+            sandbox: true,
+            webSecurity: true,
+            allowRunningInsecureContent: false
         },
         titleBarStyle: 'hiddenInset',
         backgroundColor: '#1a1a2e'
@@ -484,19 +732,62 @@ function createWindow() {
 
     mainWindow.loadFile('src/index.html');
 
+    mainWindow.webContents.once('did-finish-load', () => {
+        const normalized = normalizeRendererDocumentKey(currentMainWindowUrl());
+        if (normalized) {
+            trustedRendererDocumentKey = normalized;
+            if (SECURITY_DEBUG_ENABLED) {
+                console.log(`[SECURITY] Trusted renderer key: ${trustedRendererDocumentKey}`);
+            }
+        } else if (SECURITY_DEBUG_ENABLED) {
+            console.warn(`[SECURITY] did-finish-load URL is not an allowed renderer document: ${redactUrlForLog(currentMainWindowUrl())}`);
+        }
+    });
+
     // Security: Prevent navigation to external URLs inside the app
     mainWindow.webContents.on('will-navigate', (event, url) => {
-        const parsedUrl = new URL(url);
-        if (parsedUrl.protocol !== 'file:') {
-            event.preventDefault();
+        const trustedKey = getTrustedRendererDocumentKey();
+        const targetKey = normalizeRendererDocumentKey(url);
+        if (trustedKey && targetKey && targetKey === trustedKey) {
+            return;
+        }
+        if (SECURITY_DEBUG_ENABLED) {
+            const reason = !trustedKey
+                ? 'no trusted renderer key set'
+                : (!targetKey ? 'target URL uses non-trusted protocol/document key' : 'target does not match trusted renderer key');
+            console.warn(
+                `[SECURITY] Blocked untrusted navigation: ${reason}; target=${redactUrlForLog(url)}; trusted=${trustedKey || '(none)'}`
+            );
+        }
+        event.preventDefault();
+        let isFileProtocol = false;
+        try {
+            isFileProtocol = new URL(url).protocol === 'file:';
+        } catch {
+            isFileProtocol = false;
+        }
+        if (!isFileProtocol) {
             openExternalSafely(url);
         }
     });
 
     // Security: Open external links in system browser (using safe helper)
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        let isFileProtocol = false;
+        try {
+            isFileProtocol = new URL(url).protocol === 'file:';
+        } catch {
+            isFileProtocol = false;
+        }
+        if (isFileProtocol) {
+            return { action: 'deny' };
+        }
         openExternalSafely(url);
         return { action: 'deny' };
+    });
+
+    mainWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => {
+        callback(false);
     });
 }
 
@@ -728,8 +1019,15 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
         return { success: false, error: 'Unauthorized sender' };
     }
 
+    let normalizedPath;
+    try {
+        normalizedPath = sanitizePathInput(folderPath, 'Folder path');
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+
     // Security: Validate path existence and type
-    const canonicalPath = getCanonicalPath(folderPath);
+    const canonicalPath = getCanonicalPath(normalizedPath);
 
     try {
         if (!fs.existsSync(canonicalPath)) {
@@ -768,6 +1066,9 @@ ipcMain.handle('open-url', async (event, url) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
+    if (typeof url !== 'string' || url.length > 2048) {
+        return { success: false, error: 'Invalid URL' };
+    }
     return openExternalSafely(url);
 });
 
@@ -775,6 +1076,9 @@ ipcMain.handle('open-url', async (event, url) => {
 ipcMain.handle('open-external', async (event, url) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
+    }
+    if (typeof url !== 'string' || url.length > 2048) {
+        return { success: false, error: 'Invalid URL' };
     }
     return openExternalSafely(url);
 });
@@ -813,15 +1117,19 @@ ipcMain.handle('get-defaults', async (event) => {
 });
 
 // Get resume manifest (for Trust Manifest mode)
-ipcMain.handle('get-resume-manifest', async (event, { outputDir, zipPath }) => {
+ipcMain.handle('get-resume-manifest', async (event, payload = {}) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
-    if (!outputDir) {
-        return { success: false, error: 'Output directory required' };
+    const { outputDir, zipPath } = payload && typeof payload === 'object' ? payload : {};
+    let normalizedOutputDir;
+    try {
+        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
+    } catch (e) {
+        return { success: false, error: e.message };
     }
 
-    const canonicalOutputDir = getCanonicalPath(outputDir);
+    const canonicalOutputDir = getCanonicalPath(normalizedOutputDir);
 
     if (isSensitiveRoot(canonicalOutputDir)) {
         return { success: false, error: 'Output directory is a restricted system folder.' };
@@ -928,13 +1236,20 @@ ipcMain.handle('stop-processing', async (event) => {
 });
 
 // Clear output folder (for Start Over functionality)
-ipcMain.handle('clear-output-folder', async (event, { outputDir }) => {
+ipcMain.handle('clear-output-folder', async (event, payload = {}) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
+    const { outputDir } = payload && typeof payload === 'object' ? payload : {};
+    let normalizedOutputDir;
+    try {
+        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
 
     // Security: Validate outputDir is approved
-    const canonicalOutputDir = getCanonicalPath(outputDir);
+    const canonicalOutputDir = getCanonicalPath(normalizedOutputDir);
     // User requirement: Only allow explicitly approved dirs or the current session dir
     const isUserApproved = approvedOutputDirs.has(canonicalOutputDir);
     const isCurrentSession = currentValidatedOutputDir && canonicalOutputDir === currentValidatedOutputDir;
@@ -1029,15 +1344,50 @@ ipcMain.handle('clear-output-folder', async (event, { outputDir }) => {
 });
 
 // Start processing
-ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetweenBatches, resumeMode }) => {
+ipcMain.handle('start-processing', async (event, payload = {}) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
+    }
+    const {
+        zipPath,
+        outputDir,
+        pauseBetweenBatches,
+        resumeMode,
+        autoUpload,
+        destinationDir,
+        cacheGb,
+        cacheLowGb,
+        uploadMode,
+        stagingDir,
+        cacheComputation
+    } = payload && typeof payload === 'object' ? payload : {};
+    let normalizedOutputDir;
+    try {
+        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
+    } catch (e) {
+        return { success: false, error: e.message };
     }
 
     // Security: Validate and approve outputDir using CANONICAL path
     // This ensures that "validated value" == "used value".
     // Try to resolve realpath if it exists (it might not yet).
-    let canonicalOutputDir = getCanonicalPath(outputDir);
+    const requestedOutputDir = path.resolve(normalizedOutputDir);
+    if (fs.existsSync(requestedOutputDir)) {
+        try {
+            const outputStat = fs.lstatSync(requestedOutputDir);
+            if (outputStat.isSymbolicLink()) {
+                return {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Output directory cannot be a symbolic link.',
+                    error: 'Output directory cannot be a symbolic link.'
+                };
+            }
+        } catch (e) {
+            return { success: false, error: `Cannot access output directory: ${e.message}` };
+        }
+    }
+    let canonicalOutputDir = getCanonicalPath(requestedOutputDir);
 
     // If it doesn't exist, we must check the PARENT's approval or standard paths
     // But for simplicity/security, we only allow if the resolved path is approved/safe.
@@ -1111,19 +1461,167 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
     // Store validated output directory for secure resume operations
     currentValidatedOutputDir = canonicalOutputDir;
 
-    return new Promise((resolve, reject) => {
+    const autoUploadEnabled = !!autoUpload;
+    const manualCloudUploadEnabled = !!pauseBetweenBatches;
+    if (autoUploadEnabled && manualCloudUploadEnabled) {
+        return {
+            success: false,
+            errorType: 'MODE_CONFLICT',
+            message: 'Choose either Store Memories on Cloud or Store Memories on Computer with Pause after batch (not both).',
+            error: 'Choose either Store Memories on Cloud or Store Memories on Computer with Pause after batch (not both).'
+        };
+    }
+    const normalizedUploadMode = uploadMode === 'move' ? 'move' : 'copy';
+    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : 5.0;
+    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : 3.0;
+    const providedStagingDir = typeof stagingDir === 'string' && stagingDir.trim().length > 0;
+
+    let canonicalDestinationDir = null;
+    let canonicalStagingDir = null;
+
+    if (autoUploadEnabled) {
+        if (!destinationDir || typeof destinationDir !== 'string' || destinationDir.trim().length === 0) {
+            return { success: false, error: 'Destination directory is required when Auto Upload is enabled.' };
+        }
+        if (resolvedCacheGb <= 0) {
+            return { success: false, error: 'Cache GB must be greater than 0.' };
+        }
+        if (resolvedCacheLowGb < 0 || resolvedCacheLowGb > resolvedCacheGb) {
+            return { success: false, error: 'Cache Low GB must be between 0 and Cache GB.' };
+        }
+
+        try {
+            canonicalDestinationDir = ensureCanonicalWritableDirectory(destinationDir.trim(), 'Destination directory');
+            const stagingCandidate = providedStagingDir
+                ? stagingDir.trim()
+                : path.join(canonicalOutputDir, '.staging');
+            canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
+        } catch (e) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message };
+        }
+
+        if (canonicalDestinationDir === canonicalStagingDir) {
+            return {
+                success: false,
+                errorType: 'PATH_VALIDATION',
+                message: 'Destination and staging folders must be different.',
+                error: 'Destination and staging folders must be different.'
+            };
+        }
+
+        if (isPathInsideDir(canonicalDestinationDir, canonicalStagingDir)) {
+            return {
+                success: false,
+                errorType: 'PATH_VALIDATION',
+                message: 'Destination folder cannot be inside the staging folder.',
+                error: 'Destination folder cannot be inside the staging folder.'
+            };
+        }
+
+        if (isPathInsideDir(canonicalStagingDir, canonicalDestinationDir)) {
+            return {
+                success: false,
+                errorType: 'PATH_VALIDATION',
+                message: 'Staging folder cannot be inside the destination folder.',
+                error: 'Staging folder cannot be inside the destination folder.'
+            };
+        }
+
+        if (isPathInsideDir(canonicalDestinationDir, canonicalOutputDir)) {
+            return {
+                success: false,
+                errorType: 'PATH_VALIDATION',
+                message: 'Destination folder cannot be inside the processing output root.',
+                error: 'Destination folder cannot be inside the processing output root.'
+            };
+        }
+
+        if (isPathInsideDir(canonicalOutputDir, canonicalDestinationDir)) {
+            return {
+                success: false,
+                errorType: 'PATH_VALIDATION',
+                message: 'Destination folder cannot be a parent of the processing output root.',
+                error: 'Destination folder cannot be a parent of the processing output root.'
+            };
+        }
+
+        const stagingPathForCheck = canonicalStagingDir || path.join(canonicalOutputDir, '.staging');
+        try {
+            const { freeBytes, volumePath } = await getDiskFreeBytesForPath(stagingPathForCheck);
+            const gib = 1024 ** 3;
+            const freeGb = freeBytes / gib;
+            const safetyBufferGb = Math.max(10, Math.round((freeGb * 0.10) * 10) / 10);
+            const requiredGb = resolvedCacheGb + safetyBufferGb;
+            const requiredBytes = requiredGb * gib;
+            const roundedFreeGb = Math.round(freeGb * 10) / 10;
+            const roundedRequiredGb = Math.round(requiredGb * 10) / 10;
+
+            console.log(`[AUTO UPLOAD PREFLIGHT] free=${roundedFreeGb} GB required=${roundedRequiredGb} GB cache=${resolvedCacheGb} GB buffer=${safetyBufferGb} GB stagingPath=${stagingPathForCheck}`);
+
+            if (freeBytes < requiredBytes) {
+                return {
+                    success: false,
+                    errorType: 'DISK_SPACE',
+                    message: 'Not enough free disk space on the staging volume for Auto Upload Mode.',
+                    details: {
+                        free_gb: roundedFreeGb,
+                        cache_gb: resolvedCacheGb,
+                        safety_buffer_gb: safetyBufferGb,
+                        required_gb: roundedRequiredGb,
+                        path: stagingPathForCheck,
+                        volume_path: volumePath
+                    }
+                };
+            }
+        } catch (e) {
+            return {
+                success: false,
+                errorType: 'DISK_SPACE',
+                message: `Unable to check free disk space for staging volume: ${e.message}`,
+                details: {
+                    cache_gb: resolvedCacheGb,
+                    path: stagingPathForCheck
+                }
+            };
+        }
+
+        if (cacheComputation && cacheComputation.mode === 'automatic') {
+            const freeGb = Number(cacheComputation.freeGb);
+            const reserveGb = Number(cacheComputation.reserveGb);
+            const volumePath = typeof cacheComputation.volumePath === 'string' ? cacheComputation.volumePath : 'unknown';
+            const debugLine = `Auto cache computed: free=${freeGb.toFixed(1)} GB, reserve=${reserveGb.toFixed(1)} GB, cache_gb=${resolvedCacheGb}, cache_low_gb=${resolvedCacheLowGb}, volumePath=${volumePath}`;
+            console.log(debugLine);
+            if (logger) {
+                logger.debug('Auto cache computed', {
+                    freeGb,
+                    reserveGb,
+                    cacheGb: resolvedCacheGb,
+                    cacheLowGb: resolvedCacheLowGb,
+                    volumePath
+                });
+            }
+        }
+    }
+
+    return new Promise((resolve) => {
+        let settled = false;
+        const settle = (payload) => {
+            if (settled) return;
+            settled = true;
+            resolve(payload);
+        };
+        const failStart = (error, errorType) => {
+            const payload = { success: false, error };
+            if (errorType) payload.errorType = errorType;
+            settle(payload);
+        };
+
         // Find bundled executables
         const isDev = !app.isPackaged;
-        const binDir = isDev
-            ? path.join(__dirname, 'assets', 'bin')
-            : path.join(process.resourcesPath, 'bin');
-
-        const cliPath = path.join(binDir, 'memory-organizer');
-        const ffmpegPath = path.join(binDir, 'ffmpeg');
 
         // Start caffeinate to prevent sleep during processing (Insomniac Mode)
         try {
-            caffeinateProcess = spawn('caffeinate', ['-i']);
+            caffeinateProcess = spawn('caffeinate', ['-i'], { shell: false });
             caffeinateProcess.on('error', (err) => {
                 console.warn('Could not start caffeinate:', err.message);
             });
@@ -1133,17 +1631,20 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
 
         // SECURITY: Validate zipPath before passing to subprocess
         if (!zipPath || typeof zipPath !== 'string') {
-            return { success: false, error: 'Invalid ZIP path provided' };
+            failStart('Invalid ZIP path provided');
+            return;
         }
 
         // Verify ZIP file exists and is a regular file (not symlink)
         try {
             const zipStat = fs.lstatSync(zipPath);
             if (!zipStat.isFile() || zipStat.isSymbolicLink()) {
-                return { success: false, error: 'ZIP path must be a regular file, not a symlink' };
+                failStart('ZIP path must be a regular file, not a symlink');
+                return;
             }
         } catch (e) {
-            return { success: false, error: `Cannot access ZIP file: ${e.message}` };
+            failStart(`Cannot access ZIP file: ${e.message}`);
+            return;
         }
 
         // Resolve to canonical path to prevent symlink tricks
@@ -1151,7 +1652,8 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
 
         // Block paths with special characters that could cause argument injection
         if (canonicalZipPath.includes('\n') || canonicalZipPath.includes('\0')) {
-            return { success: false, error: 'ZIP path contains invalid characters' };
+            failStart('ZIP path contains invalid characters');
+            return;
         }
 
         // Build CLI arguments
@@ -1167,31 +1669,52 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
         if (resumeMode === 'trust') {
             cliArgs.push('--trust-manifest');
         }
+        if (autoUploadEnabled) {
+            cliArgs.push('--auto-upload');
+            cliArgs.push('--destination-dir', canonicalDestinationDir);
+            cliArgs.push('--cache-gb', String(resolvedCacheGb));
+            cliArgs.push('--cache-low-gb', String(resolvedCacheLowGb));
+            cliArgs.push('--upload-mode', normalizedUploadMode);
+            if (providedStagingDir) {
+                cliArgs.push('--staging-dir', canonicalStagingDir);
+            }
+        }
 
         // Process paused check is handled by Python script resume signal logic
 
         // CLEANUP: Kill any orphaned processes before starting new one
         cleanupOrphanedProcesses();
+        const organizer = resolveOrganizerCommand(isDev, cliArgs);
 
         // Prepare process environment with logging directory
         const processEnv = {
             ...process.env,
-            FFMPEG_PATH: ffmpegPath
+            FFMPEG_PATH: organizer.ffmpegPath
         };
 
         // Add logging directory if logger is initialized
         if (logger) {
             processEnv.DATEBACK_LOG_DIR = logger.getLogDirectory();
             logger.info('Starting processing', {
-                pauseBetweenBatches
+                pauseBetweenBatches,
+                autoUpload: autoUploadEnabled
             });
         }
 
         // Spawn the standalone executable
-        pythonProcess = spawn(cliPath, cliArgs, {
-            stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for resume signals
-            env: processEnv
-        });
+        try {
+            pythonProcess = spawn(organizer.command, organizer.args, {
+                stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for resume signals
+                env: processEnv,
+                shell: false
+            });
+        } catch (err) {
+            if (logger) {
+                logger.error('Python process spawn threw synchronously', { error: err.message, stack: err.stack });
+            }
+            failStart(`Failed to start processing: ${err.message}`);
+            return;
+        }
 
         pythonProcess.stdout.on('data', (data) => {
             const lines = data.toString().split('\n').filter(l => l.trim());
@@ -1255,11 +1778,11 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
             // Check if this was an intentional stop (user clicked Stop/Cancel/Pause)
             if (intentionalStop) {
                 intentionalStop = false; // Reset for next run
-                resolve({ success: true, stopped: true });
+                settle({ success: true, stopped: true });
             } else if (code === 0) {
-                resolve({ success: true });
+                settle({ success: true });
             } else {
-                resolve({ success: false, error: `Process exited with code ${code}` });
+                settle({ success: false, error: `Process exited with code ${code}` });
             }
         });
 
@@ -1275,7 +1798,7 @@ ipcMain.handle('start-processing', async (event, { zipPath, outputDir, pauseBetw
                 mainWindow.webContents.send('log-message', `❌ Fatal Error: ${err.message}`);
             }
             pythonProcess = null;
-            reject(err);
+            settle({ success: false, error: `Failed to start processing: ${err.message}` });
         });
     });
 });
@@ -1317,14 +1840,29 @@ ipcMain.handle('resume-batch', async (event) => {
 });
 
 // Retry corrupted files
-ipcMain.handle('retry-corrupted', async (event, { outputDir }) => {
+ipcMain.handle('retry-corrupted', async (event, {
+    outputDir,
+    autoUpload,
+    destinationDir,
+    cacheGb,
+    cacheLowGb,
+    uploadMode,
+    stagingDir,
+    maxUploadRetries
+} = {}) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
+    }
+    let normalizedOutputDir;
+    try {
+        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
+    } catch (e) {
+        return { success: false, error: e.message };
     }
 
     // Security: Validate outputDir is approved (same logic as start-processing)
     // Use Canonical path
-    let canonicalOutputDir = getCanonicalPath(outputDir);
+    let canonicalOutputDir = getCanonicalPath(normalizedOutputDir);
 
     if (isSensitiveRoot(canonicalOutputDir)) {
         return { success: false, error: 'Output directory is a restricted system folder.' };
@@ -1345,7 +1883,58 @@ ipcMain.handle('retry-corrupted', async (event, { outputDir }) => {
         return { success: false, error: 'Output directory not approved' };
     }
 
-    return new Promise((resolve, reject) => {
+    const autoUploadEnabled = !!autoUpload;
+    const normalizedUploadMode = uploadMode === 'move' ? 'move' : 'copy';
+    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : 5.0;
+    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : 3.0;
+    const resolvedMaxUploadRetries = Number.isFinite(Number(maxUploadRetries)) ? Number(maxUploadRetries) : 20;
+    const providedStagingDir = typeof stagingDir === 'string' && stagingDir.trim().length > 0;
+
+    let canonicalDestinationDir = null;
+    let canonicalStagingDir = null;
+
+    if (autoUploadEnabled) {
+        if (!destinationDir || typeof destinationDir !== 'string' || destinationDir.trim().length === 0) {
+            return { success: false, error: 'Destination directory is required when Auto Upload is enabled.' };
+        }
+        if (resolvedCacheGb <= 0) {
+            return { success: false, error: 'Cache GB must be greater than 0.' };
+        }
+        if (resolvedCacheLowGb < 0 || resolvedCacheLowGb > resolvedCacheGb) {
+            return { success: false, error: 'Cache Low GB must be between 0 and Cache GB.' };
+        }
+        if (resolvedMaxUploadRetries <= 0) {
+            return { success: false, error: 'Max upload retries must be greater than 0.' };
+        }
+
+        try {
+            canonicalDestinationDir = ensureCanonicalWritableDirectory(destinationDir.trim(), 'Destination directory');
+            const stagingCandidate = providedStagingDir
+                ? stagingDir.trim()
+                : path.join(canonicalOutputDir, '.staging');
+            canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
+        } catch (e) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message };
+        }
+
+        if (canonicalDestinationDir === canonicalStagingDir) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination and staging folders must be different.', error: 'Destination and staging folders must be different.' };
+        }
+        if (isPathInsideDir(canonicalDestinationDir, canonicalStagingDir)) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination folder cannot be inside the staging folder.', error: 'Destination folder cannot be inside the staging folder.' };
+        }
+        if (isPathInsideDir(canonicalStagingDir, canonicalDestinationDir)) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: 'Staging folder cannot be inside the destination folder.', error: 'Staging folder cannot be inside the destination folder.' };
+        }
+        if (isPathInsideDir(canonicalDestinationDir, canonicalOutputDir)) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination folder cannot be inside the processing output root.', error: 'Destination folder cannot be inside the processing output root.' };
+        }
+        if (isPathInsideDir(canonicalOutputDir, canonicalDestinationDir)) {
+            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination folder cannot be a parent of the processing output root.', error: 'Destination folder cannot be a parent of the processing output root.' };
+        }
+    }
+
+    return new Promise((resolve) => {
         const fs = require('fs');
 
         // Find the detailed_report.json
@@ -1357,16 +1946,30 @@ ipcMain.handle('retry-corrupted', async (event, { outputDir }) => {
         }
 
         const isDev = !app.isPackaged;
-        const binDir = isDev
-            ? path.join(__dirname, 'assets', 'bin')
-            : path.join(process.resourcesPath, 'bin');
-
-        const cliPath = path.join(binDir, 'memory-organizer');
-
-        const proc = spawn(cliPath, [
+        const retryArgs = [
             '--retry-report', reportPath,
             '--output', canonicalOutputDir // Use canonical path
-        ]);
+        ];
+        if (autoUploadEnabled) {
+            retryArgs.push('--auto-upload');
+            retryArgs.push('--destination-dir', canonicalDestinationDir);
+            retryArgs.push('--cache-gb', String(resolvedCacheGb));
+            retryArgs.push('--cache-low-gb', String(resolvedCacheLowGb));
+            retryArgs.push('--upload-mode', normalizedUploadMode);
+            retryArgs.push('--max-upload-retries', String(resolvedMaxUploadRetries));
+            if (providedStagingDir) {
+                retryArgs.push('--staging-dir', canonicalStagingDir);
+            }
+        }
+        const organizer = resolveOrganizerCommand(isDev, retryArgs);
+
+        const proc = spawn(organizer.command, organizer.args, {
+            env: {
+                ...process.env,
+                FFMPEG_PATH: organizer.ffmpegPath
+            },
+            shell: false
+        });
 
         let output = '';
         let stats = null;

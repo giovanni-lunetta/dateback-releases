@@ -14,8 +14,14 @@ import time
 import threading
 import re
 import errno
+import stat
 import concurrent.futures
 import signal
+import queue
+import hashlib
+import tempfile
+from urllib.parse import urlparse, parse_qs
+from collections import deque
 
 # Global Abort Flag
 ABORT_PROCESSING = threading.Event()
@@ -27,6 +33,7 @@ PAUSE_REQUESTED = threading.Event()
 MIN_FREE_GB = 2.0      # Pause processing when free space drops below this
 RESUME_FREE_GB = 3.0   # Resume processing when free space exceeds this
 POLL_INTERVAL_SEC = 10 # Seconds between disk space checks when paused
+SAFETY_BUFFER_GB = 10.0  # Minimum free-space buffer for auto-upload preflight
 
 # Expired Link Detection - abort after N consecutive 403/410 errors
 EXPIRED_LINK_THRESHOLD = 5  # Number of consecutive failures before abort
@@ -35,7 +42,10 @@ expired_link_lock = threading.Lock()  # Thread-safe counter access
 
 # Download URL Security - prevent SSRF and disk exhaustion
 ALLOWED_HOST_SUFFIXES = ("sc-cdn.net", "snapchat.com", "snap-dev.net")  # Snapchat CDNs only
+REDIRECT_ALLOWED_HOST_SUFFIXES = ALLOWED_HOST_SUFFIXES + ("cloudfront.net",)
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2GB per file limit
+MAX_NESTED_ZIP_EXTRACT_BYTES = MAX_DOWNLOAD_BYTES
+MAX_NESTED_ZIP_ENTRY_BYTES = MAX_DOWNLOAD_BYTES
 
 # Configuration
 JSON_PATH = 'mydata~1766711891202/json/memories_history.json'
@@ -46,13 +56,44 @@ CORRUPTED_DIR = 'Corrupted_Memories'
 REPORT_FILE = 'detailed_report.json'
 RAW_DL_NAME = 'Raw_Downloads' # Default
 FFMPEG_PATH = os.environ.get('FFMPEG_PATH', 'ffmpeg')  # Use bundled ffmpeg if available
+PROCESSING_ROOT = '.'
+AUTO_UPLOAD_ENABLED = False
+AUTO_DESTINATION_DIR = None
+AUTO_CACHE_GB = 5.0
+AUTO_CACHE_LOW_GB = 3.0
+AUTO_UPLOAD_MODE = 'copy'
+AUTO_STAGING_DIR = None
+AUTO_MAX_UPLOAD_RETRIES = 20
+UPLOAD_LEDGER_FILE = '.upload_ledger.jsonl'
+RESUME_SIGNAL_FILENAME = '.dateback_resume_signal'
+STAGED_ID_FULL_HASH_MAX_BYTES = 50 * 1024 * 1024
+STAGED_ID_PARTIAL_BYTES = 1024 * 1024
+ZIP_SMALL_FILE_THRESHOLD = 20 * 1024 * 1024
+ZIP_METRICS_ENABLED = str(os.environ.get("DATEBACK_DEBUG_ZIP_METRICS") or os.environ.get("DATEBACK_DEBUG", "")).lower() in ("1", "true", "yes", "on")
+VERIFY_PERF_DEBUG_ENABLED = str(os.environ.get("DATEBACK_DEBUG_VERIFY_PERF") or os.environ.get("DATEBACK_DEBUG", "")).lower() in ("1", "true", "yes", "on")
+RETRY_UPLOAD_DEBUG_ENABLED = str(os.environ.get("DATEBACK_DEBUG_RETRY_UPLOAD") or os.environ.get("DATEBACK_DEBUG", "")).lower() in ("1", "true", "yes", "on")
+STAGED_MEDIA_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif', '.mp4', '.mov', '.m4v'}
+STAGED_TEMP_SUFFIXES = ('.tmp', '.partial', '.part', '.download', '.crdownload')
 
 # CURRENT_BATCH_DIR: The active batch folder where files should be written
 # This is set dynamically during batch processing to avoid orphaned files
 CURRENT_BATCH_DIR = None
 
 filename_lock = threading.Lock()
+reserved_output_paths = set()
 _session_local = threading.local()
+zip_metrics_lock = threading.Lock()
+zip_metrics = {
+    "lock_wait_sec": 0.0,
+    "read_sec": 0.0,
+    "bytes_read": 0,
+    "members": 0
+}
+
+
+def verify_perf_log(message):
+    if VERIFY_PERF_DEBUG_ENABLED:
+        print(f"[VERIFY_PERF] {message}", flush=True)
 
 def get_requests_session():
     session = getattr(_session_local, "session", None)
@@ -97,13 +138,23 @@ def is_zip_file(file_path, zip_file=None, zip_lock=None):
     try:
         if zip_file and not os.path.isabs(file_path):
             # Reading from within a ZIP archive
+            wait_sec = 0.0
+            read_start = None
+            lock_acquired = False
             if zip_lock:
-                with zip_lock:
-                    with zip_file.open(file_path) as f:
-                        header = f.read(4)
-            else:
+                wait_start = time.perf_counter()
+                zip_lock.acquire()
+                wait_sec = time.perf_counter() - wait_start
+                lock_acquired = True
+            read_start = time.perf_counter()
+            try:
                 with zip_file.open(file_path) as f:
                     header = f.read(4)
+            finally:
+                read_sec = time.perf_counter() - read_start
+                if lock_acquired:
+                    zip_lock.release()
+                record_zip_metrics(wait_sec=wait_sec, read_sec=read_sec, bytes_read=len(header), members=0)
         else:
             # Reading from filesystem
             with open(file_path, 'rb') as f:
@@ -121,7 +172,7 @@ def is_zip_file(file_path, zip_file=None, zip_lock=None):
         print(f"   [WARNING] ZIP check failed for {os.path.basename(file_path)}: {e}", flush=True)
         return False
 
-def is_allowed_download_url(url):
+def is_allowed_download_url(url, allowed_suffixes=None):
     """
     Security: Validate download URL to prevent SSRF and malicious downloads.
     Only allows HTTPS downloads from verified Snapchat CDNs.
@@ -138,40 +189,959 @@ def is_allowed_download_url(url):
         if parsed.scheme != "https":
             return False
         
+        suffixes = allowed_suffixes or ALLOWED_HOST_SUFFIXES
         # Must match allowed Snapchat CDN suffixes
-        return any(hostname.endswith(suffix) for suffix in ALLOWED_HOST_SUFFIXES)
+        return any(hostname.endswith(suffix) for suffix in suffixes)
     except Exception:
         return False
 
+
+def extract_sid_from_download_url(url):
+    """Extract Snapchat SID from media URL query params."""
+    try:
+        parsed = urlparse(url)
+        sid_values = parse_qs(parsed.query).get("sid")
+        if sid_values:
+            return sid_values[0].upper()
+    except Exception:
+        pass
+    return None
+
+
+def validate_download_redirect_chain(response):
+    """Ensure all redirect hops remain on allowed HTTPS hosts."""
+    chain = [r.url for r in getattr(response, "history", [])] + [response.url]
+    for url in chain:
+        if not is_allowed_download_url(url, REDIRECT_ALLOWED_HOST_SUFFIXES):
+            raise ValueError(f"Blocked redirect target: {url}")
+
+def short_display_path(path_value):
+    """Shorten absolute paths for UI-facing events/log lines."""
+    if not isinstance(path_value, str):
+        return path_value
+    normalized = os.path.normpath(path_value)
+    if not os.path.isabs(normalized):
+        return normalized
+    parts = [p for p in normalized.split(os.sep) if p]
+    if len(parts) <= 2:
+        return normalized
+    return f"{os.sep}...{os.sep}{parts[-2]}{os.sep}{parts[-1]}"
+
+
+def is_symlink(path_value):
+    """True when the exact path entry is a symlink."""
+    if not path_value:
+        return False
+    try:
+        return os.path.islink(os.path.abspath(path_value))
+    except OSError:
+        return False
+
+
+def canonical_dir(path_value):
+    """Create/validate directory and return canonical path, rejecting symlink roots."""
+    if not path_value or not isinstance(path_value, str):
+        raise ValueError("Directory path is required.")
+    if "\0" in path_value or "\n" in path_value:
+        raise ValueError("Directory path contains invalid characters.")
+
+    abs_path = os.path.abspath(path_value)
+
+    if os.path.lexists(abs_path) and is_symlink(abs_path):
+        raise ValueError(f"Symbolic links are not allowed for directory roots: {abs_path}")
+
+    os.makedirs(abs_path, exist_ok=True)
+    try:
+        st = os.lstat(abs_path)
+    except OSError as e:
+        raise ValueError(f"Could not access directory: {abs_path} ({e})")
+    if not os.path.isdir(abs_path):
+        raise ValueError(f"Path is not a directory: {abs_path}")
+    if stat.S_ISLNK(st.st_mode):
+        raise ValueError(f"Symbolic links are not allowed for directory roots: {abs_path}")
+    return os.path.realpath(abs_path)
+
+
+def safe_join(root_dir, relative_name):
+    """Join untrusted ZIP member names safely under root_dir."""
+    if relative_name is None:
+        raise ValueError("ZIP member name is missing")
+
+    normalized = os.path.normpath(str(relative_name).replace("\\", "/"))
+    if os.path.isabs(normalized):
+        raise ValueError(f"Illegal absolute ZIP member path: {relative_name}")
+
+    parts = [p for p in normalized.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise ValueError(f"Path traversal in ZIP member: {relative_name}")
+
+    root_real = os.path.realpath(root_dir)
+    candidate = os.path.join(root_real, *parts) if parts else root_real
+    candidate_real = os.path.realpath(candidate)
+    if candidate_real != root_real and not candidate_real.startswith(root_real + os.sep):
+        raise ValueError(f"Path escapes extraction root: {relative_name}")
+    return candidate
+
+
+def safe_delete(path_value, root_dir):
+    """
+    Delete only when resolved path remains under root_dir.
+    Refuses unsafe deletes and never follows symlink targets outside root.
+    """
+    if not path_value:
+        return True
+
+    abs_path = os.path.abspath(path_value)
+    root_real = os.path.realpath(root_dir)
+    real_path = os.path.realpath(abs_path)
+
+    if real_path != root_real and not real_path.startswith(root_real + os.sep):
+        return False
+
+    if not os.path.lexists(abs_path):
+        return True
+
+    try:
+        st = os.lstat(abs_path)
+        if stat.S_ISDIR(st.st_mode):
+            return False
+        os.unlink(abs_path)
+        return True
+    except OSError:
+        return False
+
+
+def zipinfo_is_symlink(member_info):
+    """True when a ZipInfo entry represents a symlink."""
+    unix_mode = member_info.external_attr >> 16
+    return stat.S_ISLNK(unix_mode) or ((unix_mode & 0xF000) == 0xA000)
+
+
 def safe_extract(zf, extract_dir):
     """
-    Extract ZIP with Zip Slip protection and symlink blocking.
-    Validates all paths before extraction to prevent path traversal attacks.
-    SECURITY: Blocks symlink entries to prevent local file disclosure.
+    Extract ZIP with Zip Slip protection, symlink blocking, and byte caps.
+    Avoids extractall() on untrusted member names.
     """
-    for member in zf.namelist():
-        # Get the ZipInfo object for this member
-        member_info = zf.getinfo(member)
-        
-        # SECURITY: Check for symlinks (Unix file type in external_attr)
-        # Symlinks have file type 0xA (S_IFLNK) in the high byte
-        # external_attr format: (file_mode << 16) | dos_attributes
-        unix_mode = member_info.external_attr >> 16
-        if unix_mode & 0xA000 == 0xA000:  # S_IFLNK = 0xA000
+    total_declared = 0
+    for member_info in zf.infolist():
+        member = member_info.filename
+        if zipinfo_is_symlink(member_info):
             print(f"⚠️  SECURITY: Blocked symlink entry in ZIP: {member}", flush=True)
-            continue  # Skip this entry instead of raising to allow rest of extraction
-        
-        # Normalize and check for path traversal
-        member_path = os.path.normpath(member)
-        if member_path.startswith('..') or os.path.isabs(member_path):
-            raise ValueError(f"Illegal file path in ZIP: {member}")
-        
-        target_path = os.path.join(extract_dir, member_path)
-        # Double-check: resolved path must be within extract_dir
-        if not os.path.abspath(target_path).startswith(os.path.abspath(extract_dir) + os.sep):
-            raise ValueError(f"Path traversal detected: {member}")
-    
-    zf.extractall(extract_dir)
+            continue
+        if member_info.file_size < 0 or member_info.file_size > MAX_NESTED_ZIP_ENTRY_BYTES:
+            raise ValueError(f"ZIP entry exceeds allowed size: {member}")
+        total_declared += member_info.file_size
+        if total_declared > MAX_NESTED_ZIP_EXTRACT_BYTES:
+            raise ValueError("ZIP extraction exceeds allowed total size")
+
+    total_written = 0
+    for member_info in zf.infolist():
+        member = member_info.filename
+        if zipinfo_is_symlink(member_info):
+            continue
+
+        target_path = safe_join(extract_dir, member)
+        is_dir = member_info.is_dir() or member.endswith("/")
+        if is_dir:
+            os.makedirs(target_path, exist_ok=True)
+            continue
+
+        parent_dir = os.path.dirname(target_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
+        written_for_member = 0
+        with zf.open(member_info, "r") as src, open(target_path, "wb") as dst:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                chunk_len = len(chunk)
+                written_for_member += chunk_len
+                total_written += chunk_len
+                if written_for_member > MAX_NESTED_ZIP_ENTRY_BYTES:
+                    raise ValueError(f"ZIP entry exceeds allowed extracted size: {member}")
+                if total_written > MAX_NESTED_ZIP_EXTRACT_BYTES:
+                    raise ValueError("ZIP extraction exceeds allowed total extracted size")
+
+
+def reset_zip_metrics():
+    if not ZIP_METRICS_ENABLED:
+        return
+    with zip_metrics_lock:
+        zip_metrics["lock_wait_sec"] = 0.0
+        zip_metrics["read_sec"] = 0.0
+        zip_metrics["bytes_read"] = 0
+        zip_metrics["members"] = 0
+
+
+def record_zip_metrics(wait_sec=0.0, read_sec=0.0, bytes_read=0, members=0):
+    if not ZIP_METRICS_ENABLED:
+        return
+    with zip_metrics_lock:
+        zip_metrics["lock_wait_sec"] += max(0.0, float(wait_sec))
+        zip_metrics["read_sec"] += max(0.0, float(read_sec))
+        zip_metrics["bytes_read"] += max(0, int(bytes_read))
+        zip_metrics["members"] += max(0, int(members))
+
+
+def snapshot_zip_metrics():
+    with zip_metrics_lock:
+        return dict(zip_metrics)
+
+
+def stream_zip_member_to_temp(zip_file, member_name, zip_lock=None, mem_id=None, suffix_hint=None):
+    """
+    Copy a ZIP member to temp_processing under a short lock window.
+    Returns absolute temp path and bytes written.
+    """
+    temp_root = canonicalize_dir_path(TEMP_DIR)
+    suffix = suffix_hint or os.path.splitext(member_name)[1] or ".bin"
+    prefix = f"zipmem_{mem_id}_" if mem_id else "zipmem_"
+    fd, temp_path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=temp_root)
+
+    wait_sec = 0.0
+    read_sec = 0.0
+    total = 0
+    lock_acquired = False
+
+    try:
+        with os.fdopen(fd, 'wb') as dst:
+            if zip_lock:
+                wait_start = time.perf_counter()
+                zip_lock.acquire()
+                wait_sec = time.perf_counter() - wait_start
+                lock_acquired = True
+
+            read_start = time.perf_counter()
+            try:
+                member_info = zip_file.getinfo(member_name)
+                if zipinfo_is_symlink(member_info):
+                    raise ValueError(f"Blocked symlink ZIP member: {member_name}")
+                declared_size = int(member_info.file_size or 0)
+                if declared_size < 0 or declared_size > MAX_NESTED_ZIP_ENTRY_BYTES:
+                    raise ValueError(f"ZIP member exceeds allowed size: {member_name}")
+
+                if declared_size <= ZIP_SMALL_FILE_THRESHOLD:
+                    with zip_file.open(member_name) as src:
+                        data = src.read()
+                    total = len(data)
+                    if total > MAX_NESTED_ZIP_ENTRY_BYTES:
+                        raise ValueError(f"ZIP member exceeds allowed extracted size: {member_name}")
+                    dst.write(data)
+                else:
+                    with zip_file.open(member_name) as src:
+                        while True:
+                            chunk = src.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > MAX_NESTED_ZIP_ENTRY_BYTES:
+                                raise ValueError(f"ZIP member exceeds allowed extracted size: {member_name}")
+                            dst.write(chunk)
+            finally:
+                read_sec = time.perf_counter() - read_start
+                if lock_acquired:
+                    zip_lock.release()
+                    lock_acquired = False
+    except Exception:
+        safe_delete(temp_path, temp_root)
+        raise
+
+    record_zip_metrics(wait_sec=wait_sec, read_sec=read_sec, bytes_read=total, members=1)
+    return temp_path, total
+
+
+def get_dir_size_bytes(dir_path):
+    """Recursively calculate directory size in bytes."""
+    total = 0
+    if not dir_path or not os.path.exists(dir_path):
+        return 0
+    for root, _, files in os.walk(dir_path):
+        for name in files:
+            if name.startswith('.'):
+                continue
+            file_path = os.path.join(root, name)
+            try:
+                total += os.path.getsize(file_path)
+            except OSError:
+                pass
+    return total
+
+
+def list_files_recursive(dir_path):
+    """Return absolute paths for all non-hidden files in a directory tree."""
+    files = []
+    if not dir_path or not os.path.exists(dir_path):
+        return files
+    for root, _, names in os.walk(dir_path):
+        for name in names:
+            if name.startswith('.'):
+                continue
+            path = os.path.join(root, name)
+            if os.path.isfile(path):
+                files.append(os.path.abspath(path))
+    return files
+
+
+def is_staged_media_file(path_value):
+    """True when path looks like a staged media output (not hidden/temp/metadata)."""
+    if not path_value:
+        return False
+    base_name = os.path.basename(path_value)
+    if not base_name or base_name.startswith('.'):
+        return False
+    lower_name = base_name.lower()
+    if lower_name.endswith(STAGED_TEMP_SUFFIXES):
+        return False
+    ext = os.path.splitext(lower_name)[1]
+    return ext in STAGED_MEDIA_EXTENSIONS
+
+
+def list_staged_media_files(dir_path):
+    """Return absolute paths for staged media outputs under expected Batch_* structure."""
+    files = []
+    if not dir_path or not os.path.exists(dir_path):
+        return files
+
+    try:
+        batch_dirs = [
+            os.path.join(dir_path, name)
+            for name in os.listdir(dir_path)
+            if name.startswith('Batch_') and os.path.isdir(os.path.join(dir_path, name))
+        ]
+    except OSError:
+        return files
+
+    for batch_dir in batch_dirs:
+        for root, dirs, names in os.walk(batch_dir):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for name in names:
+                if name.startswith('.'):
+                    continue
+                path = os.path.join(root, name)
+                if not os.path.isfile(path):
+                    continue
+                if is_staged_media_file(path):
+                    files.append(os.path.abspath(path))
+    return files
+
+
+def canonicalize_dir_path(dir_path):
+    """Backward-compatible alias for canonical directory validation."""
+    return canonical_dir(dir_path)
+
+
+def is_path_inside(child_path, parent_path):
+    child = os.path.realpath(child_path)
+    parent = os.path.realpath(parent_path)
+    return child == parent or child.startswith(parent + os.sep)
+
+
+def preflight_writable_dir(dir_path):
+    """Verify directory write/delete capability with a temp file probe."""
+    probe = os.path.join(dir_path, f".dateback_write_test_{secrets.token_hex(4)}")
+    try:
+        with open(probe, 'w', encoding='utf-8') as f:
+            f.write("ok")
+        if not safe_delete(probe, dir_path):
+            raise ValueError("Failed to delete write-probe file safely.")
+    except Exception as e:
+        raise ValueError(f"Directory is not writable: {dir_path} ({e})")
+
+
+def compute_staged_id(file_path):
+    """Stable staged file id for ledger idempotency."""
+    size = os.path.getsize(file_path)
+    hasher = hashlib.sha256()
+
+    with open(file_path, 'rb') as f:
+        if size <= STAGED_ID_FULL_HASH_MAX_BYTES:
+            for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                hasher.update(chunk)
+        else:
+            head = f.read(STAGED_ID_PARTIAL_BYTES)
+            hasher.update(head)
+            hasher.update(str(size).encode('utf-8'))
+
+    return hasher.hexdigest()
+
+
+def emit_processing_event(progress_callback, event_type, **fields):
+    """Emit typed JSON events through the existing progress channel."""
+    if not progress_callback:
+        return
+    try:
+        payload = {"type": event_type}
+        for key, value in fields.items():
+            if isinstance(value, str):
+                key_lower = key.lower()
+                if (key_lower.endswith("_path") or key_lower in {"dest_dir", "destination_dir", "staging_dir", "path"}) and os.path.isabs(value):
+                    payload[key] = short_display_path(value)
+                    continue
+            payload[key] = value
+        progress_callback(payload)
+    except Exception:
+        pass
+
+
+class DestinationAdapter:
+    """Abstract destination adapter for automatic upload."""
+
+    def prepare(self):
+        raise NotImplementedError
+
+    def put(self, local_path):
+        raise NotImplementedError
+
+    def verify(self, local_path, dest_path):
+        raise NotImplementedError
+
+
+class FolderDestinationAdapter(DestinationAdapter):
+    """Folder-based destination adapter (Drive/iCloud/Dropbox/etc)."""
+
+    def __init__(self, destination_dir, upload_mode='copy'):
+        self.destination_dir = os.path.abspath(destination_dir)
+        self.upload_mode = upload_mode
+        self._expected_sizes = {}
+
+    def prepare(self):
+        os.makedirs(self.destination_dir, exist_ok=True)
+
+    def _unique_dest_path(self, source_name):
+        base, ext = os.path.splitext(source_name)
+        candidate = os.path.join(self.destination_dir, source_name)
+        counter = 1
+        while os.path.exists(candidate):
+            candidate = os.path.join(self.destination_dir, f"{base}_{counter}{ext}")
+            counter += 1
+        return candidate
+
+    def put(self, local_path):
+        source_name = os.path.basename(local_path)
+        src_size = os.path.getsize(local_path)
+        dest_path = self._unique_dest_path(source_name)
+        temp_dest = f"{dest_path}.tmp.{secrets.token_hex(4)}"
+
+        # Keep source file intact until caller verifies destination.
+        # This preserves crash safety for both copy and move modes.
+        shutil.copy2(local_path, temp_dest)
+        os.replace(temp_dest, dest_path)
+
+        self._expected_sizes[dest_path] = src_size
+        return dest_path
+
+    def verify(self, local_path, dest_path):
+        if not os.path.exists(dest_path):
+            return False
+        try:
+            dest_size = os.path.getsize(dest_path)
+            if os.path.exists(local_path):
+                local_size = os.path.getsize(local_path)
+            else:
+                local_size = self._expected_sizes.get(dest_path)
+            return local_size is not None and local_size == dest_size
+        except OSError:
+            return False
+
+
+class UploadLedger:
+    """Append-only upload ledger for crash-safe upload resume."""
+
+    def __init__(self, ledger_path):
+        self.ledger_path = ledger_path
+        self._lock = threading.Lock()
+        self._done_by_staged_path = {}
+        self._done_by_staged_id = {}
+        os.makedirs(os.path.dirname(self.ledger_path), exist_ok=True)
+        if not os.path.exists(self.ledger_path):
+            open(self.ledger_path, 'a').close()
+        self._load_existing()
+
+    def _load_existing(self):
+        try:
+            with open(self.ledger_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    self._index_record(record)
+        except OSError:
+            pass
+
+    def _index_record(self, record):
+        if record.get("status") != "DONE":
+            return
+        staged_path = record.get("staged_path")
+        staged_id = record.get("staged_id")
+        if staged_path:
+            self._done_by_staged_path[os.path.abspath(staged_path)] = record
+        if staged_id:
+            self._done_by_staged_id.setdefault(staged_id, []).append(record)
+
+    def append(self, staged_path, dest_path, status, size_bytes=0, error=None, staged_id=None):
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "staged_path": os.path.abspath(staged_path) if staged_path else None,
+            "dest_path": dest_path,
+            "status": status,
+            "size_bytes": int(size_bytes or 0)
+        }
+        if staged_id:
+            record["staged_id"] = staged_id
+        if error:
+            record["error"] = str(error)
+
+        with self._lock:
+            with open(self.ledger_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(record) + "\n")
+            self._index_record(record)
+
+    def get_done_record_for_staged_path(self, staged_path):
+        return self._done_by_staged_path.get(os.path.abspath(staged_path))
+
+    def get_valid_dest_for_staged_id(self, staged_id, size_bytes, staged_path=None):
+        if not staged_id:
+            return None
+        staged_base = os.path.basename(staged_path) if staged_path else None
+        candidates = self._done_by_staged_id.get(staged_id, [])
+        for record in reversed(candidates):
+            if staged_base:
+                prior_staged = record.get("staged_path")
+                prior_base = os.path.basename(prior_staged) if prior_staged else None
+                if prior_base and prior_base != staged_base:
+                    continue
+            dest_path = record.get("dest_path")
+            if not dest_path:
+                continue
+            try:
+                if os.path.exists(dest_path) and os.path.getsize(dest_path) == int(size_bytes):
+                    return dest_path
+            except OSError:
+                continue
+        return None
+
+
+class AutoUploadManager:
+    """Single-threaded uploader with retries, verification, and event emission."""
+
+    def __init__(self, staging_dir, adapter, ledger, progress_callback, cache_gb, cache_low_gb, max_upload_retries=20):
+        self.staging_dir = canonical_dir(staging_dir)
+        self.adapter = adapter
+        self.ledger = ledger
+        self.progress_callback = progress_callback
+        self.cache_bytes = int(cache_gb * 1024**3)
+        self.cache_low_bytes = int(cache_low_gb * 1024**3)
+        self.max_upload_retries = max(1, int(max_upload_retries))
+        self.uploaded_count = 0
+        self.error_count = 0
+        self.upload_attempts = 0
+        self.confirmed_count = 0
+        self.copied_count = 0
+
+        self._queue = queue.Queue()
+        self._pending = set()
+        self._tracked_files = set()
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._fatal_error = None
+        self._last_progress_emit = 0.0
+        self._staged_count = 0
+        self._staging_bytes = 0
+        self._last_error_emit_attempt = {}
+
+    def prepare(self):
+        os.makedirs(self.staging_dir, exist_ok=True)
+        self.adapter.prepare()
+        # Initialize counters from one staging scan at startup.
+        files = list_files_recursive(self.staging_dir)
+        with self._lock:
+            self._tracked_files = set(files)
+            self._staged_count = len(files)
+            self._staging_bytes = 0
+            for p in files:
+                try:
+                    self._staging_bytes += os.path.getsize(p)
+                except OSError:
+                    pass
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run, name="auto-uploader", daemon=True)
+        self._thread.start()
+
+    def stop(self, wait=True):
+        self._stop_event.set()
+        self._queue.put(None)
+        if wait and self._thread:
+            self._thread.join()
+
+    def pending_count(self):
+        with self._lock:
+            return len(self._pending)
+
+    def staging_bytes(self):
+        with self._lock:
+            return self._staging_bytes
+
+    def staged_count(self):
+        with self._lock:
+            return self._staged_count
+
+    def enqueue(self, staged_path, discovered=False):
+        if not staged_path:
+            return
+        staged_path = os.path.abspath(staged_path)
+        if not os.path.exists(staged_path):
+            return
+        size_bytes = 0
+        try:
+            size_bytes = os.path.getsize(staged_path)
+        except OSError:
+            pass
+        with self._lock:
+            if staged_path in self._pending:
+                return
+            if staged_path not in self._tracked_files:
+                self._tracked_files.add(staged_path)
+                self._staged_count += 1
+                self._staging_bytes += size_bytes
+            self._pending.add(staged_path)
+        self._queue.put(staged_path)
+        # For newly produced files, emit periodic progress only.
+        if not discovered:
+            self._emit_progress(last_file=os.path.basename(staged_path))
+
+    def _untrack_file(self, staged_path, known_size=None):
+        with self._lock:
+            if staged_path in self._tracked_files:
+                self._tracked_files.remove(staged_path)
+                self._staged_count = max(0, self._staged_count - 1)
+                size_to_subtract = 0
+                if isinstance(known_size, int) and known_size >= 0:
+                    size_to_subtract = known_size
+                else:
+                    try:
+                        size_to_subtract = os.path.getsize(staged_path)
+                    except OSError:
+                        size_to_subtract = 0
+                self._staging_bytes = max(0, self._staging_bytes - size_to_subtract)
+
+    def _remove_pending(self, staged_path):
+        with self._lock:
+            self._pending.discard(staged_path)
+
+    def recover_pending(self):
+        recovered = 0
+        for staged_path in list_files_recursive(self.staging_dir):
+            file_size = 0
+            try:
+                file_size = os.path.getsize(staged_path)
+            except OSError:
+                pass
+            done_record = self.ledger.get_done_record_for_staged_path(staged_path)
+            if done_record:
+                dest_path = done_record.get("dest_path")
+                try:
+                    if dest_path and os.path.exists(dest_path) and os.path.getsize(dest_path) == file_size:
+                        deleted = self._safe_delete_staged_file(staged_path, known_size=file_size)
+                        if deleted:
+                            self._untrack_file(staged_path, known_size=file_size)
+                        continue
+                except OSError:
+                    pass
+            self.enqueue(staged_path, discovered=True)
+            recovered += 1
+        return recovered
+
+    def _safe_delete_staged_file(self, staged_path, known_size=None):
+        if safe_delete(staged_path, self.staging_dir):
+            return True
+        self.error_count += 1
+        self.emit(
+            "upload_error",
+            last_file=os.path.basename(staged_path),
+            error="Refused unsafe staged-file delete outside staging root",
+            attempt=0
+        )
+        self._untrack_file(staged_path, known_size=known_size)
+        self._remove_pending(staged_path)
+        return False
+
+    def emit(self, event_type, last_file=None, force=False, **extra):
+        if event_type == "upload_progress":
+            self._emit_progress(force=force, last_file=last_file, **extra)
+            return
+        with self._lock:
+            staged_count = self._staged_count
+            staging_bytes = self._staging_bytes
+        payload = {
+            "staged_count": staged_count,
+            "staging_bytes": staging_bytes,
+            "uploaded_count": self.uploaded_count,
+            "error_count": self.error_count,
+            "dest_dir": self.adapter.destination_dir,
+            "last_file": last_file
+        }
+        payload.update(extra)
+        emit_processing_event(self.progress_callback, event_type, **payload)
+
+    def _emit_progress(self, force=False, last_file=None, **extra):
+        now = time.time()
+        if not force and (now - self._last_progress_emit) < 0.25:
+            return
+        self._last_progress_emit = now
+        with self._lock:
+            staged_count = self._staged_count
+            staging_bytes = self._staging_bytes
+        payload = {
+            "staged_count": staged_count,
+            "staging_bytes": staging_bytes,
+            "uploaded_count": self.uploaded_count,
+            "error_count": self.error_count,
+            "dest_dir": self.adapter.destination_dir,
+            "last_file": last_file
+        }
+        payload.update(extra)
+        emit_processing_event(self.progress_callback, "upload_progress", **payload)
+
+    def wait_for_drain(self):
+        while True:
+            if self.has_fatal():
+                break
+            if self.pending_count() == 0 and self._queue.empty():
+                break
+            time.sleep(0.5)
+
+    def has_fatal(self):
+        return self._fatal_error is not None
+
+    def fatal_message(self):
+        return self._fatal_error
+
+    def mark_remaining_failed(self, reason):
+        for staged_path in list_files_recursive(self.staging_dir):
+            size_bytes = 0
+            staged_id = None
+            try:
+                size_bytes = os.path.getsize(staged_path)
+                staged_id = compute_staged_id(staged_path)
+            except OSError:
+                pass
+            self.ledger.append(
+                staged_path,
+                None,
+                "FAILED",
+                size_bytes=size_bytes,
+                error=reason,
+                staged_id=staged_id
+            )
+
+    def _set_fatal(self, message, last_error=None, last_file=None):
+        if self._fatal_error:
+            return
+        self._fatal_error = message
+        self.emit(
+            "upload_fatal",
+            force=True,
+            last_file=last_file,
+            message=message,
+            last_error=last_error
+        )
+        self._stop_event.set()
+        self._queue.put(None)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                staged_path = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if staged_path is None:
+                continue
+
+            if not os.path.exists(staged_path):
+                self._remove_pending(staged_path)
+                continue
+
+            if not is_path_inside(staged_path, self.staging_dir):
+                self._safe_delete_staged_file(staged_path)
+                continue
+
+            size_bytes = 0
+            try:
+                size_bytes = os.path.getsize(staged_path)
+            except OSError:
+                pass
+            staged_id = None
+            try:
+                staged_id = compute_staged_id(staged_path)
+            except Exception as e:
+                self.error_count += 1
+                self.emit("upload_error", last_file=os.path.basename(staged_path), error=str(e), attempt=0)
+                self._remove_pending(staged_path)
+                continue
+
+            existing_dest = self.ledger.get_valid_dest_for_staged_id(staged_id, size_bytes, staged_path=staged_path)
+            if existing_dest:
+                self.ledger.append(staged_path, existing_dest, "DONE", size_bytes=size_bytes, staged_id=staged_id)
+                self.confirmed_count += 1
+                deleted = self._safe_delete_staged_file(staged_path, known_size=size_bytes)
+                if deleted:
+                    self._untrack_file(staged_path, known_size=size_bytes)
+                    self.uploaded_count += 1
+                    self._emit_progress(last_file=os.path.basename(staged_path))
+                    self._remove_pending(staged_path)
+                continue
+
+            attempt = 0
+            uploaded = False
+            while not self._stop_event.is_set():
+                attempt += 1
+                dest_path = None
+                try:
+                    self.upload_attempts += 1
+                    dest_path = self.adapter.put(staged_path)
+                    if not self.adapter.verify(staged_path, dest_path):
+                        raise RuntimeError("Verification failed after upload")
+
+                    self.ledger.append(
+                        staged_path,
+                        dest_path,
+                        "DONE",
+                        size_bytes=size_bytes,
+                        staged_id=staged_id
+                    )
+                    self.confirmed_count += 1
+                    self.copied_count += 1
+                    deleted = True
+                    if os.path.exists(staged_path):
+                        deleted = self._safe_delete_staged_file(staged_path, known_size=size_bytes)
+
+                    if deleted:
+                        self.uploaded_count += 1
+                        self._untrack_file(staged_path, known_size=size_bytes)
+                        self._emit_progress(last_file=os.path.basename(staged_path))
+                        uploaded = True
+                    break
+                except Exception as e:
+                    self.error_count += 1
+                    self.ledger.append(
+                        staged_path,
+                        dest_path,
+                        "ERROR",
+                        size_bytes=size_bytes,
+                        error=str(e),
+                        staged_id=staged_id
+                    )
+                    retry_markers = {1, 3, 5, 10, self.max_upload_retries}
+                    last_emitted = self._last_error_emit_attempt.get(staged_path, 0)
+                    if attempt in retry_markers and attempt > last_emitted:
+                        self._last_error_emit_attempt[staged_path] = attempt
+                        self.emit(
+                            "upload_error",
+                            last_file=os.path.basename(staged_path),
+                            error=str(e),
+                            attempt=attempt
+                        )
+                    if attempt >= self.max_upload_retries:
+                        self.ledger.append(
+                            staged_path,
+                            dest_path,
+                            "FAILED",
+                            size_bytes=size_bytes,
+                            error=f"Exceeded retry limit ({self.max_upload_retries}): {e}",
+                            staged_id=staged_id
+                        )
+                        self._set_fatal(
+                            f"Destination unavailable; giving up after {self.max_upload_retries} retries.",
+                            last_error=str(e),
+                            last_file=os.path.basename(staged_path)
+                        )
+                        break
+                    sleep_sec = min(60, 2 ** (attempt - 1))
+                    time.sleep(sleep_sec)
+
+            self._remove_pending(staged_path)
+
+            # If stopping, keep file in staging for restart recovery.
+            if not uploaded and self._stop_event.is_set():
+                continue
+
+
+def reserve_unique_output_path(target_dir, base_name, ext):
+    """Reserve a unique output path without creating placeholder files."""
+    counter = 0
+    with filename_lock:
+        while True:
+            suffix = "" if counter == 0 else f"_{counter}"
+            candidate = os.path.join(target_dir, f"{base_name}{suffix}{ext}")
+            if candidate not in reserved_output_paths and not os.path.exists(candidate):
+                reserved_output_paths.add(candidate)
+                return candidate
+            counter += 1
+
+
+def release_reserved_output_path(path):
+    if not path:
+        return
+    with filename_lock:
+        reserved_output_paths.discard(path)
+
+
+def atomic_copy_file(src_path, dst_path):
+    """Copy to temporary file in destination directory, then atomic rename."""
+    temp_path = f"{dst_path}.tmp.{secrets.token_hex(4)}"
+    try:
+        shutil.copy2(src_path, temp_path)
+        os.replace(temp_path, dst_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def atomic_write_stream_to_file(write_func, dst_path):
+    """Write bytes to temp path through callback and atomically rename."""
+    temp_path = f"{dst_path}.tmp.{secrets.token_hex(4)}"
+    try:
+        write_func(temp_path)
+        os.replace(temp_path, dst_path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def atomic_write_text(path_value, content):
+    """Atomically write text content to a file in the same directory."""
+    temp_path = f"{path_value}.tmp.{secrets.token_hex(4)}"
+    try:
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path_value)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
 
 def get_batch_progress_file():
     """Get the path to the batch progress tracking file.
@@ -197,6 +1167,7 @@ def load_batch_manifest():
 def save_batch_progress(batch_num, total_batches, total_files=None, processed_indices=None, zip_fingerprint=None, output_dir=None, icloud_mode=None, actual_file_count=None):
     """Save the current batch progress to disk."""
     try:
+        overall_start = time.perf_counter()
         progress_file = get_batch_progress_file()
         data = {
             "last_completed_batch": batch_num,
@@ -206,7 +1177,11 @@ def save_batch_progress(batch_num, total_batches, total_files=None, processed_in
         if total_files is not None:
             data["total_files"] = total_files
         if processed_indices is not None:
-            processed_list = sorted(set(processed_indices))
+            # Callers maintain a set in-memory; avoid rebuilding it here.
+            if isinstance(processed_indices, set):
+                processed_list = sorted(processed_indices)
+            else:
+                processed_list = sorted(set(processed_indices))
             data["processed_indices"] = processed_list
             # Use actual_file_count if provided (includes duplicates), otherwise use processed_indices length
             data["processed_count"] = actual_file_count if actual_file_count is not None else len(processed_list)
@@ -217,8 +1192,16 @@ def save_batch_progress(batch_num, total_batches, total_files=None, processed_in
             data["output_dir"] = output_dir
         if icloud_mode is not None:
             data["icloud_mode"] = bool(icloud_mode)
-        with open(progress_file, 'w') as f:
-            json.dump(data, f)
+        serialize_start = time.perf_counter()
+        payload = json.dumps(data)
+        serialize_elapsed = time.perf_counter() - serialize_start
+        write_start = time.perf_counter()
+        atomic_write_text(progress_file, payload)
+        write_elapsed = time.perf_counter() - write_start
+        total_elapsed = time.perf_counter() - overall_start
+        verify_perf_log(
+            f"manifest_write prepare={serialize_elapsed:.4f}s write={write_elapsed:.4f}s total={total_elapsed:.4f}s indices={len(data.get('processed_indices', []))}"
+        )
     except Exception as e:
         print(f"Warning: Could not save batch progress: {e}", flush=True)
 
@@ -254,13 +1237,13 @@ def compute_zip_fingerprint(zip_path):
         return None
 
 def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, output_root=None):
-    global JSON_PATH, DOWNLOADS_DIR, OUTPUT_DIR, TEMP_DIR, CORRUPTED_DIR, REPORT_FILE, RAW_DL_NAME
+    global JSON_PATH, DOWNLOADS_DIR, OUTPUT_DIR, TEMP_DIR, CORRUPTED_DIR, REPORT_FILE, RAW_DL_NAME, PROCESSING_ROOT
     JSON_PATH = json_path
     DOWNLOADS_DIR = downloads_dir
 
     if output_dir:
         # Validate output path - prevent path traversal
-        abs_output = os.path.abspath(output_dir)
+        abs_output = canonical_dir(output_dir)
         if '..' in output_dir:
             raise ValueError("Output path cannot contain '..'")
         # Guard against deleting or writing to sensitive roots
@@ -294,12 +1277,13 @@ def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, outp
     # If output_root is provided, use it (for process_from_zip)
     # Otherwise use OUTPUT_DIR (for legacy direct calls)
     base_dir = output_root if output_root else OUTPUT_DIR
+    PROCESSING_ROOT = canonical_dir(base_dir)
 
     # Update derived paths - place temp/corrupted/report in the base directory (user-selected folder)
     # But processed files go in OUTPUT_DIR (which might be Processed_Memories_YYYY-MM-DD subfolder)
-    TEMP_DIR = os.path.join(base_dir, 'temp_processing')
-    CORRUPTED_DIR = os.path.join(base_dir, 'Corrupted_Memories')
-    REPORT_FILE = os.path.join(base_dir, 'detailed_report.json')
+    TEMP_DIR = os.path.join(PROCESSING_ROOT, 'temp_processing')
+    CORRUPTED_DIR = os.path.join(PROCESSING_ROOT, 'Corrupted_Memories')
+    REPORT_FILE = os.path.join(PROCESSING_ROOT, 'detailed_report.json')
     
     # Ensure directories exist
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -419,6 +1403,8 @@ def check_output_directory_available():
 file_size_index = {}
 # ZIP basename index (only populated for ZIP workflows)
 zip_name_index = {}
+# ZIP SID index (only populated for ZIP workflows)
+zip_sid_index = {}
 # Global processed index: filename -> size
 processed_index = {}
 
@@ -442,29 +1428,83 @@ def build_file_index(search_dir):
                 pass
     print(f"Index built. Found {sum(len(v) for v in file_size_index.values())} files matching size criteria.", flush=True)
 
-def build_processed_index(output_dir):
+def scan_existing_output_files(output_dir):
+    """
+    Single recursive scan used by Verify mode and processed index loading.
+    Returns:
+      - existing_files_nonzero: set of non-hidden filenames with size > 0
+      - processed_index_map: filename -> size (includes 0-byte files for compatibility)
+    """
+    scan_start = time.perf_counter()
+    existing_files_nonzero = set()
+    processed_index_map = {}
+    scanned_files = 0
+
+    for root, dirs, files in os.walk(output_dir):
+        # Match prior verify behavior: skip hidden directory trees entirely.
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for f in files:
+            if f.startswith('.'):
+                continue
+            p = os.path.join(root, f)
+            try:
+                size = os.path.getsize(p)
+            except (OSError, IOError):
+                continue
+            processed_index_map[f] = size
+            if size > 0:
+                existing_files_nonzero.add(f)
+            scanned_files += 1
+
+    scan_elapsed = time.perf_counter() - scan_start
+    verify_perf_log(
+        f"verify_scan files={scanned_files} unique_names={len(processed_index_map)} nonzero={len(existing_files_nonzero)} elapsed={scan_elapsed:.4f}s"
+    )
+    return existing_files_nonzero, processed_index_map
+
+
+def build_processed_index(output_dir, pre_scanned_index=None):
     print("Building processed file index (recursion enabled)...", flush=True)
     global processed_index
-    processed_index = {}
-    for root, _, files in os.walk(output_dir):
-        for f in files:
-            if f.startswith('.'): continue
-            try:
-                p = os.path.join(root, f)
-                processed_index[f] = os.path.getsize(p)
-            except (OSError, IOError): pass
+    if pre_scanned_index is None:
+        _, pre_scanned_index = scan_existing_output_files(output_dir)
+    processed_index = dict(pre_scanned_index)
     print(f"Processed Index built. Found {len(processed_index)} existing files.", flush=True)
+
+
+def build_verify_expected_filenames(memories):
+    """
+    Precompute expected filename stems for Verify mode to avoid repeated date parsing.
+    Returns list aligned with memories; each entry is (timestamp_name, ext) or None.
+    """
+    expected = [None] * len(memories)
+    for i, memory in enumerate(memories):
+        date_str = memory.get('Date')
+        if not date_str:
+            continue
+        try:
+            dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
+            timestamp_name = dt.strftime('%Y-%m-%d_%H-%M-%S')
+        except ValueError:
+            continue
+        media_type = memory.get('Media Type', 'Image')
+        ext = ".mp4" if media_type == "Video" else ".jpg"
+        expected[i] = (timestamp_name, ext)
+    return expected
 
 def build_file_index_from_zip(zip_file_obj):
     print("Building file index directly from ZIP...", flush=True)
-    global file_size_index, zip_name_index
+    global file_size_index, zip_name_index, zip_sid_index
     # We clear it? Or merge? Usually clear for new run.
     file_size_index = {}
     zip_name_index = {}
+    zip_sid_index = {}
     
     count = 0
     for info in zip_file_obj.infolist():
         if info.is_dir(): continue
+        if zipinfo_is_symlink(info):
+            continue
         
         # Filter unrelated files?
         if info.filename.endswith('/') or '__MACOSX' in info.filename:
@@ -482,6 +1522,10 @@ def build_file_index_from_zip(zip_file_obj):
         base_name = os.path.basename(info.filename)
         if base_name:
             zip_name_index.setdefault(base_name, []).append(info.filename)
+            sid_match = re.search(r'_([A-F0-9-]{36})-main\.', base_name, re.IGNORECASE)
+            if sid_match:
+                sid = sid_match.group(1).upper()
+                zip_sid_index.setdefault(sid, []).append(info.filename)
         count += 1
         
     print(f"ZIP Index built. Found {count} files.", flush=True)
@@ -490,6 +1534,7 @@ def process_zip(zip_path, output_path, ts_epoch=None):
     zip_name = os.path.basename(zip_path)
     extract_dir = os.path.join(TEMP_DIR, zip_name + "_extract")
     os.makedirs(extract_dir, exist_ok=True)
+    reserved_output = None
 
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -511,26 +1556,18 @@ def process_zip(zip_path, output_path, ts_epoch=None):
         # Determine true extension and final filename
         mime = mimetypes.guess_type(main_file)[0]
         base_path_no_ext = os.path.splitext(output_path)[0]
-        
+        target_dir = os.path.dirname(base_path_no_ext)
+        base_name = os.path.basename(base_path_no_ext)
         final_output = None
-        
+
         if (mime and mime.startswith('video')) or main_file.endswith('.mp4'):
             ext = ".mp4"
-            final_output = base_path_no_ext + ext
-            
-            # CRITICAL: Re-check collision with lock now that we know it is .mp4
-            with filename_lock:
-                 base_root = base_path_no_ext
-                 counter = 1
-                 while os.path.exists(final_output):
-                     final_output = f"{base_root}_{counter}{ext}"
-                     counter += 1
-                 # NOTE: No placeholder needed - atomic move creates file
-            
+            final_output = reserve_unique_output_path(target_dir, base_name, ext)
+            reserved_output = final_output
+
             result_msg = ""
             if overlay_file:
-                # Use temp file for atomic write
-                temp_output = final_output + ".tmp"
+                temp_output = f"{final_output}.tmp.{secrets.token_hex(4)}"
                 try:
                     cmd = [
                         FFMPEG_PATH, '-y',
@@ -541,98 +1578,100 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                         temp_output  # Write to temp first
                     ]
                     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    # Atomic move: only move if ffmpeg succeeded
-                    shutil.move(temp_output, final_output)
+                    os.replace(temp_output, final_output)
                     result_msg = "Success (Video Merge)"
-                except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                    # Cleanup temp file
+                except (subprocess.CalledProcessError, FileNotFoundError):
                     if os.path.exists(temp_output):
                         try:
                             os.remove(temp_output)
-                        except: pass
-                    
-                    # Fallback: copy main file without overlay
-                    shutil.copy2(main_file, final_output)
+                        except OSError:
+                            pass
+
+                    # Fallback still uses atomic write
+                    atomic_copy_file(main_file, final_output)
                     result_msg = "Success (Video Extract - No Overlay)"
             else:
-                shutil.copy2(main_file, final_output)
+                atomic_copy_file(main_file, final_output)
                 result_msg = "Success (Video Extract)"
-            
+
             if ts_epoch:
                 try:
                     os.utime(final_output, (ts_epoch, ts_epoch))
-                except (OSError, IOError): pass
-            
-            return {"status": "Success", "reason": result_msg, "file": os.path.basename(final_output)}
-        
+                except (OSError, IOError):
+                    pass
+
+            try:
+                if os.path.getsize(final_output) <= 0:
+                    return {"status": "Error", "reason": "Processed file is empty", "file": os.path.basename(final_output)}
+            except OSError as e:
+                return {"status": "Error", "reason": f"Could not stat processed file: {e}", "file": os.path.basename(final_output)}
+
+            return {
+                "status": "Success",
+                "reason": result_msg,
+                "file": os.path.basename(final_output),
+                "output_path": final_output
+            }
+
         else:
             ext = ".jpg"
-            final_output = base_path_no_ext + ext
-            
-            with filename_lock:
-                 base_root = base_path_no_ext
-                 
-                 # Reserve a unique filename
-                 counter = 1
-                 final_dest = base_path_no_ext + ext
-                 while os.path.exists(final_dest):
-                     final_dest = f"{base_root}_{counter}{ext}"
-                     counter += 1
-                 final_output = final_dest
-                 # NOTE: No placeholder needed - atomic move creates file
+            final_output = reserve_unique_output_path(target_dir, base_name, ext)
+            reserved_output = final_output
 
             result_msg = ""
             if overlay_file:
-                # Use temp file to prevent 0-byte files on failure
-                temp_output = final_output + ".tmp"
+                temp_output = f"{final_output}.tmp.{secrets.token_hex(4)}"
                 try:
                     with Image.open(main_file) as main_img:
                         with Image.open(overlay_file) as overlay_img:
                             main_img = main_img.convert("RGBA")
                             overlay_img = overlay_img.convert("RGBA")
                             if main_img.size != overlay_img.size:
-                               overlay_img = overlay_img.resize(main_img.size, Image.Resampling.LANCZOS)
+                                overlay_img = overlay_img.resize(main_img.size, Image.Resampling.LANCZOS)
                             combined = Image.alpha_composite(main_img, overlay_img)
                             combined = combined.convert("RGB")
-                            # Save to temp file first
                             combined.save(temp_output, "JPEG")
-                            combined.close()  # Explicit cleanup
-                            del combined       # Help GC
-                    
-                    # Atomic move: only move if save succeeded
-                    shutil.move(temp_output, final_output)
+                            combined.close()
+                            del combined
+
+                    os.replace(temp_output, final_output)
                     result_msg = "Success (Image Merge)"
-                    
                 except Exception as e:
-                    # Cleanup temp file if it exists
                     if os.path.exists(temp_output):
                         try:
                             os.remove(temp_output)
-                        except: pass
-                    
-                    # Remove placeholder (0-byte or corrupted)
-                    if os.path.exists(final_output):
-                        try:
-                            os.remove(final_output)
-                        except: pass
-                    
+                        except OSError:
+                            pass
                     return {"status": "Error", "reason": f"Merge failed: {str(e)}", "file": zip_name}
             else:
-                shutil.copy2(main_file, final_output)
+                atomic_copy_file(main_file, final_output)
                 result_msg = "Success (Image Extract)"
-            
+
             if ts_epoch:
                 try:
                     os.utime(final_output, (ts_epoch, ts_epoch))
-                except (OSError, IOError): pass
-                
-            return {"status": "Success", "reason": result_msg, "file": os.path.basename(final_output)}
+                except (OSError, IOError):
+                    pass
+
+            try:
+                if os.path.getsize(final_output) <= 0:
+                    return {"status": "Error", "reason": "Processed file is empty", "file": os.path.basename(final_output)}
+            except OSError as e:
+                return {"status": "Error", "reason": f"Could not stat processed file: {e}", "file": os.path.basename(final_output)}
+
+            return {
+                "status": "Success",
+                "reason": result_msg,
+                "file": os.path.basename(final_output),
+                "output_path": final_output
+            }
 
     except zipfile.BadZipFile:
         return {"status": "Error", "reason": "Bad Zip File", "file": zip_name}
     except Exception as e:
         return {"status": "Error", "reason": str(e), "file": zip_name}
     finally:
+        release_reserved_output_path(reserved_output)
         shutil.rmtree(extract_dir, ignore_errors=True)
 
 def save_error_report(mem_id, date_str, url, reason):
@@ -655,7 +1694,7 @@ def save_error_report(mem_id, date_str, url, reason):
     except Exception as e:
         print(f"Failed to save error report: {e}")
 
-def fast_pass_check(memories, output_dir, progress_callback=None):
+def fast_pass_check(memories, output_dir, progress_callback=None, existing_files=None, expected_filenames=None):
     """
     Fast Pass Pre-Check: Quickly verify if all expected files already exist.
     Returns (all_exist, existing_count, total_count, existing_indices) tuple.
@@ -672,46 +1711,25 @@ def fast_pass_check(memories, output_dir, progress_callback=None):
     
     print(f"Fast Pass: Checking {total} memories against existing files...", flush=True)
     
-    # Pre-scan existing files under output_dir to avoid repeated disk lookups.
-    existing_files = set()
-    for root, dirs, files in os.walk(output_dir):
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
-        for f in files:
-            if f.startswith('.'):
-                continue
-            path = os.path.join(root, f)
-            try:
-                if os.path.getsize(path) == 0:
-                    continue
-            except OSError:
-                continue
-            existing_files.add(f)
+    if existing_files is None:
+        existing_files, _ = scan_existing_output_files(output_dir)
+
+    if expected_filenames is None:
+        expected_filenames = build_verify_expected_filenames(memories)
+
+    match_start = time.perf_counter()
     
-    for i, memory in enumerate(memories):
-        date_str = memory.get('Date')
-        media_type = memory.get('Media Type', 'Image')
-        
-        if not date_str:
+    for i in range(total):
+        expected = expected_filenames[i] if i < len(expected_filenames) else None
+        if not expected:
             continue
-            
-        # Construct expected filename using same logic as process_memory
-        try:
-            dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
-            timestamp_name = dt.strftime('%Y-%m-%d_%H-%M-%S')
-        except ValueError:
-            continue
-        
-        # Determine extension
-        ext = ".mp4" if media_type == "Video" else ".jpg"
+        timestamp_name, ext = expected
         expected_filename = f"{timestamp_name}{ext}"
-        expected_path = os.path.join(output_dir, expected_filename)
         
         # Check if file exists (or any numbered variant like _1, _2, etc.)
-        file_found = False
         if expected_filename in existing_files:
             existing += 1
             existing_indices.add(i)
-            file_found = True
         else:
             # Check for numbered variants (same timestamp = multiple files)
             # This handles cases like 2023-10-01_14-30-00_1.jpg
@@ -720,7 +1738,6 @@ def fast_pass_check(memories, output_dir, progress_callback=None):
                 if variant_name in existing_files:
                     existing += 1
                     existing_indices.add(i)
-                    file_found = True
                     break
         
         # Progress update every 500 files
@@ -732,6 +1749,10 @@ def fast_pass_check(memories, output_dir, progress_callback=None):
         #         pass
     
     all_exist = existing >= total
+    match_elapsed = time.perf_counter() - match_start
+    verify_perf_log(
+        f"verify_match memories={total} existing={existing} elapsed={match_elapsed:.4f}s"
+    )
     print(f"Fast Pass: Found {existing} of {total} files.", flush=True)
     
     return all_exist, existing, total, existing_indices
@@ -766,14 +1787,14 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
 
     matches = None
     if zip_file:
-        # ZIP workflow: skip HEAD and match by filename when possible
+        # ZIP workflow: skip HEAD and prefer direct SID match against archive entries.
         remote_size = None
+        sid = extract_sid_from_download_url(download_url)
+        if sid:
+            matches = zip_sid_index.get(sid)
         url_name = os.path.basename(download_url.split('?', 1)[0])
-        if url_name:
+        if not matches and url_name:
             matches = zip_name_index.get(url_name)
-        if not matches:
-            # Allow download fallback without HEAD when ZIP lookup fails
-            remote_size = 0
     else:
         remote_size = get_remote_file_size(download_url)
         if remote_size:
@@ -809,8 +1830,8 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
              
              if not os.path.exists(dl_path) or (remote_size is not None and os.path.getsize(dl_path) != remote_size):
                  session = get_requests_session()
-                  # SECURITY: Disable redirects during download to prevent redirect-based attacks
-                 with session.get(download_url, stream=True, timeout=30, allow_redirects=False) as r:
+                 with session.get(download_url, stream=True, timeout=30, allow_redirects=True) as r:
+                     validate_download_redirect_chain(r)
                      if r.status_code == 403 or r.status_code == 410:
                          with expired_link_lock:
                              expired_link_counter += 1
@@ -832,6 +1853,7 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
                      
                      # SECURITY: Track download size to prevent disk exhaustion
                      downloaded_bytes = 0
+                     content_type = (r.headers.get('Content-Type') or '').lower()
                      with open(dl_path, 'wb') as f:
                          for chunk in r.iter_content(chunk_size=8192):
                              if chunk:  # filter out keep-alive new chunks
@@ -840,6 +1862,12 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
                                      # Abort - file exceeds size limit
                                      raise ValueError(f"Download exceeded max size limit: {MAX_DOWNLOAD_BYTES / (1024**3):.2f}GB")
                                  f.write(chunk)
+
+                     # Guard against silently saving redirects/errors as empty files.
+                     if downloaded_bytes <= 0:
+                         raise ValueError("Downloaded file is empty")
+                     if 'text/html' in content_type:
+                         raise ValueError(f"Unexpected content type for media download: {content_type}")
              
              local_path = dl_path
              local_filename = dl_filename
@@ -881,20 +1909,34 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
 
     if not local_path:
          return {"id": mem_id, "status": "Error", "reason": "Logic Error: No Local Path", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
+
+    # ZIP mode optimization:
+    # Copy ZIP member bytes to temp_processing under lock, then release lock for all heavy work.
+    if zip_file and not os.path.isabs(local_path):
+        member_name = local_path
+        suffix_hint = os.path.splitext(local_filename)[1] if local_filename and '.' in local_filename else '.bin'
+        try:
+            local_path, _ = stream_zip_member_to_temp(
+                zip_file=zip_file,
+                member_name=member_name,
+                zip_lock=zip_lock,
+                mem_id=mem_id,
+                suffix_hint=suffix_hint
+            )
+            local_filename = os.path.basename(local_filename or member_name)
+        except KeyError:
+            return {"id": mem_id, "status": "Error", "reason": f"ZIP entry not found: {member_name}", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
+        except Exception as e:
+            return {"id": mem_id, "status": "Error", "reason": f"ZIP stream failed: {e}", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
+
     # Detect if this is actually a ZIP file by reading magic bytes
     # CRITICAL: Downloaded overlay ZIPs may have .jpg extension based on Media Type
-    is_actual_zip = is_zip_file(local_path, zip_file, zip_lock) or local_filename.lower().endswith('.zip')
+    is_actual_zip = is_zip_file(local_path) or local_filename.lower().endswith('.zip')
 
     if not is_actual_zip:
         # DUPLICATE CHECK FOR NON-ZIP
         # We know local_path exists and has a size
-        if zip_file and not os.path.isabs(local_path):
-            try:
-                local_size = zip_file.getinfo(local_path).file_size
-            except KeyError:
-                return {"id": mem_id, "status": "Error", "reason": f"ZIP entry not found: {local_path}", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
-        else:
-            local_size = os.path.getsize(local_path)
+        local_size = os.path.getsize(local_path)
         
         with filename_lock:
             # GLOBAL INDEX CHECK (Handles Batches)
@@ -941,144 +1983,168 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
     # Thread-safe filename generation
     # Use CURRENT_BATCH_DIR if set (batch mode), otherwise fall back to OUTPUT_DIR (legacy)
     target_dir = CURRENT_BATCH_DIR if CURRENT_BATCH_DIR else OUTPUT_DIR
-
-    # CRITICAL: Generate the output path but DON'T create placeholder yet
-    # Placeholder will be created inside try block to ensure cleanup coverage
-    with filename_lock:
-        output_path = os.path.join(target_dir, f"{base_name}{ext}")
-        while os.path.exists(output_path):
-            output_path = os.path.join(target_dir, f"{base_name}_{counter}{ext}")
-            counter += 1
-        # NOTE: Removed placeholder creation from here - moved into try block
+    output_path = None
+    reserved_output = None
 
     try:
         if is_actual_zip:
-             # Handle Nested ZIP (Memories Overlay)
-             # NOTE: No placeholder needed - process_zip creates its own files atomically
-             if zip_file and not os.path.isabs(local_path):
-                 # Extract temp
-                 temp_zip_path = os.path.join(TEMP_DIR, f"inner_{mem_id}_{secrets.token_hex(4)}.zip")  # Random suffix
-                 with zip_file.open(local_path) as src, open(temp_zip_path, 'wb') as dst:
-                     shutil.copyfileobj(src, dst)
-                 
-                 res = process_zip(temp_zip_path, output_path, ts_epoch)
-                 res['id'] = mem_id
-                 
-                 if res['status'] == 'Error':
-                     try:
-                         shutil.copy2(temp_zip_path, os.path.join(CORRUPTED_DIR, local_filename))
-                     except (OSError, IOError): pass
-                 
-                 try: os.remove(temp_zip_path) 
-                 except (OSError, IOError): pass
-                 
-                 # Cleanup if temp download (the outer zip itself)
-                 if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
-                      try: os.remove(local_path) 
-                      except (OSError, IOError): pass
-                      
-                 return res
-             else:
-                 res = process_zip(local_path, output_path, ts_epoch)
-                 res['id'] = mem_id
-                 if res['status'] == 'Error':
-                     try:
-                         shutil.copy2(local_path, os.path.join(CORRUPTED_DIR, local_filename))
-                     except Exception: pass
-                 return res
+            # Use a base path only; process_zip will reserve final extension-specific filename.
+            output_path = os.path.join(target_dir, f"{base_name}{ext}")
 
-        else:
-            # Streaming Copy or FS Copy
-            # Create placeholder NOW (only for non-ZIP files, inside try for cleanup)
-            open(output_path, 'a').close()
-            
-            if zip_file and not os.path.isabs(local_path):
-                 # local_path is relative ZIP path
-                 
-                 # Optimization: Chunked Copy with Lock to allow concurrency
-                 # If we lock the whole copy, it's sequential. 
-                 # If we lock only reads, we interleave.
-                 
-                 chunk_size = 1024 * 1024 * 2 # 2MB chunks
-                 with open(output_path, 'wb') as dst:
-                     # We must lock the OPEN as well if it seeks? 
-                     # zf.open returns a ZipExtFile. 
-                     # We need to lock the creation of the handle AND the reads?
-                     # Actually, ZipFile.open modifies the shared file pointer.
-                     # So we must lock around 'with zip_file.open(...)'. 
-                     # BUT if we hold lock while 'src' is open, we hold it for the whole duration of use?
-                     # NO. ZipExtFile maintains its own position? 
-                     # Python's zipfile module is NOT thread safe. concurrent reads will corrupt.
-                     # The handle returned by open() shares the underlying file object.
-                     # So we MUST hold the lock whenever we call read() on the handle.
-                     pass 
-                     
-                     # Wait, if we can't have concurrent open handles, we can't interleave?
-                     # Correct. Standard ZipFile cannot support concurrent open handles efficiently because they seek the underlying file.
-                     # UNLESS we open the zip file multiple times? (Multiple file handles to disk).
-                     # That would allow true concurrency.
-                     # But we are passing `zip_file` object.
-                     
-                     # Fallback: Locked Read, Unlocked Write.
-                     # We must acquire lock, create handle, read chunk, release lock?
-                     # We can't keep handle open across lock release if other threads seek the file.
-                     # This is tricky.
-                     
-                     # Simple Solution: Lock the ENTIRE extract of one file.
-                     # This effectively serializes the ZIP reading part.
-                     # But allows writing to disk to happen "concurrently" with OTHER tasks?
-                     # No, if we hold lock, other threads wait.
-                     # But `process_memory` does other things (metadata, timestamp, DB check).
-                     # So locking only the COPY part is better than serializing the whole loop.
-                     
-                     if zip_lock:
-                         with zip_lock:
-                             with zip_file.open(local_path) as src:
-                                 shutil.copyfileobj(src, dst)
-                     else:
-                          # Fallback (Safety)
-                          with zip_file.open(local_path) as src:
-                              shutil.copyfileobj(src, dst)
-                              
-            else:
-                 # Standard copy
-                 shutil.copy2(local_path, output_path)
-
-            if ts_epoch:
+            res = process_zip(local_path, output_path, ts_epoch)
+            res['id'] = mem_id
+            if res['status'] == 'Error':
                 try:
-                    os.utime(output_path, (ts_epoch, ts_epoch))
-                except (OSError, IOError): pass
-            # Cleanup if temp download
+                    shutil.copy2(local_path, os.path.join(CORRUPTED_DIR, local_filename))
+                except Exception:
+                    pass
+
             if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
-                 try: os.remove(local_path) 
-                 except (OSError, IOError): pass
-            return {"id": mem_id, "status": "Success", "reason": "Processed (Streamed)" if zip_file else "Processed (Local)", "file": os.path.basename(output_path)}
-    except Exception as e:
-        if os.path.exists(output_path) and os.path.getsize(output_path) == 0:
-             try: os.remove(output_path) 
-             except (OSError, IOError): pass
-        
+                try:
+                    os.remove(local_path)
+                except (OSError, IOError):
+                    pass
+
+            return res
+
+        # Non-overlay file path: reserve then atomic write
+        output_path = reserve_unique_output_path(target_dir, base_name, ext)
+        reserved_output = output_path
+
+        atomic_copy_file(local_path, output_path)
+
+        if ts_epoch:
+            try:
+                os.utime(output_path, (ts_epoch, ts_epoch))
+            except (OSError, IOError):
+                pass
+
         try:
-             if os.path.exists(local_path):
-                 target_corrupt = os.path.join(CORRUPTED_DIR, local_filename)
-                 # Ensure unique name in corrupted dir
-                 if os.path.exists(target_corrupt):
-                     base, ext = os.path.splitext(local_filename)
-                     target_corrupt = os.path.join(CORRUPTED_DIR, f"{base}_{int(time.time())}{ext}")
-                 shutil.copy2(local_path, target_corrupt)
-                 print(f"Saved corrupted file to: {target_corrupt}")
-        except Exception as copy_err:
-             print(f"Failed to copy to corrupted: {copy_err}")
+            if os.path.getsize(output_path) <= 0:
+                raise ValueError("Processed file is empty")
+        except OSError as e:
+            raise ValueError(f"Could not stat processed file: {e}")
 
         if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
-            try: os.remove(local_path) 
-            except (OSError, IOError): pass
-        return {"id": mem_id, "status": "Error", "reason": str(e), "file": local_filename, "date": date_str, "download_url": download_url, "media_type": media_type}
+            try:
+                os.remove(local_path)
+            except (OSError, IOError):
+                pass
 
-def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, json_data=None, pause_batches=False, trust_manifest=False, zip_fingerprint=None):
+        return {
+            "id": mem_id,
+            "status": "Success",
+            "reason": "Processed (Streamed)" if zip_file else "Processed (Local)",
+            "file": os.path.basename(output_path),
+            "output_path": output_path
+        }
+    except Exception as e:
+        try:
+            if local_path and os.path.exists(local_path):
+                target_corrupt = os.path.join(CORRUPTED_DIR, local_filename)
+                if os.path.exists(target_corrupt):
+                    base, ext_name = os.path.splitext(local_filename)
+                    target_corrupt = os.path.join(CORRUPTED_DIR, f"{base}_{int(time.time())}{ext_name}")
+                shutil.copy2(local_path, target_corrupt)
+                print(f"Saved corrupted file to: {target_corrupt}")
+        except Exception as copy_err:
+            print(f"Failed to copy to corrupted: {copy_err}")
+
+        if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+            except (OSError, IOError):
+                pass
+
+        return {
+            "id": mem_id,
+            "status": "Error",
+            "reason": str(e),
+            "file": local_filename,
+            "date": date_str,
+            "download_url": download_url,
+            "media_type": media_type
+        }
+    finally:
+        release_reserved_output_path(reserved_output)
+
+def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, json_data=None, pause_batches=False,
+         trust_manifest=False, zip_fingerprint=None, auto_upload=False, destination_dir=None, cache_gb=5.0,
+         cache_low_gb=3.0, upload_mode='copy', staging_dir=None, max_upload_retries=20):
     # Declare global variable at the top of the function
-    global ORIGINAL_TOTAL_MEMORIES
-    
+    global ORIGINAL_TOTAL_MEMORIES, AUTO_UPLOAD_ENABLED, AUTO_DESTINATION_DIR, AUTO_CACHE_GB
+    global AUTO_CACHE_LOW_GB, AUTO_UPLOAD_MODE, AUTO_STAGING_DIR, AUTO_MAX_UPLOAD_RETRIES
+
+    AUTO_UPLOAD_ENABLED = bool(auto_upload)
+    AUTO_DESTINATION_DIR = destination_dir
+    AUTO_CACHE_GB = float(cache_gb)
+    AUTO_CACHE_LOW_GB = float(cache_low_gb)
+    AUTO_UPLOAD_MODE = upload_mode
+    AUTO_STAGING_DIR = staging_dir if staging_dir else os.path.join(PROCESSING_ROOT, '.staging')
+    AUTO_MAX_UPLOAD_RETRIES = int(max_upload_retries)
+
+    def fail_auto_upload_validation(message):
+        emit_processing_event(
+            progress_callback,
+            "upload_fatal",
+            message=message,
+            last_error=message,
+            dest_dir=AUTO_DESTINATION_DIR
+        )
+        raise ValueError(message)
+
+    if AUTO_UPLOAD_ENABLED:
+        if not AUTO_DESTINATION_DIR:
+            fail_auto_upload_validation("Auto upload requires a destination directory.")
+        if AUTO_UPLOAD_MODE not in ('copy', 'move'):
+            fail_auto_upload_validation("upload_mode must be 'copy' or 'move'.")
+        if AUTO_CACHE_GB <= 0:
+            fail_auto_upload_validation("cache_gb must be > 0.")
+        if AUTO_CACHE_LOW_GB < 0 or AUTO_CACHE_LOW_GB > AUTO_CACHE_GB:
+            fail_auto_upload_validation("cache_low_gb must be between 0 and cache_gb.")
+        if AUTO_MAX_UPLOAD_RETRIES <= 0:
+            fail_auto_upload_validation("max_upload_retries must be > 0.")
+
+        # Canonicalize all paths so safety checks are robust across symlinks.
+        processing_root_real = canonicalize_dir_path(PROCESSING_ROOT)
+        AUTO_STAGING_DIR = canonicalize_dir_path(AUTO_STAGING_DIR)
+        AUTO_DESTINATION_DIR = canonicalize_dir_path(AUTO_DESTINATION_DIR)
+
+        if AUTO_DESTINATION_DIR == AUTO_STAGING_DIR:
+            fail_auto_upload_validation("destination_dir and staging_dir must be different.")
+        if is_path_inside(AUTO_DESTINATION_DIR, AUTO_STAGING_DIR):
+            fail_auto_upload_validation("destination_dir cannot be inside staging_dir.")
+        if is_path_inside(AUTO_STAGING_DIR, AUTO_DESTINATION_DIR):
+            fail_auto_upload_validation("staging_dir cannot be inside destination_dir.")
+
+        # Prevent recursive destination writes into the processor working tree.
+        if is_path_inside(AUTO_DESTINATION_DIR, processing_root_real):
+            fail_auto_upload_validation("destination_dir cannot be inside the processing output root.")
+        if is_path_inside(processing_root_real, AUTO_DESTINATION_DIR):
+            fail_auto_upload_validation("destination_dir cannot be a parent of the processing output root.")
+
+        try:
+            preflight_writable_dir(AUTO_STAGING_DIR)
+            preflight_writable_dir(AUTO_DESTINATION_DIR)
+        except ValueError as e:
+            fail_auto_upload_validation(str(e))
+
+        try:
+            _, _, staging_free_bytes = shutil.disk_usage(AUTO_STAGING_DIR)
+        except OSError as e:
+            fail_auto_upload_validation(f"Could not check free space for staging directory: {AUTO_STAGING_DIR} ({e})")
+
+        free_gb = staging_free_bytes / (1024**3)
+        safety_buffer_gb = max(SAFETY_BUFFER_GB, round(0.10 * free_gb, 1))
+        required_gb = AUTO_CACHE_GB + safety_buffer_gb
+        required_bytes = required_gb * (1024**3)
+
+        if staging_free_bytes < required_bytes:
+            fail_auto_upload_validation(
+                f"Insufficient free disk space on staging volume. Free: {free_gb:.1f} GB, "
+                f"required: {required_gb:.1f} GB (cache {AUTO_CACHE_GB:.1f} GB + buffer {safety_buffer_gb:.1f} GB)."
+            )
+
     # ..\n    # ..\n    # Skip loading JSON if provided
     if json_data:
         data = json_data
@@ -1102,39 +2168,45 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     processed_indices_set = set()
     previously_processed = 0
     memories_with_index = list(enumerate(memories))
+    manifest = load_batch_manifest()
+    manifest_processed_count = None
 
-    if trust_manifest:
-        print("Resume mode: Skip Files Already Processed", flush=True)
-        manifest = load_batch_manifest()
+    if manifest:
+        manifest_processed_count = manifest.get("processed_count")
+        manifest_zip = manifest.get("zip_fingerprint")
+        if manifest_zip and zip_fingerprint and manifest_zip != zip_fingerprint and (trust_manifest or auto_upload):
+            raise ValueError("ZIP export does not match previous run. Please choose Verify Files or Start Fresh.")
+
+    if trust_manifest or auto_upload:
+        mode_label = "Resume mode: Skip Files Already Processed" if trust_manifest else "Auto Upload mode: Using manifest resume state"
+        print(mode_label, flush=True)
+
         if not manifest:
-            print("Warning: Manifest missing or corrupted; falling back to Verify Files.", flush=True)
-            trust_manifest = False
+            if trust_manifest:
+                print("Warning: Manifest missing or corrupted; falling back to Verify Files.", flush=True)
+                trust_manifest = False
+            else:
+                print("Auto Upload mode: no manifest found, starting from beginning.", flush=True)
         else:
-            manifest_zip = manifest.get("zip_fingerprint")
-            if manifest_zip and zip_fingerprint and manifest_zip != zip_fingerprint:
-                raise ValueError("ZIP export does not match previous run. Please choose Verify Files or Start Fresh.")
-
             processed_list = manifest.get("processed_indices")
             if processed_list is None:
                 last_index = manifest.get("last_index")
                 if isinstance(last_index, int) and last_index >= 0:
                     processed_list = list(range(last_index + 1))
+
             if processed_list:
                 for i in processed_list:
                     try:
                         processed_indices_set.add(int(i))
                     except (ValueError, TypeError):
                         pass
-            else:
+
+                ORIGINAL_TOTAL_MEMORIES = len(memories)
+                memories_with_index = [(i, m) for i, m in memories_with_index if i not in processed_indices_set]
+                print(f"Skipping {len(processed_indices_set)} previously processed memories.", flush=True)
+            elif trust_manifest:
                 print("Warning: Manifest missing processed indices; falling back to Verify Files.", flush=True)
                 trust_manifest = False
-
-        if trust_manifest and processed_indices_set:
-            # Note: previously_processed will be updated later after scanning batch folders
-            # This ensures we count actual files on disk, not just manifest entries
-            ORIGINAL_TOTAL_MEMORIES = len(memories)
-            memories_with_index = [(i, m) for i, m in memories_with_index if i not in processed_indices_set]
-            print(f"Skip Files Already Processed: Skipping {len(processed_indices_set)} previously processed memories.", flush=True)
     else:
         print("Resume mode: Verify Files", flush=True)
 
@@ -1143,7 +2215,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # === FAST PASS PRE-CHECK ===
     # If not clearing output, check if all files already exist on disk
     existing_indices = set()  # Track which memories already exist
-    if not trust_manifest and not clear_output and os.path.exists(OUTPUT_DIR):
+    verify_scan_processed_index = None
+    if not trust_manifest and not auto_upload and not clear_output and os.path.exists(OUTPUT_DIR):
         print("Verifying existing files...", flush=True)
         
         # Send status update to UI
@@ -1152,8 +2225,16 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 progress_callback((-1, len(memories)))  # -1 signals "verifying" phase
             except:
                 pass
-        
-        all_exist, existing_count, total_count, existing_indices = fast_pass_check(memories, OUTPUT_DIR, progress_callback)
+
+        verify_existing_files, verify_scan_processed_index = scan_existing_output_files(OUTPUT_DIR)
+        expected_verify_filenames = build_verify_expected_filenames(memories)
+        all_exist, existing_count, total_count, existing_indices = fast_pass_check(
+            memories,
+            OUTPUT_DIR,
+            progress_callback,
+            existing_files=verify_existing_files,
+            expected_filenames=expected_verify_filenames
+        )
         
         if all_exist and existing_count > 0:
             print(f"✅ Fast Pass: All {existing_count} files verified on disk. Skipping extraction.", flush=True)
@@ -1230,14 +2311,72 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         os.makedirs(CORRUPTED_DIR, exist_ok=True)
     
     # Build processed index if we are NOT clearing output (meaning we are resuming/adding)
-    if not clear_output:
-        build_processed_index(OUTPUT_DIR)
+    if not clear_output and not auto_upload:
+        build_processed_index(OUTPUT_DIR, pre_scanned_index=verify_scan_processed_index)
     else:
         global processed_index
-        processed_index = {} # Reset
+        processed_index = {}  # Reset
 
     print("Starting processing...")
     results = []
+
+    upload_manager = None
+    if AUTO_UPLOAD_ENABLED:
+        os.makedirs(AUTO_STAGING_DIR, exist_ok=True)
+        ledger = UploadLedger(os.path.join(PROCESSING_ROOT, UPLOAD_LEDGER_FILE))
+        adapter = FolderDestinationAdapter(AUTO_DESTINATION_DIR, AUTO_UPLOAD_MODE)
+        upload_manager = AutoUploadManager(
+            staging_dir=AUTO_STAGING_DIR,
+            adapter=adapter,
+            ledger=ledger,
+            progress_callback=progress_callback,
+            cache_gb=AUTO_CACHE_GB,
+            cache_low_gb=AUTO_CACHE_LOW_GB,
+            max_upload_retries=AUTO_MAX_UPLOAD_RETRIES
+        )
+        upload_manager.prepare()
+        upload_manager.start()
+        recovered = upload_manager.recover_pending()
+        if recovered > 0:
+            upload_manager.emit("upload_progress", force=True, last_file=None, recovered_staged=recovered)
+
+    auto_cache_pause_active = False
+
+    def enforce_auto_cache_backpressure():
+        nonlocal auto_cache_pause_active
+        if not upload_manager:
+            return
+        while not ABORT_PROCESSING.is_set() and not PAUSE_REQUESTED.is_set():
+            if upload_manager.has_fatal():
+                ABORT_PROCESSING.set()
+                break
+            staging_bytes = upload_manager.staging_bytes()
+            if staging_bytes >= upload_manager.cache_bytes:
+                if not auto_cache_pause_active:
+                    upload_manager.emit(
+                        "auto_pause",
+                        last_file=None,
+                        reason="cache_full",
+                        staging_gb=round(staging_bytes / (1024**3), 3),
+                        cache_gb=AUTO_CACHE_GB
+                    )
+                    auto_cache_pause_active = True
+                time.sleep(1)
+                continue
+
+            if auto_cache_pause_active and staging_bytes <= upload_manager.cache_low_bytes:
+                upload_manager.emit(
+                    "auto_resume",
+                    last_file=None,
+                    staging_gb=round(staging_bytes / (1024**3), 3),
+                    cache_low_gb=AUTO_CACHE_LOW_GB
+                )
+                auto_cache_pause_active = False
+                break
+
+            if not auto_cache_pause_active:
+                break
+            time.sleep(1)
     
     zip_lock = threading.Lock() if zip_file else None
     
@@ -1302,6 +2441,11 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     # Total existing files = files in batches + orphaned root files
     total_existing_files = existing_batch_files + orphaned_root_files
+    if auto_upload:
+        if isinstance(manifest_processed_count, int) and manifest_processed_count >= 0:
+            total_existing_files = manifest_processed_count
+        elif processed_indices_set:
+            total_existing_files = len(processed_indices_set)
     print(f"Total existing processed files: {total_existing_files}")
 
     # Update previously_processed count for ALL modes (trust and verify)
@@ -1319,7 +2463,12 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # PRIORITY 1: Use persisted batch progress if available
     # This ensures that if we marked "Batch 3" as complete, we don't try to backfill it
     # even if it has < 500 files (due to duplicates/skips)
-    if persisted_start_batch > 0:
+    if auto_upload:
+        # In Auto Upload mode, processed_indices in manifest is the source of truth.
+        # Start fresh on remaining items after filtering by processed_indices_set.
+        start_batch = 0
+        files_to_complete_batch = 0
+    elif persisted_start_batch > 0:
         start_batch = persisted_start_batch
         print(f"Resuming from persisted state: Starting at Batch_{start_batch + 1:02d}")
 
@@ -1371,6 +2520,20 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # Track actual files organized (not memory entries)
     # Start with existing files already in the output directory
     total_files_organized = total_existing_files
+
+    def emit_zip_batch_metrics(batch_name, completed_files, batch_started_at):
+        if not (ZIP_METRICS_ENABLED and zip_file):
+            return
+        elapsed = max(0.0001, time.perf_counter() - batch_started_at)
+        throughput = completed_files / elapsed
+        metrics = snapshot_zip_metrics()
+        mb_read = metrics["bytes_read"] / (1024 * 1024)
+        print(
+            f"[ZIP_METRICS] {batch_name}: throughput={throughput:.2f} files/s, "
+            f"lock_wait={metrics['lock_wait_sec']:.3f}s, zip_read={metrics['read_sec']:.3f}s, "
+            f"zip_bytes={mb_read:.1f}MB, members={metrics['members']}",
+            flush=True
+        )
     
     for batch_num in range(start_batch, num_batches):
         if ABORT_PROCESSING.is_set():
@@ -1402,7 +2565,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         memories_processed_so_far = end_idx
         
         batch_name = f"Batch_{batch_num + 1:02d}"
-        batch_dir = os.path.join(OUTPUT_DIR, batch_name)
+        batch_dir = os.path.join(AUTO_STAGING_DIR, batch_name) if auto_upload else os.path.join(OUTPUT_DIR, batch_name)
         os.makedirs(batch_dir, exist_ok=True)
 
         # Set CURRENT_BATCH_DIR so all files are written directly to this batch folder
@@ -1410,6 +2573,12 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         CURRENT_BATCH_DIR = batch_dir
 
         print(f"\n--- Processing {batch_name} ({len(batch_memories)} files) ---", flush=True)
+        batch_started_at = time.perf_counter()
+        if ZIP_METRICS_ENABLED and zip_file:
+            reset_zip_metrics()
+
+        if auto_upload:
+            enforce_auto_cache_backpressure()
         
         # Check space once per batch to reduce per-file overhead
         check_space_and_wait(os.path.dirname(OUTPUT_DIR))
@@ -1422,53 +2591,85 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             raise
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            # Process this batch
-            future_to_mem = {executor.submit(process_memory, m, start_idx + i, progress_callback, zip_file, zip_lock): orig_idx for i, (orig_idx, m) in enumerate(batch_memories)}
-            
+            # Incremental submission keeps cache overshoot bounded by in-flight workers.
+            work_items = deque(enumerate(batch_memories))
+            future_to_mem = {}
             batch_count = 0
+            batch_success_count = 0
             pause_detected = False
             processed_orig_indices = []  # Track which indices actually completed
-            
-            for future in concurrent.futures.as_completed(future_to_mem):
-                # Check for hard abort (disk ejection, critical error)
+
+            def submit_next_work():
+                if ABORT_PROCESSING.is_set() or PAUSE_REQUESTED.is_set() or not work_items:
+                    return False
+                if auto_upload and upload_manager:
+                    enforce_auto_cache_backpressure()
+                    if upload_manager.has_fatal():
+                        ABORT_PROCESSING.set()
+                        return False
+                local_idx, (orig_idx, mem) = work_items.popleft()
+                future = executor.submit(process_memory, mem, start_idx + local_idx, progress_callback, zip_file, zip_lock)
+                future_to_mem[future] = orig_idx
+                return True
+
+            while len(future_to_mem) < workers and work_items and not PAUSE_REQUESTED.is_set() and not ABORT_PROCESSING.is_set():
+                if not submit_next_work():
+                    break
+
+            while future_to_mem:
                 if ABORT_PROCESSING.is_set():
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
-                
-                # Check for graceful pause - let this future's result be collected, but stop after
+                done, _ = concurrent.futures.wait(
+                    list(future_to_mem.keys()),
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
+
+                for future in done:
+                    orig_idx = future_to_mem.pop(future)
+                    res = future.result()
+                    results.append(res)
+                    batch_count += 1
+
+                    # Track which original index completed successfully
+                    if res.get('status') != 'Error':
+                        processed_orig_indices.append(orig_idx)
+                    if res.get('status') == 'Success':
+                        batch_success_count += 1
+                        if auto_upload and upload_manager:
+                            output_file_path = res.get('output_path')
+                            if output_file_path:
+                                upload_manager.enqueue(output_file_path)
+
+                    if batch_count % 100 == 0:
+                        print(f"  {batch_name}: {batch_count}/{len(batch_memories)}...")
+
+                        # Check if output directory still exists (mid-batch ejection detection)
+                        try:
+                            check_output_directory_available()
+                        except RuntimeError as e:
+                            print(f"❌ {e}", flush=True)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            raise
+
                 if PAUSE_REQUESTED.is_set() and not pause_detected:
                     pause_detected = True
-                    in_flight_count = len([f for f in future_to_mem if not f.done()])
+                    in_flight_count = len(future_to_mem)
                     print(f"\n⚠️  Pause requested. Waiting for {in_flight_count} in-flight files to complete...", flush=True)
-                    # DON'T cancel or shutdown - let remaining submitted futures complete
-                    
-                res = future.result()
-                results.append(res)
-                batch_count += 1
-                
-                # Track which original index completed successfully
-                orig_idx = future_to_mem[future]
-                if res.get('status') != 'Error':
-                    processed_orig_indices.append(orig_idx)
-                
-                # DISABLED: Don't send progress during batch (memory entry count)
-                # Progress is now sent AFTER batch completes with actual file count
-                # global_count = start_idx + batch_count
-                # if progress_callback:
-                #     try:
-                #         progress_callback((global_count, total))
-                #     except (OSError, IOError): pass
-                
-                if batch_count % 100 == 0:
-                    print(f"  {batch_name}: {batch_count}/{len(batch_memories)}...")
-                    
-                    # Check if output directory still exists (mid-batch ejection detection)
-                    try:
-                        check_output_directory_available()
-                    except RuntimeError as e:
-                        print(f"❌ {e}", flush=True)
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        raise
+
+                if auto_upload and upload_manager and upload_manager.has_fatal():
+                    ABORT_PROCESSING.set()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+
+                while (
+                    not pause_detected
+                    and not ABORT_PROCESSING.is_set()
+                    and len(future_to_mem) < workers
+                    and work_items
+                ):
+                    if not submit_next_work():
+                        break
             
             # If pause was requested, handle graceful cleanup after all in-flight completed
             if pause_detected or PAUSE_REQUESTED.is_set():
@@ -1478,9 +2679,13 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 processed_indices_set.update(processed_orig_indices)
                 
                 # Count files in batch folder
-                files_in_batch = len([f for f in os.listdir(batch_dir)
-                                     if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')])
+                if auto_upload:
+                    files_in_batch = batch_success_count
+                else:
+                    files_in_batch = len([f for f in os.listdir(batch_dir)
+                                         if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')])
                 total_files_organized += files_in_batch
+                emit_zip_batch_metrics(batch_name, files_in_batch, batch_started_at)
                 
                 # Save manifest with accurate count
                 save_batch_progress(
@@ -1511,17 +2716,25 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                         pass
                 
                 print("Exiting gracefully after pause.", flush=True)
+                if upload_manager:
+                    upload_manager.stop(wait=False)
                 sys.exit(0)
         
-        # Mark these indices as processed for manifest tracking (full batch completed)
-        if batch_memories:
-            processed_indices_set.update(orig_idx for orig_idx, _ in batch_memories)
+        # Mark indices conservatively if batch was interrupted.
+        if batch_memories and not ABORT_PROCESSING.is_set():
+            processed_indices_set.update(processed_orig_indices)
+        elif ABORT_PROCESSING.is_set():
+            processed_indices_set.update(processed_orig_indices)
 
         # Count files in batch folder (files are already written directly to batch_dir)
-        files_in_batch = len([f for f in os.listdir(batch_dir)
-                             if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')])
+        if auto_upload:
+            files_in_batch = batch_success_count
+        else:
+            files_in_batch = len([f for f in os.listdir(batch_dir)
+                                 if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')])
 
         print(f"  {batch_name} complete: {files_in_batch} files processed.", flush=True)
+        emit_zip_batch_metrics(batch_name, files_in_batch, batch_started_at)
 
         # Update cumulative file count
         total_files_organized += files_in_batch
@@ -1546,12 +2759,15 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             icloud_mode=pause_batches,
             actual_file_count=total_files_organized  # Pass actual file count (includes duplicates)
         )
+
+        if ABORT_PROCESSING.is_set():
+            break
         
         # === PAUSE FOR CLOUD SYNC ===
         # If pause_batches is True and this is NOT the last batch, pause and wait for resume
         if pause_batches and batch_num < num_batches - 1 and not ABORT_PROCESSING.is_set():
             # Create a signal file path for resume trigger - use PARENT dir (matches main.js)
-            resume_signal_file = os.path.join(os.path.dirname(OUTPUT_DIR), ".memsavr_resume_signal")
+            resume_signal_file = os.path.join(os.path.dirname(OUTPUT_DIR), RESUME_SIGNAL_FILENAME)
             
             # Remove any stale signal file first
             if os.path.exists(resume_signal_file):
@@ -1595,6 +2811,35 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 sys.exit(0)
     
     print(f"\nAll batches processed.")
+
+    cloud_delivery_summary = None
+    if upload_manager:
+        print("Waiting for uploader queue to drain...", flush=True)
+        upload_manager.wait_for_drain()
+        enforce_auto_cache_backpressure()
+        upload_manager.stop(wait=True)
+        if upload_manager.has_fatal():
+            fatal_message = upload_manager.fatal_message() or "Auto upload fatal error"
+            upload_manager.mark_remaining_failed(fatal_message)
+            raise RuntimeError(fatal_message)
+
+        remaining_staged_paths = list_staged_media_files(AUTO_STAGING_DIR)
+        remaining_staging_bytes = 0
+        for staged_path in remaining_staged_paths:
+            try:
+                remaining_staging_bytes += os.path.getsize(staged_path)
+            except OSError:
+                pass
+        cloud_delivery_summary = {
+            "upload_confirmed_in_destination": int(upload_manager.confirmed_count),
+            "upload_copied_this_run": int(upload_manager.copied_count),
+            "upload_error_events": int(upload_manager.error_count),
+            "upload_attempts": int(upload_manager.upload_attempts),
+            "upload_remaining_in_staging": int(len(remaining_staged_paths)),
+            "upload_remaining_staging_bytes": int(remaining_staging_bytes),
+            "destination_dir": AUTO_DESTINATION_DIR,
+            "staging_dir": AUTO_STAGING_DIR
+        }
 
     # Keep manifest after completion - allows user to choose Skip/Verify/Start Fresh on next run
     # This prevents duplicate processing and gives users control
@@ -1661,53 +2906,63 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         elif s == 'Skipped': skipped_count += 1
         elif s == 'Error': error_count += 1
     
-    # Count TOTAL files across all batch folders to get true success count
-    # This includes files from previous runs
-    for root, _, files in os.walk(OUTPUT_DIR):
-        for f in files:
-            if f.startswith('.'):
-                continue  # Skip hidden files
-            filepath = os.path.join(root, f)
-            try:
-                filesize = os.path.getsize(filepath)
-                if filesize > 0:  # Only count non-placeholder files
-                    success_count += 1
-                    total_size += filesize
-                    if f.lower().endswith('.mp4'):
-                        videos_count += 1
-                    else:
-                        images_count += 1
-            except (OSError, IOError): 
-                pass
-    
-    print(f"Total files in all batches: {success_count} ({images_count} images, {videos_count} videos)")
-
-    # Load manifest to get accurate processed_count (source of truth for total across runs)
-    manifest_processed_count = None
-    manifest_path = os.path.join(OUTPUT_DIR, '.batch_progress.json')
-    if os.path.exists(manifest_path):
-        try:
-            with open(manifest_path, 'r') as f:
-                manifest_data = json.load(f)
-                manifest_processed_count = manifest_data.get('processed_count')
-        except Exception as e:
-            print(f"Warning: Could not read manifest processed_count: {e}", flush=True)
-
-    # Count actual files on disk for verification
-    actual_files_on_disk = 0
-    try:
+    # Count TOTAL files for summary.
+    if auto_upload:
+        if isinstance(manifest_processed_count, int) and manifest_processed_count >= 0:
+            success_count = manifest_processed_count
+        else:
+            success_count = total_files_organized
+        images_count = current_run_images
+        videos_count = current_run_videos
+    else:
         for root, _, files in os.walk(OUTPUT_DIR):
             for f in files:
                 if f.startswith('.'):
                     continue  # Skip hidden files
                 filepath = os.path.join(root, f)
                 try:
-                    if os.path.getsize(filepath) > 0:
-                        actual_files_on_disk += 1
-                except OSError:
+                    filesize = os.path.getsize(filepath)
+                    if filesize > 0:  # Only count non-placeholder files
+                        success_count += 1
+                        total_size += filesize
+                        if f.lower().endswith('.mp4'):
+                            videos_count += 1
+                        else:
+                            images_count += 1
+                except (OSError, IOError):
                     pass
-    except Exception:
-        actual_files_on_disk = -1  # Signal that count failed
+    
+    print(f"Total files in all batches: {success_count} ({images_count} images, {videos_count} videos)")
+
+    # Refresh manifest_processed_count from canonical manifest path when needed.
+    if manifest_processed_count is None:
+        manifest_path = get_batch_progress_file()
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, 'r') as f:
+                    manifest_data = json.load(f)
+                    manifest_processed_count = manifest_data.get('processed_count')
+            except Exception as e:
+                print(f"Warning: Could not read manifest processed_count: {e}", flush=True)
+
+    # Count actual files on disk for verification
+    actual_files_on_disk = 0
+    if auto_upload:
+        actual_files_on_disk = success_count
+    else:
+        try:
+            for root, _, files in os.walk(OUTPUT_DIR):
+                for f in files:
+                    if f.startswith('.'):
+                        continue  # Skip hidden files
+                    filepath = os.path.join(root, f)
+                    try:
+                        if os.path.getsize(filepath) > 0:
+                            actual_files_on_disk += 1
+                    except OSError:
+                        pass
+        except Exception:
+            actual_files_on_disk = -1  # Signal that count failed
 
     stats = {
         "success": success_count,  # Total files on disk (unique)
@@ -1727,8 +2982,11 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         "manifest_total_files": manifest_total_files,
         "manifest_processed_count": manifest_processed_count,  # From manifest (source of truth)
         "actual_files_on_disk": actual_files_on_disk,  # Verification count (should match success)
-        "report_success_count": current_run_success  # Number of success entries in report
+        "report_success_count": current_run_success,  # Number of success entries in report
+        "auto_upload": bool(AUTO_UPLOAD_ENABLED)
     }
+    if cloud_delivery_summary:
+        stats.update(cloud_delivery_summary)
 
     with open(REPORT_FILE, 'w') as f:
         json.dump(results, f, indent=2)
@@ -1765,13 +3023,27 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     return stats
 
-def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=None, pause_batches=False, trust_manifest=False):
+def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=None, pause_batches=False,
+                     trust_manifest=False, auto_upload=False, destination_dir=None, cache_gb=5.0,
+                     cache_low_gb=3.0, upload_mode='copy', staging_dir=None, max_upload_retries=20):
     """
     Orchestrates the One-Click workflow:
     1. Open Zip (Stream mode)
     2. Find JSON in Zip
     3. Run processing with Zip context
     """
+    if not zip_path or not isinstance(zip_path, str):
+        raise ValueError("ZIP path is required.")
+    zip_candidate = os.path.abspath(zip_path)
+    if not os.path.exists(zip_candidate):
+        raise FileNotFoundError(f"ZIP path does not exist: {zip_candidate}")
+    zip_lstat = os.lstat(zip_candidate)
+    if stat.S_ISLNK(zip_lstat.st_mode):
+        raise ValueError("ZIP path cannot be a symbolic link.")
+    if not stat.S_ISREG(zip_lstat.st_mode):
+        raise ValueError("ZIP path must be a regular file.")
+    zip_path = os.path.realpath(zip_candidate)
+
     if not output_root:
         output_root = os.path.dirname(os.path.abspath(zip_path))
         
@@ -1825,7 +3097,28 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
             
             zip_fingerprint = compute_zip_fingerprint(zip_path)
             # Call main with zip context and pre-loaded data
-            result = main(limit=limit, clear_output=False, progress_callback=progress_callback, zip_file=zf, json_data=json_content, pause_batches=pause_batches, trust_manifest=trust_manifest, zip_fingerprint=zip_fingerprint)
+            resolved_staging_dir = (
+                os.path.abspath(staging_dir)
+                if staging_dir
+                else os.path.join(os.path.abspath(output_root), '.staging')
+            )
+            result = main(
+                limit=limit,
+                clear_output=False,
+                progress_callback=progress_callback,
+                zip_file=zf,
+                json_data=json_content,
+                pause_batches=pause_batches,
+                trust_manifest=trust_manifest,
+                zip_fingerprint=zip_fingerprint,
+                auto_upload=auto_upload,
+                destination_dir=destination_dir,
+                cache_gb=cache_gb,
+                cache_low_gb=cache_low_gb,
+                upload_mode=upload_mode,
+                staging_dir=resolved_staging_dir,
+                max_upload_retries=max_upload_retries
+            )
             
             result['processed_dir'] = processed_dir
             return result
@@ -1834,185 +3127,314 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
         print(f"Critical workflow error: {e}")
         raise e
 
-def retry_failed_entries(failed_entries, output_root, progress_callback=None):
+def retry_failed_entries(
+    failed_entries,
+    output_root,
+    progress_callback=None,
+    auto_upload=False,
+    destination_dir=None,
+    cache_gb=5.0,
+    cache_low_gb=3.0,
+    upload_mode='copy',
+    staging_dir=None,
+    max_upload_retries=20
+):
     """
     Retry processing only the failed entries from a previous run.
-    Downloads from their stored URLs and saves to output folder.
+    In auto-upload mode, retried files go through staging -> upload -> delete.
     """
     results = []
-    stats = {'success': 0, 'errors': 0, 'duplicates': 0, 'images': 0, 'videos': 0}
-    
-    # Find or create the processed dir
-    processed_dirs = [d for d in os.listdir(output_root) if d.startswith('Processed_Memories')]
-    if processed_dirs:
-        processed_dir = os.path.join(output_root, sorted(processed_dirs)[-1])
+    stats = {'success': 0, 'errors': 0, 'duplicates': 0, 'images': 0, 'videos': 0, 'auto_upload': bool(auto_upload)}
+
+    auto_upload_enabled = bool(auto_upload)
+    upload_manager = None
+    upload_ledger = None
+    retry_enqueued = 0
+    resolved_staging_dir = None
+    resolved_destination_dir = None
+
+    processing_root = canonicalize_dir_path(output_root)
+    output_base_dir = None
+    if auto_upload_enabled:
+        if not destination_dir:
+            raise ValueError("Auto upload retry requires destination_dir.")
+        if upload_mode not in ('copy', 'move'):
+            raise ValueError("upload_mode must be 'copy' or 'move'.")
+
+        cache_gb = float(cache_gb)
+        cache_low_gb = float(cache_low_gb)
+        max_upload_retries = int(max_upload_retries)
+        if cache_gb <= 0:
+            raise ValueError("cache_gb must be > 0.")
+        if cache_low_gb < 0 or cache_low_gb > cache_gb:
+            raise ValueError("cache_low_gb must be between 0 and cache_gb.")
+        if max_upload_retries <= 0:
+            raise ValueError("max_upload_retries must be > 0.")
+
+        resolved_staging_dir = canonicalize_dir_path(staging_dir if staging_dir else os.path.join(processing_root, '.staging'))
+        resolved_destination_dir = canonicalize_dir_path(destination_dir)
+
+        if resolved_destination_dir == resolved_staging_dir:
+            raise ValueError("destination_dir and staging_dir must be different.")
+        if is_path_inside(resolved_destination_dir, resolved_staging_dir):
+            raise ValueError("destination_dir cannot be inside staging_dir.")
+        if is_path_inside(resolved_staging_dir, resolved_destination_dir):
+            raise ValueError("staging_dir cannot be inside destination_dir.")
+        if is_path_inside(resolved_destination_dir, processing_root):
+            raise ValueError("destination_dir cannot be inside the processing output root.")
+        if is_path_inside(processing_root, resolved_destination_dir):
+            raise ValueError("destination_dir cannot be a parent of the processing output root.")
+
+        preflight_writable_dir(resolved_staging_dir)
+        preflight_writable_dir(resolved_destination_dir)
+
+        upload_ledger = UploadLedger(os.path.join(processing_root, UPLOAD_LEDGER_FILE))
+        adapter = FolderDestinationAdapter(resolved_destination_dir, upload_mode)
+        upload_manager = AutoUploadManager(
+            staging_dir=resolved_staging_dir,
+            adapter=adapter,
+            ledger=upload_ledger,
+            progress_callback=progress_callback,
+            cache_gb=cache_gb,
+            cache_low_gb=cache_low_gb,
+            max_upload_retries=max_upload_retries
+        )
+        upload_manager.prepare()
+        upload_manager.start()
+        recovered = upload_manager.recover_pending()
+        if recovered > 0:
+            upload_manager.emit("upload_progress", force=True, last_file=None, recovered_staged=recovered)
+
+        output_base_dir = resolved_staging_dir
+        if RETRY_UPLOAD_DEBUG_ENABLED:
+            print(
+                f"[RETRY_UPLOAD_DEBUG] auto_upload=1 staging={resolved_staging_dir} destination={resolved_destination_dir} "
+                f"cache_gb={cache_gb} cache_low_gb={cache_low_gb} max_retries={max_upload_retries} recovered_staged={recovered}",
+                flush=True
+            )
     else:
-        processed_dir = os.path.join(output_root, f"Processed_Memories_{datetime.now().strftime('%Y-%m-%d')}")
-    
-    os.makedirs(processed_dir, exist_ok=True)
-    
+        processed_dirs = [d for d in os.listdir(processing_root) if d.startswith('Processed_Memories')]
+        if processed_dirs:
+            output_base_dir = os.path.join(processing_root, sorted(processed_dirs)[-1])
+        else:
+            output_base_dir = os.path.join(processing_root, f"Processed_Memories_{datetime.now().strftime('%Y-%m-%d')}")
+        os.makedirs(output_base_dir, exist_ok=True)
+
     total = len(failed_entries)
     print(f"Retrying {total} failed entries...", flush=True)
-    
-    for idx, entry in enumerate(failed_entries):
-        if ABORT_PROCESSING.is_set():
-            break
-            
-        # Report progress
-        if progress_callback:
-            progress_callback((idx + 1, total))
-        
-        try:
-            # Get data from the detailed report
-            download_url = entry.get('download_url')
-            date_str = entry.get('date')
-            media_type = entry.get('media_type', 'Image')
-            original_file = entry.get('file', f"memory_{idx}")
-            
-            if not download_url:
-                print(f"  ⚠️ No download URL for {original_file} - Cannot retry", flush=True)
-                stats['errors'] += 1
-                results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'No download URL in report'})
-                continue
-            
-            if not date_str:
-                print(f"  ⚠️ No date for {original_file} - Using current time", flush=True)
-                date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            
-            print(f"  [{idx+1}/{total}] Retrying {original_file}...", flush=True)
-            
-            # Parse timestamp
+
+    try:
+        for idx, entry in enumerate(failed_entries):
+            if ABORT_PROCESSING.is_set():
+                break
+
+            if progress_callback:
+                progress_callback((idx + 1, total))
+
             try:
-                dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
-                timestamp_name = dt.strftime('%Y-%m-%d_%H-%M-%S')
-            except ValueError:
-                # Try to use as-is or generate new
-                timestamp_name = date_str.replace(':', '-').replace(' ', '_')
-            
-            # SECURITY: Validate download URL before attempting download
-            if not is_allowed_download_url(download_url):
-                print(f"  ❌ Blocked: Invalid download URL (not from Snapchat CDN)", flush=True)
-                stats['errors'] += 1
-                results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Blocked: Invalid download URL'})
-                continue
-            
-            # Download the file with size limit
-            try:
-                response = requests.get(download_url, timeout=60, stream=True)
-                if response.status_code == 403 or response.status_code == 410:
-                    print(f"  ❌ Download link expired (HTTP {response.status_code})", flush=True)
+                download_url = entry.get('download_url')
+                date_str = entry.get('date')
+                media_type = entry.get('media_type', 'Image')
+                original_file = entry.get('file', f"memory_{idx}")
+
+                if not download_url:
+                    print(f"  ⚠️ No download URL for {original_file} - Cannot retry", flush=True)
                     stats['errors'] += 1
-                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Download link expired'})
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'No download URL in report'})
                     continue
-                elif response.status_code != 200:
-                    print(f"  ❌ Download failed: HTTP {response.status_code}", flush=True)
+
+                if not date_str:
+                    print(f"  ⚠️ No date for {original_file} - Using current time", flush=True)
+                    date_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+
+                print(f"  [{idx + 1}/{total}] Retrying {original_file}...", flush=True)
+
+                try:
+                    dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
+                    timestamp_name = dt.strftime('%Y-%m-%d_%H-%M-%S')
+                except ValueError:
+                    timestamp_name = date_str.replace(':', '-').replace(' ', '_')
+
+                if not is_allowed_download_url(download_url):
+                    print(f"  ❌ Blocked: Invalid download URL (not from Snapchat CDN)", flush=True)
                     stats['errors'] += 1
-                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'HTTP {response.status_code}'})
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Blocked: Invalid download URL'})
                     continue
-                
-                # SECURITY: Track download size to prevent disk exhaustion
-                file_content = b""
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
+
+                try:
+                    response = requests.get(download_url, timeout=60, stream=True)
+                    if response.status_code in (403, 410):
+                        print(f"  ❌ Download link expired (HTTP {response.status_code})", flush=True)
+                        stats['errors'] += 1
+                        results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Download link expired'})
+                        continue
+                    if response.status_code != 200:
+                        print(f"  ❌ Download failed: HTTP {response.status_code}", flush=True)
+                        stats['errors'] += 1
+                        results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'HTTP {response.status_code}'})
+                        continue
+
+                    file_content = b""
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if not chunk:
+                            continue
                         file_content += chunk
                         if len(file_content) > MAX_DOWNLOAD_BYTES:
                             raise ValueError(f"Download exceeded max size limit: {MAX_DOWNLOAD_BYTES / (1024**3):.2f}GB")
-            except ValueError as e:
-                print(f"  ❌ Download aborted: {e}", flush=True)
+                except ValueError as e:
+                    print(f"  ❌ Download aborted: {e}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': str(e)})
+                    continue
+                except Exception as e:
+                    print(f"  ❌ Download failed: {e}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'Download error: {e}'})
+                    continue
+
+                if media_type == 'Video':
+                    ext = '.mp4'
+                    stats['videos'] += 1
+                else:
+                    ext = '.jpg'
+                    stats['images'] += 1
+
+                batch_folders = sorted([
+                    d for d in os.listdir(output_base_dir)
+                    if d.startswith('Batch_') and os.path.isdir(os.path.join(output_base_dir, d))
+                ])
+
+                if batch_folders:
+                    last_batch = batch_folders[-1]
+                    last_batch_dir = os.path.join(output_base_dir, last_batch)
+                    files_in_last_batch = len([
+                        f for f in os.listdir(last_batch_dir)
+                        if os.path.isfile(os.path.join(last_batch_dir, f))
+                    ])
+                    if files_in_last_batch >= 500:
+                        batch_num = int(last_batch.split('_')[1])
+                        new_batch_name = f"Batch_{batch_num + 1:02d}"
+                        output_dir = os.path.join(output_base_dir, new_batch_name)
+                        os.makedirs(output_dir, exist_ok=True)
+                    else:
+                        output_dir = last_batch_dir
+                else:
+                    if auto_upload_enabled:
+                        output_dir = os.path.join(output_base_dir, "Batch_01")
+                        os.makedirs(output_dir, exist_ok=True)
+                    else:
+                        output_dir = output_base_dir
+
+                base_name = f"{timestamp_name}{ext}"
+                output_path = os.path.join(output_dir, base_name)
+
+                counter = 1
+                while os.path.exists(output_path):
+                    base_name = f"{timestamp_name}_{counter}{ext}"
+                    output_path = os.path.join(output_dir, base_name)
+                    counter += 1
+
+                def write_retry_file(temp_path):
+                    with open(temp_path, 'wb') as f:
+                        f.write(file_content)
+
+                atomic_write_stream_to_file(write_retry_file, output_path)
+
+                if upload_manager:
+                    upload_manager.enqueue(output_path)
+                    retry_enqueued += 1
+                    if RETRY_UPLOAD_DEBUG_ENABLED:
+                        print(f"[RETRY_UPLOAD_DEBUG] enqueued staged file: {short_display_path(output_path)}", flush=True)
+
+                print(f"  ✅ Saved: {base_name}", flush=True)
+                stats['success'] += 1
+                result_entry = {**entry, 'retry_status': 'Success', 'output_file': base_name}
+                if auto_upload_enabled:
+                    result_entry['_staged_path'] = output_path
+                results.append(result_entry)
+
+            except Exception as e:
+                print(f"  ❌ Error: {e}", flush=True)
                 stats['errors'] += 1
                 results.append({**entry, 'retry_status': 'Error', 'retry_reason': str(e)})
-                continue
-            except Exception as e:
-                print(f"  ❌ Download failed: {e}", flush=True)
-                stats['errors'] += 1
-                results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'Download error: {e}'})
-                continue
-            
-            # Determine file extension
-            if media_type == 'Video':
-                ext = '.mp4'
-                stats['videos'] += 1
-            else:
-                ext = '.jpg'
-                stats['images'] += 1
-            
-            # Detect batch folders (Cloud Mode support)
-            batch_folders = sorted([d for d in os.listdir(processed_dir) 
-                                  if d.startswith('Batch_') and os.path.isdir(os.path.join(processed_dir, d))])
-            
-            # Determine output directory (batch folder or root)
-            if batch_folders:
-                # Cloud Mode: assign to appropriate batch folder
-                # Find the last batch and check if it's full
-                last_batch = batch_folders[-1]
-                last_batch_dir = os.path.join(processed_dir, last_batch)
-                files_in_last_batch = len([f for f in os.listdir(last_batch_dir) 
-                                          if os.path.isfile(os.path.join(last_batch_dir, f))])
-                
-                if files_in_last_batch >= 500:
-                    # Last batch is full, create new batch
-                    batch_num = int(last_batch.split('_')[1])
-                    new_batch_name = f"Batch_{batch_num + 1:02d}"
-                    output_dir = os.path.join(processed_dir, new_batch_name)
-                    os.makedirs(output_dir, exist_ok=True)
-                    print(f"  📁 Assigning to new {new_batch_name}", flush=True)
+
+        if upload_manager:
+            if RETRY_UPLOAD_DEBUG_ENABLED:
+                print(f"[RETRY_UPLOAD_DEBUG] waiting for uploader drain; enqueued={retry_enqueued}", flush=True)
+            upload_manager.wait_for_drain()
+            upload_manager.stop(wait=True)
+            if upload_manager.has_fatal():
+                fatal_message = upload_manager.fatal_message() or "Auto upload fatal error during retry"
+                upload_manager.mark_remaining_failed(fatal_message)
+                raise RuntimeError(fatal_message)
+
+            delivered = 0
+            for result in results:
+                staged_path = result.get('_staged_path')
+                if not staged_path or result.get('retry_status') != 'Success':
+                    continue
+                done_record = upload_ledger.get_done_record_for_staged_path(staged_path) if upload_ledger else None
+                if done_record and done_record.get("dest_path"):
+                    result['output_file'] = os.path.basename(done_record.get("dest_path"))
+                    delivered += 1
                 else:
-                    # Use existing incomplete batch
-                    output_dir = last_batch_dir
-                    print(f"  📁 Assigning to {last_batch} ({files_in_last_batch}/500 files)", flush=True)
-            else:
-                # No batch folders: regular mode, save to root
-                output_dir = processed_dir
-            
-            # Generate output filename
-            base_name = f"{timestamp_name}{ext}"
-            output_path = os.path.join(output_dir, base_name)
-            
-            # Handle duplicates
-            counter = 1
-            while os.path.exists(output_path):
-                base_name = f"{timestamp_name}_{counter}{ext}"
-                output_path = os.path.join(output_dir, base_name)
-                counter += 1
-            
-            # Write the file
-            with open(output_path, 'wb') as f:
-                f.write(file_content)
-            
-            print(f"  ✅ Saved: {base_name}", flush=True)
-            stats['success'] += 1
-            results.append({**entry, 'retry_status': 'Success', 'output_file': base_name})
-            
-        except Exception as e:
-            print(f"  ❌ Error: {e}", flush=True)
-            stats['errors'] += 1
-            results.append({**entry, 'retry_status': 'Error', 'retry_reason': str(e)})
-    
-    # Update the report with retry results
-    report_path = os.path.join(output_root, 'detailed_report.json')
+                    result['retry_status'] = 'Error'
+                    result['retry_reason'] = 'Upload to destination did not complete'
+                    stats['success'] = max(0, stats['success'] - 1)
+                    stats['errors'] += 1
+
+            if RETRY_UPLOAD_DEBUG_ENABLED:
+                print(
+                    f"[RETRY_UPLOAD_DEBUG] drain complete; attempts={upload_manager.upload_attempts} "
+                    f"uploaded={upload_manager.uploaded_count} confirmed={upload_manager.confirmed_count} copied={upload_manager.copied_count} delivered={delivered}",
+                    flush=True
+                )
+
+            remaining_staged_paths = list_staged_media_files(resolved_staging_dir)
+            remaining_staging_bytes = 0
+            for staged_path in remaining_staged_paths:
+                try:
+                    remaining_staging_bytes += os.path.getsize(staged_path)
+                except OSError:
+                    pass
+
+            stats.update({
+                "upload_confirmed_in_destination": int(upload_manager.confirmed_count),
+                "upload_copied_this_run": int(upload_manager.copied_count),
+                "upload_error_events": int(upload_manager.error_count),
+                "upload_attempts": int(upload_manager.upload_attempts),
+                "upload_remaining_in_staging": int(len(remaining_staged_paths)),
+                "upload_remaining_staging_bytes": int(remaining_staging_bytes),
+                "destination_dir": resolved_destination_dir,
+                "staging_dir": resolved_staging_dir
+            })
+
+    finally:
+        if upload_manager:
+            upload_manager.stop(wait=True)
+
+    report_path = os.path.join(processing_root, 'detailed_report.json')
     try:
         with open(report_path, 'r') as f:
             full_report = json.load(f)
-        
-        # Update entries that were retried
+
         for result in results:
-            if result.get('retry_status') == 'Success':
-                # Find and update the matching entry
-                result_id = result.get('id')
-                for i, existing in enumerate(full_report):
-                    if existing.get('id') == result_id:
-                        full_report[i]['status'] = 'Success'
-                        full_report[i]['file'] = result.get('output_file')
-                        full_report[i]['retry_status'] = 'Success'
-                        break
-        
-        with open(report_path, 'w') as f:
-            json.dump(full_report, f, indent=2)
+            if result.get('retry_status') != 'Success':
+                continue
+            result_id = result.get('id')
+            for i, existing in enumerate(full_report):
+                if existing.get('id') == result_id:
+                    full_report[i]['status'] = 'Success'
+                    full_report[i]['file'] = result.get('output_file')
+                    full_report[i]['retry_status'] = 'Success'
+                    break
+
+        atomic_write_text(report_path, json.dumps(full_report, indent=2))
         print(f"Updated {report_path}", flush=True)
     except Exception as e:
         print(f"Could not update report: {e}", flush=True)
-    
-    print(f"\\nRetry Summary: {stats['success']} succeeded, {stats['errors']} failed", flush=True)
+
+    print(f"\nRetry Summary: {stats['success']} succeeded, {stats['errors']} failed", flush=True)
     return stats
 
 if __name__ == "__main__":
@@ -2023,8 +3445,17 @@ if __name__ == "__main__":
     parser.add_argument('--output', required=True, help='Output directory for processed memories')
     parser.add_argument('--pause-batches', action='store_true', help='Pause between batches for iCloud sync')
     parser.add_argument('--trust-manifest', action='store_true', help='Trust manifest file for resume')
+    parser.add_argument('--auto-upload', action='store_true', help='Enable automatic upload from staging to destination')
+    parser.add_argument('--destination-dir', help='Destination folder for auto upload')
+    parser.add_argument('--cache-gb', type=float, default=5.0, help='Pause processing when staging exceeds this size (GB)')
+    parser.add_argument('--cache-low-gb', type=float, default=3.0, help='Resume processing when staging drops below this size (GB)')
+    parser.add_argument('--upload-mode', choices=['copy', 'move'], default='copy', help='Upload mode for destination adapter')
+    parser.add_argument('--staging-dir', help='Optional custom staging directory')
+    parser.add_argument('--max-upload-retries', type=int, default=20, help='Maximum upload retries per staged file before fatal exit')
     
     args = parser.parse_args()
+    if args.auto_upload and not args.destination_dir:
+        parser.error("--destination-dir is required with --auto-upload")
 
     # Define progress callback for Electron IPC
     def progress_update(data):
@@ -2047,7 +3478,14 @@ if __name__ == "__main__":
             output_root=args.output,
             progress_callback=progress_update,
             pause_batches=args.pause_batches,
-            trust_manifest=args.trust_manifest
+            trust_manifest=args.trust_manifest,
+            auto_upload=args.auto_upload,
+            destination_dir=args.destination_dir,
+            cache_gb=args.cache_gb,
+            cache_low_gb=args.cache_low_gb,
+            upload_mode=args.upload_mode,
+            staging_dir=args.staging_dir,
+            max_upload_retries=args.max_upload_retries
         )
 
         # Send completion message to Electron
