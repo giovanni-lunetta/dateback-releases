@@ -123,6 +123,371 @@ let storageMode = 'NONE';
 const GIB = 1024 * 1024 * 1024;
 const AVG_FILE_BYTES = 8 * 1024 * 1024;
 const STORAGE_ESTIMATE_LOG_THROTTLE_MS = 500;
+const rendererHelpers = globalThis.DateBackRendererHelpers || {};
+const resolveStorageModeHelper = rendererHelpers.resolveStorageMode || (({ computerChecked, cloudChecked }) => {
+    if (cloudChecked && !computerChecked) return 'CLOUD';
+    if (computerChecked && !cloudChecked) return 'COMPUTER';
+    return 'NONE';
+});
+const resolveRunModeFlagsHelper = rendererHelpers.resolveRunModeFlags || (({
+    storageMode,
+    pauseAfterBatchChecked,
+    isResume = false,
+    resumeMode = 'verify'
+}) => ({
+    autoUpload: storageMode === 'CLOUD',
+    pauseBetweenBatches: storageMode === 'COMPUTER' && !!pauseAfterBatchChecked,
+    shouldSendResumeMode: !!isResume,
+    resumeModeToSend: isResume ? resumeMode : undefined
+}));
+const buildStartProcessingArgsHelper = rendererHelpers.buildStartProcessingArgs || (({
+    storageMode,
+    pauseAfterBatchChecked,
+    isResume = false,
+    resumeMode = 'verify',
+    zipPath,
+    outputDir,
+    destinationDir,
+    stagingDir,
+    uploadMode,
+    resolvedCacheGb,
+    resolvedCacheLowGb,
+    cacheComputation
+}) => {
+    const runModeFlags = resolveRunModeFlagsHelper({
+        storageMode,
+        pauseAfterBatchChecked,
+        isResume,
+        resumeMode
+    });
+    const autoUpload = runModeFlags.autoUpload;
+    const args = {
+        zipPath,
+        outputDir,
+        pauseBetweenBatches: runModeFlags.pauseBetweenBatches,
+        autoUpload,
+        destinationDir: autoUpload ? destinationDir : '',
+        cacheGb: autoUpload ? resolvedCacheGb : undefined,
+        cacheLowGb: autoUpload ? resolvedCacheLowGb : undefined,
+        uploadMode: autoUpload ? uploadMode : undefined,
+        stagingDir: autoUpload ? stagingDir : '',
+        cacheComputation: autoUpload ? cacheComputation : undefined
+    };
+    if (runModeFlags.shouldSendResumeMode) {
+        args.resumeMode = runModeFlags.resumeModeToSend;
+    }
+    return { args, runModeFlags };
+});
+const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilityState || (({
+    mode,
+    // Keep fallback signature aligned with helper contract to avoid load-order surprises.
+    isProcessing,
+    pauseAfterBatchChecked,
+    advancedOpen,
+    diskUsageMode
+}) => {
+    const cloudEnabled = mode === 'CLOUD';
+    const computerEnabled = mode === 'COMPUTER';
+    const manualMode = diskUsageMode === 'manual';
+    let workingFolderHelpText = 'Select a storage mode below to continue.';
+    if (computerEnabled) {
+        workingFolderHelpText = 'Your processed memories will be saved here.';
+    } else if (cloudEnabled) {
+        workingFolderHelpText = 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.';
+    }
+    return {
+        cloudEnabled,
+        computerEnabled,
+        workingFolderHelpText,
+        pauseAfterBatchDisabled: !computerEnabled || isProcessing,
+        shouldUncheckPauseAfterBatch: !computerEnabled && !!pauseAfterBatchChecked,
+        computerModeSettingsExpanded: computerEnabled,
+        showCloudDestinationSection: cloudEnabled,
+        showAutoUploadSettings: cloudEnabled,
+        showHandoffHelperRow: cloudEnabled,
+        showManualCacheSettings: cloudEnabled && manualMode && advancedOpen,
+        showCacheAutoHint: cloudEnabled && !manualMode && advancedOpen,
+        showAutoCachePreview: cloudEnabled && !manualMode && advancedOpen,
+        shouldHideCacheLowSpaceWarning: !cloudEnabled || manualMode || !advancedOpen,
+        disableComputerModeCheckbox: isProcessing || cloudEnabled,
+        disableCloudModeCheckbox: isProcessing || computerEnabled,
+        computerCardSelected: computerEnabled,
+        cloudCardSelected: cloudEnabled,
+        computerModeDescriptionHidden: cloudEnabled,
+        computerModeDisabledHintHidden: !cloudEnabled,
+        cloudModeDescriptionHidden: computerEnabled,
+        cloudModeDisabledHintHidden: !computerEnabled,
+        shouldHideCloudDestinationError: !cloudEnabled,
+        shouldHideSyncFolderWarning: !cloudEnabled,
+        shouldRefreshCloudHelpers: cloudEnabled
+    };
+});
+const computeStorageEstimatesHelper = rendererHelpers.computeStorageEstimates || (({
+    mode,
+    count,
+    pauseAfterBatchChecked,
+    avgFileBytes,
+    formatBytes,
+    autoUploadEstimate
+}) => {
+    const isAutoUploadMode = mode === 'CLOUD';
+    const isPauseAfterBatchMode = mode === 'COMPUTER' && !!pauseAfterBatchChecked;
+
+    if (isAutoUploadMode) {
+        const estimate = autoUploadEstimate || {};
+        const requiredBytes = Number.isFinite(estimate.requiredBytes) ? estimate.requiredBytes : 0;
+        return {
+            estimateKind: estimate.estimateKind || 'AUTO_FALLBACK',
+            requiredBytes,
+            requiredText: formatBytes(requiredBytes),
+            availableBytes: Number.isFinite(estimate.availableBytes) ? estimate.availableBytes : null,
+            autoCacheGb: Number.isFinite(estimate.autoCacheGb) ? estimate.autoCacheGb : null,
+            autoSafetyBufferGb: Number.isFinite(estimate.autoSafetyBufferGb) ? estimate.autoSafetyBufferGb : null
+        };
+    }
+
+    if (isPauseAfterBatchMode) {
+        const filesNeeded = Math.min(count, 1000);
+        const requiredBytes = filesNeeded * avgFileBytes;
+        return {
+            estimateKind: 'MANUAL',
+            requiredBytes,
+            requiredText: `${formatBytes(requiredBytes)} per batch`,
+            availableBytes: null,
+            autoCacheGb: null,
+            autoSafetyBufferGb: null
+        };
+    }
+
+    const requiredBytes = count * avgFileBytes;
+    return {
+        estimateKind: 'STANDARD',
+        requiredBytes,
+        requiredText: formatBytes(requiredBytes),
+        availableBytes: null,
+        autoCacheGb: null,
+        autoSafetyBufferGb: null
+    };
+});
+const computeStorageWarningStateHelper = rendererHelpers.computeStorageWarningState || (({
+    isAutoUploadMode,
+    isPauseAfterBatchMode,
+    requiredBytes,
+    availableBytes,
+    autoCacheGb,
+    autoSafetyBufferGb,
+    roundOneDecimal,
+    gib
+}) => {
+    const absoluteMinimum = 5 * gib;
+    const isLowSpace = availableBytes < requiredBytes;
+    const showAbsoluteCritical = !isAutoUploadMode && availableBytes < absoluteMinimum;
+    const isCriticallyLow = isAutoUploadMode ? isLowSpace : showAbsoluteCritical;
+    const showWarning = isLowSpace || isCriticallyLow;
+
+    let warningHtml = '';
+    if (showWarning) {
+        const autoCacheText = Number.isFinite(autoCacheGb) ? `${roundOneDecimal(autoCacheGb)} GB` : 'configured cache';
+        const autoBufferText = Number.isFinite(autoSafetyBufferGb) ? `${roundOneDecimal(autoSafetyBufferGb)} GB` : 'safety buffer';
+        warningHtml = showAbsoluteCritical
+            ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>CRITICAL:</strong> You need at least 5GB free to process files safely.'
+            : (isPauseAfterBatchMode
+                ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after every batch is enabled. Upload and delete each batch before continuing.'
+                : isAutoUploadMode
+                    ? `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Store on Cloud needs temporary cache + buffer (${autoCacheText} + ${autoBufferText}). Keep destination available.`
+                    : '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> You might run out of space. Choose a larger working drive or switch to Store on Cloud.');
+    }
+
+    return {
+        absoluteMinimum,
+        isLowSpace,
+        showAbsoluteCritical,
+        isCriticallyLow,
+        showWarning,
+        warningHtml
+    };
+});
+const computeProcessingUiStateHelper = rendererHelpers.computeProcessingUiState || (({
+    isProcessing,
+    stoppedByUser = false
+}) => {
+    const controlsLocked = !!isProcessing || !!stoppedByUser;
+    return {
+        btnBrowseOutputDisabled: controlsLocked,
+        computerModeDisabled: controlsLocked,
+        cloudModeDisabled: controlsLocked,
+        pauseAfterBatchDisabled: controlsLocked,
+        btnBrowseDestinationDisabled: controlsLocked,
+        btnBrowseStagingDisabled: controlsLocked,
+        cacheGbDisabled: controlsLocked,
+        cacheLowGbDisabled: controlsLocked,
+        uploadModeDisabled: controlsLocked,
+        diskUsageAutoDisabled: controlsLocked,
+        diskUsageManualDisabled: controlsLocked,
+        showStopButton: !!isProcessing,
+        hideResumeRestartContainer: !!isProcessing
+    };
+});
+const buildSuccessModalCopyHelper = rendererHelpers.buildSuccessModalCopy || ((stats) => {
+    const isCloudModeStats = !!stats.auto_upload;
+    const hasCloudDeliveryStats = isCloudModeStats && (
+        typeof stats.upload_confirmed_in_destination === 'number' ||
+        typeof stats.upload_copied_this_run === 'number' ||
+        typeof stats.uploaded_to_destination === 'number' ||
+        typeof stats.upload_remaining_in_staging === 'number' ||
+        typeof stats.upload_error_events === 'number'
+    );
+    const confirmedInDestination = Number.isFinite(stats.upload_confirmed_in_destination)
+        ? stats.upload_confirmed_in_destination
+        : (Number.isFinite(stats.uploaded_to_destination) ? stats.uploaded_to_destination : 0);
+    const copiedThisRun = Number.isFinite(stats.upload_copied_this_run)
+        ? stats.upload_copied_this_run
+        : 0;
+    const alreadyInDestination = Math.max(0, confirmedInDestination - copiedThisRun);
+    const uploadErrorEvents = Number.isFinite(stats.upload_error_events) ? stats.upload_error_events : 0;
+    const cloudHasErrors = isCloudModeStats && Number(stats.errors || 0) > 0;
+    const usedTrustManifest = !!stats.used_trust_manifest || (typeof stats.previously_processed === 'number' && stats.previously_processed > 0);
+    const manifestTotalFiles = typeof stats.manifest_total_files === 'number' ? stats.manifest_total_files : null;
+    const previousProcessed = typeof stats.previously_processed === 'number' ? stats.previously_processed : 0;
+    const currentRunNew = typeof stats.current_run_new === 'number' ? stats.current_run_new : stats.success;
+    const currentRunImages = typeof stats.current_run_images === 'number' ? stats.current_run_images : (stats.images || 0);
+    const currentRunVideos = typeof stats.current_run_videos === 'number' ? stats.current_run_videos : (stats.videos || 0);
+    const totalProcessedAcrossRuns = typeof stats.manifest_processed_count === 'number'
+        ? stats.manifest_processed_count
+        : previousProcessed + currentRunNew;
+    const total = usedTrustManifest && manifestTotalFiles ? manifestTotalFiles : stats.success + stats.duplicates + stats.errors + (stats.skipped || 0);
+    const newCount = usedTrustManifest ? currentRunNew : stats.success;
+    const skippedCount = stats.duplicates;
+    const displayTotal = manifestTotalFiles || total;
+
+    let headline = 'Congratulations!';
+    let subtext = '';
+    if (usedTrustManifest && manifestTotalFiles) {
+        if (totalProcessedAcrossRuns >= manifestTotalFiles) {
+            headline = '🎉 All memories processed!';
+        } else {
+            headline = 'Processing Complete!';
+        }
+        if (newCount > 0) {
+            subtext = `Your Snapchat Memories are safely stored. Saved ${newCount.toLocaleString()} new memories this run.`;
+        } else {
+            subtext = 'Your Snapchat Memories are safely stored. No new memories were processed this run.';
+        }
+    } else if (newCount > 0 && skippedCount === 0) {
+        headline = 'Success! Processing Complete.';
+        subtext = 'Your memories have been successfully archived.';
+    } else if (newCount > 0 && skippedCount > 0) {
+        headline = 'Processing Complete!';
+        subtext = `Saved ${newCount.toLocaleString()} new memories. We skipped ${skippedCount.toLocaleString()} files that were already in your folder.`;
+    } else if (newCount === 0 && skippedCount > 0) {
+        headline = 'You are Up to Date!';
+        subtext = 'No new memories found. All files in this export already exist in your destination folder.';
+    }
+    if (isCloudModeStats) {
+        if (hasCloudDeliveryStats) {
+            headline = 'Cloud Processing Complete!';
+            if (cloudHasErrors) {
+                subtext = 'Completed with errors. You can retry corrupted files.';
+            } else {
+                subtext = 'Processing and cloud delivery completed.';
+            }
+        } else {
+            headline = 'Cloud Processing Complete!';
+            subtext = 'Processing complete. Cloud delivery details are unavailable for this run.';
+        }
+    }
+
+    return {
+        isCloudModeStats,
+        hasCloudDeliveryStats,
+        confirmedInDestination,
+        copiedThisRun,
+        alreadyInDestination,
+        uploadErrorEvents,
+        cloudHasErrors,
+        usedTrustManifest,
+        manifestTotalFiles,
+        previousProcessed,
+        currentRunNew,
+        currentRunImages,
+        currentRunVideos,
+        totalProcessedAcrossRuns,
+        total,
+        newCount,
+        skippedCount,
+        displayTotal,
+        headline,
+        subtext
+    };
+});
+const buildSuccessModalRowsHelper = rendererHelpers.buildSuccessModalRows || ((stats, summary) => {
+    const items = [];
+    items.push({ type: 'row', label: 'Total Memories in Export:', value: summary.displayTotal.toLocaleString(), valueClass: '', isDivider: false });
+    if (summary.usedTrustManifest && summary.manifestTotalFiles) {
+        items.push({ type: 'row', label: 'Total Processed Across All Runs:', value: `${summary.totalProcessedAcrossRuns.toLocaleString()} / ${summary.manifestTotalFiles.toLocaleString()}`, valueClass: 'green', isDivider: true });
+        items.push({ type: 'row', label: 'Images Saved (This Run):', value: summary.currentRunImages.toLocaleString(), valueClass: 'blue', isDivider: true });
+        items.push({ type: 'row', label: 'Videos Saved (This Run):', value: summary.currentRunVideos.toLocaleString(), valueClass: 'blue', isDivider: false });
+        items.push({ type: 'row', label: 'Previously Processed:', value: summary.previousProcessed.toLocaleString(), valueClass: 'blue', isDivider: true });
+    } else {
+        items.push({ type: 'row', label: 'Images Downloaded:', value: (stats.images || 0).toLocaleString(), valueClass: 'blue', isDivider: true });
+        items.push({ type: 'row', label: 'Videos Downloaded:', value: (stats.videos || 0).toLocaleString(), valueClass: 'blue', isDivider: false });
+        const reportSuccessCount = typeof stats.report_success_count === 'number' ? stats.report_success_count : stats.success;
+        const actualFilesOnDisk = typeof stats.actual_files_on_disk === 'number' ? stats.actual_files_on_disk : stats.success;
+        if (reportSuccessCount > actualFilesOnDisk) {
+            items.push({ type: 'row', label: 'Unique Memories Downloaded:', value: actualFilesOnDisk.toLocaleString(), valueClass: 'blue', isDivider: false });
+        }
+    }
+    if (summary.isCloudModeStats) {
+        items.push({ type: 'row', label: 'Delivered to Cloud Folder:', value: summary.confirmedInDestination.toLocaleString(), valueClass: summary.cloudHasErrors ? 'orange' : 'green', isDivider: true });
+        items.push({ type: 'row', label: 'Copied this run:', value: summary.copiedThisRun.toLocaleString(), valueClass: summary.cloudHasErrors ? 'orange' : 'green', isDivider: false });
+        items.push({ type: 'row', label: 'Already in Cloud Folder:', value: summary.alreadyInDestination.toLocaleString(), valueClass: summary.cloudHasErrors ? 'orange' : 'green', isDivider: false });
+        if (summary.uploadErrorEvents > 0) {
+            items.push({ type: 'row', label: 'Upload Error Events:', value: summary.uploadErrorEvents.toLocaleString(), valueClass: 'orange', isDivider: false });
+        }
+    }
+    if (!summary.isCloudModeStats) {
+        items.push({ type: 'row', label: 'Already Existed (Skipped):', value: stats.duplicates.toLocaleString(), valueClass: 'orange', isDivider: true });
+        if (stats.duplicates > 0) {
+            items.push({ type: 'note', noteClass: 'info', text: `ℹ️ Skipped ${stats.duplicates.toLocaleString()} files that already exist in the destination folder.`, style: null });
+        }
+    }
+    items.push({ type: 'row', label: 'Corrupted/Errors:', value: stats.errors.toString(), valueClass: 'red', isDivider: false });
+
+    const cumulativeSuccessCount = summary.usedTrustManifest && typeof stats.manifest_processed_count === 'number'
+        ? stats.manifest_processed_count
+        : (typeof stats.report_success_count === 'number' ? stats.report_success_count : stats.success);
+    const actualFilesOnDisk = typeof stats.actual_files_on_disk === 'number' ? stats.actual_files_on_disk : stats.success;
+    if (cumulativeSuccessCount > actualFilesOnDisk) {
+        const timestampCollisions = cumulativeSuccessCount - actualFilesOnDisk;
+        items.push({
+            type: 'note',
+            noteClass: 'info',
+            text: `ℹ️ ${timestampCollisions} ${timestampCollisions === 1 ? 'memory shares' : 'memories share'} identical timestamps - saved as single ${timestampCollisions === 1 ? 'file' : 'files'}`,
+            style: { marginTop: '12px' }
+        });
+    }
+    if (summary.manifestTotalFiles && !summary.isCloudModeStats) {
+        const totalAccountedFor = cumulativeSuccessCount + stats.duplicates + stats.errors;
+        if (totalAccountedFor === summary.manifestTotalFiles) {
+            items.push({
+                type: 'note',
+                noteClass: 'success',
+                text: `✅ All ${summary.manifestTotalFiles.toLocaleString()} memories accounted for!`,
+                style: { marginTop: '12px', fontWeight: '600' }
+            });
+        }
+    }
+    if (summary.isCloudModeStats && summary.hasCloudDeliveryStats && summary.confirmedInDestination > 0) {
+        const prefix = summary.cloudHasErrors ? 'ℹ️ Delivery summary:' : 'ℹ️ Delivered:';
+        items.push({
+            type: 'note',
+            noteClass: 'info',
+            text: `${prefix} ${summary.copiedThisRun.toLocaleString()} copied + ${summary.alreadyInDestination.toLocaleString()} already present = ${summary.confirmedInDestination.toLocaleString()} total. Errors: ${stats.errors.toLocaleString()}.`,
+            style: { marginTop: '12px' }
+        });
+    }
+    return items;
+});
 
 function isDebugStorageEnabled() {
     try {
@@ -163,13 +528,7 @@ function getDiskUsageMode() {
 function syncStorageModeFromControls() {
     const computerChecked = !!(computerModeCheckbox && computerModeCheckbox.checked);
     const cloudChecked = !!(cloudModeCheckbox && cloudModeCheckbox.checked);
-    if (cloudChecked && !computerChecked) {
-        storageMode = 'CLOUD';
-    } else if (computerChecked && !cloudChecked) {
-        storageMode = 'COMPUTER';
-    } else {
-        storageMode = 'NONE';
-    }
+    storageMode = resolveStorageModeHelper({ computerChecked, cloudChecked });
     return storageMode;
 }
 
@@ -370,12 +729,7 @@ async function checkStorage(count) {
     const isPauseAfterBatchMode = activeMode === 'COMPUTER' && !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked);
     const modeName = getActiveProcessingModeName();
 
-    let requiredBytes;
-    let availableBytes = null;
-    let autoCacheGb = null;
-    let autoSafetyBufferGb = null;
-    let requiredText = '';
-    let estimateKind = 'STANDARD';
+    let autoUploadEstimate = null;
 
     if (isAutoUploadMode) {
         const outputDir = outputPathInput.value.trim();
@@ -383,39 +737,48 @@ async function checkStorage(count) {
         try {
             const preflightResult = await evaluateAutoUploadPreflight(outputDir, stagingDir);
             if (requestId !== storageCheckRequestId) return;
-            estimateKind = 'AUTO_PREFLIGHT';
             // Auto Upload estimate is required FREE SPACE to start (cache + safety buffer),
             // not an output-size estimate.
-            requiredBytes = preflightResult.preflight.requiredBytes;
-            availableBytes = preflightResult.preflight.freeBytes;
-            autoCacheGb = preflightResult.cacheGb;
-            autoSafetyBufferGb = preflightResult.preflight.safetyBufferGb;
-            requiredText = formatBytes(requiredBytes);
+            autoUploadEstimate = {
+                estimateKind: 'AUTO_PREFLIGHT',
+                requiredBytes: preflightResult.preflight.requiredBytes,
+                availableBytes: preflightResult.preflight.freeBytes,
+                autoCacheGb: preflightResult.cacheGb,
+                autoSafetyBufferGb: preflightResult.preflight.safetyBufferGb
+            };
         } catch (error) {
             if (requestId !== storageCheckRequestId) return;
             // Fallback display if preflight cannot be evaluated yet.
-            estimateKind = 'AUTO_FALLBACK';
             const fallbackCacheGb = getDiskUsageMode() === 'manual'
                 ? Number.parseFloat(cacheGbInput.value) || 5
                 : 5;
             const fallbackSafetyBufferGb = 10;
-            requiredBytes = (fallbackCacheGb + fallbackSafetyBufferGb) * GIB;
-            autoCacheGb = fallbackCacheGb;
-            autoSafetyBufferGb = fallbackSafetyBufferGb;
-            requiredText = formatBytes(requiredBytes);
+            autoUploadEstimate = {
+                estimateKind: 'AUTO_FALLBACK',
+                requiredBytes: (fallbackCacheGb + fallbackSafetyBufferGb) * GIB,
+                availableBytes: null,
+                autoCacheGb: fallbackCacheGb,
+                autoSafetyBufferGb: fallbackSafetyBufferGb
+            };
         }
-    } else if (isPauseAfterBatchMode) {
-        // Pause-after-batch mode: output-size heuristic capped to ~2 batches (1000 files).
-        estimateKind = 'MANUAL';
-        const filesNeeded = Math.min(count, 1000);
-        requiredBytes = filesNeeded * AVG_FILE_BYTES;
-        requiredText = `${formatBytes(requiredBytes)} per batch`;
-    } else {
-        // Standard Processing: output-size heuristic for full run.
-        estimateKind = 'STANDARD';
-        requiredBytes = count * AVG_FILE_BYTES;
-        requiredText = formatBytes(requiredBytes);
     }
+
+    const storageEstimate = computeStorageEstimatesHelper({
+        mode: activeMode,
+        count,
+        pauseAfterBatchChecked: isPauseAfterBatchMode,
+        avgFileBytes: AVG_FILE_BYTES,
+        formatBytes,
+        autoUploadEstimate
+    });
+    let {
+        estimateKind,
+        requiredBytes,
+        requiredText,
+        availableBytes,
+        autoCacheGb,
+        autoSafetyBufferGb
+    } = storageEstimate;
 
     storageRequired.textContent = requiredText;
 
@@ -442,29 +805,31 @@ async function checkStorage(count) {
     if (Number.isFinite(availableBytes)) {
         storageAvailable.textContent = formatBytes(availableBytes);
 
-        // Minimum free space threshold: 5GB absolute minimum
-        const absoluteMinimum = 5 * 1024 * 1024 * 1024; // 5GB
-
-        // Warning if free space is less than required.
-        const isLowSpace = availableBytes < requiredBytes;
-        const showAbsoluteCritical = !isAutoUploadMode && availableBytes < absoluteMinimum;
-        const isCriticallyLow = isAutoUploadMode ? isLowSpace : showAbsoluteCritical;
+        const storageWarningState = computeStorageWarningStateHelper({
+            isAutoUploadMode,
+            isPauseAfterBatchMode,
+            requiredBytes,
+            availableBytes,
+            autoCacheGb,
+            autoSafetyBufferGb,
+            roundOneDecimal,
+            gib: GIB
+        });
+        const {
+            isLowSpace,
+            showAbsoluteCritical,
+            isCriticallyLow,
+            showWarning,
+            warningHtml
+        } = storageWarningState;
         isStorageCriticallyLow = isCriticallyLow;
 
         // Get the available space stat box
         const availableStatBox = storageAvailable.closest('.stat-box');
 
-        if (isLowSpace || isCriticallyLow) {
-            const autoCacheText = Number.isFinite(autoCacheGb) ? `${roundOneDecimal(autoCacheGb)} GB` : 'configured cache';
-            const autoBufferText = Number.isFinite(autoSafetyBufferGb) ? `${roundOneDecimal(autoSafetyBufferGb)} GB` : 'safety buffer';
+        if (showWarning) {
             storageWarning.classList.remove('hidden');
-            storageWarning.innerHTML = showAbsoluteCritical
-                ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>CRITICAL:</strong> You need at least 5GB free to process files safely.'
-                : (isPauseAfterBatchMode
-                    ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after every batch is enabled. Upload and delete each batch before continuing.'
-                    : isAutoUploadMode
-                        ? `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Store on Cloud needs temporary cache + buffer (${autoCacheText} + ${autoBufferText}). Keep destination available.`
-                        : '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> You might run out of space. Choose a larger working drive or switch to Store on Cloud.');
+            storageWarning.innerHTML = warningHtml;
             storageAvailable.style.color = 'var(--accent-red)';
             storageStatusIcon.innerHTML = `
                 <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -1069,6 +1434,24 @@ const btnResumeCancel = document.getElementById('btn-resume-cancel');
 // Track whether we just paused (vs resuming from start screen)
 let justPaused = false;
 
+function applyProcessingUiState(uiState) {
+    btnBrowseOutput.disabled = uiState.btnBrowseOutputDisabled;
+    computerModeCheckbox.disabled = uiState.computerModeDisabled;
+    cloudModeCheckbox.disabled = uiState.cloudModeDisabled;
+    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = uiState.pauseAfterBatchDisabled;
+    btnBrowseDestination.disabled = uiState.btnBrowseDestinationDisabled;
+    btnBrowseStaging.disabled = uiState.btnBrowseStagingDisabled;
+    cacheGbInput.disabled = uiState.cacheGbDisabled;
+    cacheLowGbInput.disabled = uiState.cacheLowGbDisabled;
+    uploadModeSelect.disabled = uiState.uploadModeDisabled;
+    if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = uiState.diskUsageAutoDisabled;
+    if (diskUsageManualRadio) diskUsageManualRadio.disabled = uiState.diskUsageManualDisabled;
+    btnStop.classList.toggle('hidden', !uiState.showStopButton);
+    if (uiState.hideResumeRestartContainer) {
+        resumeRestartContainer.classList.add('hidden');
+    }
+}
+
 // Main Processing Routine
 async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     console.log('[START] startProcessingRoutine called - isResume:', isResume, 'resumeMode:', resumeMode, 'isProcessing:', isProcessing);
@@ -1088,10 +1471,25 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     }
 
     const storageMode = getStorageMode();
-    const autoUpload = storageMode === 'CLOUD';
-    const pauseBetweenBatches = storageMode === 'COMPUTER' && !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked);
+    const pauseAfterBatchChecked = !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked);
     const destinationDir = destinationPathInput.value.trim();
     const stagingDir = stagingPathInput.value.trim();
+    const { runModeFlags } = buildStartProcessingArgsHelper({
+        storageMode,
+        pauseAfterBatchChecked,
+        isResume,
+        resumeMode,
+        zipPath,
+        outputDir,
+        destinationDir,
+        stagingDir,
+        uploadMode: undefined,
+        resolvedCacheGb: undefined,
+        resolvedCacheLowGb: undefined,
+        cacheComputation: undefined
+    });
+    const autoUpload = runModeFlags.autoUpload;
+    const pauseBetweenBatches = runModeFlags.pauseBetweenBatches;
     const diskUsageMode = getDiskUsageMode();
     const manualCacheGb = Number.parseFloat(cacheGbInput.value);
     const manualCacheLowGb = Number.parseFloat(cacheLowGbInput.value);
@@ -1272,23 +1670,13 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     isProcessing = true;
     stoppedByUser = false; // Reset stop flag
 
-    // Disable storage mode controls and path pickers during processing
-    computerModeCheckbox.disabled = true;
-    btnBrowseOutput.disabled = true;
-    cloudModeCheckbox.disabled = true;
-    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = true;
-    btnBrowseDestination.disabled = true;
-    btnBrowseStaging.disabled = true;
-    cacheGbInput.disabled = true;
-    cacheLowGbInput.disabled = true;
-    uploadModeSelect.disabled = true;
-    if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = true;
-    if (diskUsageManualRadio) diskUsageManualRadio.disabled = true;
+    const runningUiState = computeProcessingUiStateHelper({ isProcessing: true, stoppedByUser: false });
+    applyProcessingUiState(runningUiState);
 
     // UI Updates
     btnStart.classList.add('hidden');
-    resumeRestartContainer.classList.add('hidden'); // Hide restart options
-    btnStop.classList.remove('hidden');
+    // Hide restart options while running.
+    resumeRestartContainer.classList.add('hidden');
 
     progressFill.style.background = ''; // Reset any error styling
     progressFill.classList.remove('complete'); // Reset complete state
@@ -1310,19 +1698,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
             alert(message);
         }
         isProcessing = false;
-        btnStop.classList.add('hidden');
+        const idleUiState = computeProcessingUiStateHelper({ isProcessing: false, stoppedByUser: false });
+        applyProcessingUiState(idleUiState);
         btnStart.classList.remove('hidden');
-        btnBrowseOutput.disabled = false;
-        computerModeCheckbox.disabled = false;
-        cloudModeCheckbox.disabled = false;
-        if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
-        btnBrowseDestination.disabled = false;
-        btnBrowseStaging.disabled = false;
-        cacheGbInput.disabled = false;
-        cacheLowGbInput.disabled = false;
-        uploadModeSelect.disabled = false;
-        if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
-        if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
         progressTextContent.textContent = 'Ready';
         progressEta.textContent = '';
         updateAutoUploadUiState();
@@ -1341,21 +1719,20 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     }
 
     try {
-        const args = {
+        const { args } = buildStartProcessingArgsHelper({
+            storageMode,
+            pauseAfterBatchChecked,
+            isResume,
+            resumeMode,
             zipPath,
             outputDir,
-            pauseBetweenBatches,
-            autoUpload,
-            destinationDir: autoUpload ? destinationDir : '',
-            cacheGb: autoUpload ? resolvedCacheGb : undefined,
-            cacheLowGb: autoUpload ? resolvedCacheLowGb : undefined,
-            uploadMode: autoUpload ? uploadMode : undefined,
-            stagingDir: autoUpload ? stagingDir : '',
-            cacheComputation: autoUpload ? cacheComputation : undefined
-        };
-        if (isResume) {
-            args.resumeMode = resumeMode;
-        }
+            destinationDir,
+            stagingDir,
+            uploadMode,
+            resolvedCacheGb,
+            resolvedCacheLowGb,
+            cacheComputation
+        });
         const result = await window.api.startProcessing(args);
 
         // Only show result if not stopped by user
@@ -1459,36 +1836,12 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         }
     } finally {
         isProcessing = false;
-        btnStop.classList.add('hidden');
+        const stoppedUiState = computeProcessingUiStateHelper({ isProcessing: false, stoppedByUser });
+        applyProcessingUiState(stoppedUiState);
         progressText.classList.remove('processing');
         progressBar.classList.add('ready'); // Restore ready pulse
 
-        // Only re-enable storage mode checkboxes and output change if not stopped by user
-        // If stopped, controls stay disabled until Restart is clicked
-        if (!stoppedByUser) {
-            btnBrowseOutput.disabled = false;
-            computerModeCheckbox.disabled = false;
-            cloudModeCheckbox.disabled = false;
-            if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
-            btnBrowseDestination.disabled = false;
-            btnBrowseStaging.disabled = false;
-            cacheGbInput.disabled = false;
-            cacheLowGbInput.disabled = false;
-            uploadModeSelect.disabled = false;
-            if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
-            if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
-        } else {
-            computerModeCheckbox.disabled = true;
-            cloudModeCheckbox.disabled = true;
-            if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = true;
-            btnBrowseDestination.disabled = true;
-            btnBrowseStaging.disabled = true;
-            cacheGbInput.disabled = true;
-            cacheLowGbInput.disabled = true;
-            uploadModeSelect.disabled = true;
-            if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = true;
-            if (diskUsageManualRadio) diskUsageManualRadio.disabled = true;
-        }
+        // If stopped by user, controls stay disabled until Restart is clicked.
         updateAutoUploadUiState();
 
         // Note: We don't blindly show btnStart here anymore, handled in catch/success
@@ -2140,96 +2493,100 @@ function enforceStorageModeExclusivity(source) {
     syncStorageModeFromControls();
 }
 
-function updateAutoUploadUiState() {
-    const mode = getStorageMode();
-    const cloudEnabled = mode === 'CLOUD';
-    const computerEnabled = mode === 'COMPUTER';
-
+function applyVisibilityState(visibilityState) {
     if (workingFolderHelp) {
-        if (mode === 'COMPUTER') {
-            workingFolderHelp.textContent = 'Your processed memories will be saved here.';
-        } else if (mode === 'CLOUD') {
-            workingFolderHelp.textContent = 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.';
-        } else {
-            workingFolderHelp.textContent = 'Select a storage mode below to continue.';
-        }
+        workingFolderHelp.textContent = visibilityState.workingFolderHelpText;
     }
 
     if (pauseAfterBatchCheckbox) {
-        if (!computerEnabled && pauseAfterBatchCheckbox.checked) {
+        if (visibilityState.shouldUncheckPauseAfterBatch) {
             pauseAfterBatchCheckbox.checked = false;
         }
-        pauseAfterBatchCheckbox.disabled = !computerEnabled || isProcessing;
+        pauseAfterBatchCheckbox.disabled = visibilityState.pauseAfterBatchDisabled;
     }
     if (computerModeSettings) {
-        computerModeSettings.classList.toggle('expanded', computerEnabled);
+        computerModeSettings.classList.toggle('expanded', visibilityState.computerModeSettingsExpanded);
     }
 
     if (cloudDestinationSection) {
-        cloudDestinationSection.classList.toggle('hidden', !cloudEnabled);
+        cloudDestinationSection.classList.toggle('hidden', !visibilityState.showCloudDestinationSection);
     }
-    autoUploadSettings.classList.toggle('hidden', !cloudEnabled);
+    autoUploadSettings.classList.toggle('hidden', !visibilityState.showAutoUploadSettings);
     if (handoffHelperRow) {
-        handoffHelperRow.classList.toggle('hidden', !cloudEnabled);
+        handoffHelperRow.classList.toggle('hidden', !visibilityState.showHandoffHelperRow);
     }
 
-    const advancedOpen = !!(autoUploadAdvancedDetails && autoUploadAdvancedDetails.open);
-    const manualMode = getDiskUsageMode() === 'manual';
     if (manualCacheSettings) {
-        manualCacheSettings.classList.toggle('hidden', !cloudEnabled || !manualMode || !advancedOpen);
+        manualCacheSettings.classList.toggle('hidden', !visibilityState.showManualCacheSettings);
     }
     if (cacheAutoHint) {
-        cacheAutoHint.classList.toggle('hidden', !cloudEnabled || manualMode || !advancedOpen);
+        cacheAutoHint.classList.toggle('hidden', !visibilityState.showCacheAutoHint);
     }
     if (autoCachePreview) {
-        autoCachePreview.classList.toggle('hidden', !cloudEnabled || manualMode || !advancedOpen);
+        autoCachePreview.classList.toggle('hidden', !visibilityState.showAutoCachePreview);
     }
-    if ((!cloudEnabled || manualMode || !advancedOpen) && cacheLowSpaceWarning) {
+    if (visibilityState.shouldHideCacheLowSpaceWarning && cacheLowSpaceWarning) {
         cacheLowSpaceWarning.classList.add('hidden');
     }
 
     if (computerModeCheckbox) {
-        computerModeCheckbox.disabled = isProcessing || cloudEnabled;
+        computerModeCheckbox.disabled = visibilityState.disableComputerModeCheckbox;
     }
     if (cloudModeCheckbox) {
-        cloudModeCheckbox.disabled = isProcessing || computerEnabled;
+        cloudModeCheckbox.disabled = visibilityState.disableCloudModeCheckbox;
     }
     if (computerModeCard && computerModeCheckbox) {
-        computerModeCard.classList.toggle('selected', computerEnabled);
+        computerModeCard.classList.toggle('selected', visibilityState.computerCardSelected);
         computerModeCard.classList.toggle('disabled', computerModeCheckbox.disabled);
     }
     if (cloudModeCard && cloudModeCheckbox) {
-        cloudModeCard.classList.toggle('selected', cloudEnabled);
+        cloudModeCard.classList.toggle('selected', visibilityState.cloudCardSelected);
         cloudModeCard.classList.toggle('disabled', cloudModeCheckbox.disabled);
     }
 
     if (computerModeDescription) {
-        computerModeDescription.classList.toggle('hidden', cloudEnabled);
+        computerModeDescription.classList.toggle('hidden', visibilityState.computerModeDescriptionHidden);
     }
     if (computerModeDisabledHint) {
-        computerModeDisabledHint.classList.toggle('hidden', !cloudEnabled);
+        computerModeDisabledHint.classList.toggle('hidden', visibilityState.computerModeDisabledHintHidden);
     }
     if (cloudModeDescription) {
-        cloudModeDescription.classList.toggle('hidden', computerEnabled);
+        cloudModeDescription.classList.toggle('hidden', visibilityState.cloudModeDescriptionHidden);
     }
     if (cloudModeDisabledHint) {
-        cloudModeDisabledHint.classList.toggle('hidden', !computerEnabled);
+        cloudModeDisabledHint.classList.toggle('hidden', visibilityState.cloudModeDisabledHintHidden);
     }
 
-    if (!cloudEnabled && cloudDestinationError) {
+    if (visibilityState.shouldHideCloudDestinationError && cloudDestinationError) {
         cloudDestinationError.classList.add('hidden');
     }
-    if (!cloudEnabled && syncFolderWarning) {
+    if (visibilityState.shouldHideSyncFolderWarning && syncFolderWarning) {
         syncFolderWarning.classList.add('hidden');
     }
 
     updateAutoCachePreview();
     updateStorageSummary();
-    if (cloudEnabled) {
+    if (visibilityState.shouldRefreshCloudHelpers) {
         updateCloudHandoffCopy();
         updateSyncFolderWarning();
     }
     updateStartButtonState();
+}
+
+function buildVisibilityInput() {
+    return {
+        mode: getStorageMode(),
+        isProcessing,
+        pauseAfterBatchChecked: !!(pauseAfterBatchCheckbox && pauseAfterBatchCheckbox.checked),
+        advancedOpen: !!(autoUploadAdvancedDetails && autoUploadAdvancedDetails.open),
+        diskUsageMode: getDiskUsageMode()
+    };
+}
+
+function updateAutoUploadUiState() {
+    const visibilityInput = buildVisibilityInput();
+    const visibilityState = computeModeVisibilityStateHelper(visibilityInput);
+    applyVisibilityState(visibilityState);
 }
 
 function bindModeCardClick(cardEl, checkboxEl, ignoreSelector = null) {
@@ -2503,83 +2860,12 @@ let lastStats = null;
 
 function showSuccessModal(stats) {
     lastStats = stats; // Store for View Summary button
-    const isCloudModeStats = !!stats.auto_upload;
-    const hasCloudDeliveryStats = isCloudModeStats && (
-        typeof stats.upload_confirmed_in_destination === 'number' ||
-        typeof stats.upload_copied_this_run === 'number' ||
-        typeof stats.uploaded_to_destination === 'number' ||
-        typeof stats.upload_remaining_in_staging === 'number' ||
-        typeof stats.upload_error_events === 'number'
-    );
-    const confirmedInDestination = Number.isFinite(stats.upload_confirmed_in_destination)
-        ? stats.upload_confirmed_in_destination
-        : (Number.isFinite(stats.uploaded_to_destination) ? stats.uploaded_to_destination : 0);
-    const copiedThisRun = Number.isFinite(stats.upload_copied_this_run)
-        ? stats.upload_copied_this_run
-        : 0;
-    const alreadyInDestination = Math.max(0, confirmedInDestination - copiedThisRun);
-    const uploadErrorEvents = Number.isFinite(stats.upload_error_events) ? stats.upload_error_events : 0;
-    const cloudHasErrors = isCloudModeStats && Number(stats.errors || 0) > 0;
-
-    const usedTrustManifest = !!stats.used_trust_manifest || (typeof stats.previously_processed === 'number' && stats.previously_processed > 0);
-    const manifestTotalFiles = typeof stats.manifest_total_files === 'number' ? stats.manifest_total_files : null;
-    const previousProcessed = typeof stats.previously_processed === 'number' ? stats.previously_processed : 0;
-    const currentRunNew = typeof stats.current_run_new === 'number' ? stats.current_run_new : stats.success;
-    const currentRunImages = typeof stats.current_run_images === 'number' ? stats.current_run_images : (stats.images || 0);
-    const currentRunVideos = typeof stats.current_run_videos === 'number' ? stats.current_run_videos : (stats.videos || 0);
-
-    // Use manifest_processed_count if available (source of truth), otherwise calculate
-    const totalProcessedAcrossRuns = typeof stats.manifest_processed_count === 'number'
-        ? stats.manifest_processed_count
-        : previousProcessed + currentRunNew;
-
-    const total = usedTrustManifest && manifestTotalFiles ? manifestTotalFiles : stats.success + stats.duplicates + stats.errors + (stats.skipped || 0);
-    const newCount = usedTrustManifest ? currentRunNew : stats.success;
-    const skippedCount = stats.duplicates;
-
-    // Dynamic headline based on scenario
-    let headline = 'Congratulations!';
-    let subtext = '';
-
-    if (usedTrustManifest && manifestTotalFiles) {
-        if (totalProcessedAcrossRuns >= manifestTotalFiles) {
-            headline = '🎉 All memories processed!';
-        } else {
-            headline = 'Processing Complete!';
-        }
-
-        if (newCount > 0) {
-            subtext = `Your Snapchat Memories are safely stored. Saved ${newCount.toLocaleString()} new memories this run.`;
-        } else {
-            subtext = 'Your Snapchat Memories are safely stored. No new memories were processed this run.';
-        }
-    } else if (newCount > 0 && skippedCount === 0) {
-        // Scenario A: Clean Sweep
-        headline = 'Success! Processing Complete.';
-        subtext = 'Your memories have been successfully archived.';
-    } else if (newCount > 0 && skippedCount > 0) {
-        // Scenario B: Mixed/Normal
-        headline = 'Processing Complete!';
-        subtext = `Saved ${newCount.toLocaleString()} new memories. We skipped ${skippedCount.toLocaleString()} files that were already in your folder.`;
-    } else if (newCount === 0 && skippedCount > 0) {
-        // Scenario C: Already Up to Date
-        headline = 'You are Up to Date!';
-        subtext = 'No new memories found. All files in this export already exist in your destination folder.';
-    }
-
-    if (isCloudModeStats) {
-        if (hasCloudDeliveryStats) {
-            headline = 'Cloud Processing Complete!';
-            if (cloudHasErrors) {
-                subtext = 'Completed with errors. You can retry corrupted files.';
-            } else {
-                subtext = 'Processing and cloud delivery completed.';
-            }
-        } else {
-            headline = 'Cloud Processing Complete!';
-            subtext = 'Processing complete. Cloud delivery details are unavailable for this run.';
-        }
-    }
+    const summary = buildSuccessModalCopyHelper(stats);
+    const {
+        isCloudModeStats,
+        headline,
+        subtext
+    } = summary;
 
     // Update modal headline
     const modalTitle = successModal.querySelector('h2');
@@ -2625,102 +2911,22 @@ function showSuccessModal(stats) {
         return row;
     }
 
-    // Build stats using safe DOM creation
-    // Always show manifest total if available (source of truth from JSON export)
-    const displayTotal = manifestTotalFiles || total;
-    statsContainer.appendChild(createStatRow('Total Memories in Export:', displayTotal.toLocaleString()));
-
-    if (usedTrustManifest && manifestTotalFiles) {
-        statsContainer.appendChild(createStatRow('Total Processed Across All Runs:', `${totalProcessedAcrossRuns.toLocaleString()} / ${manifestTotalFiles.toLocaleString()}`, 'green', true));
-        statsContainer.appendChild(createStatRow('Images Saved (This Run):', currentRunImages.toLocaleString(), 'blue', true));
-        statsContainer.appendChild(createStatRow('Videos Saved (This Run):', currentRunVideos.toLocaleString(), 'blue'));
-        statsContainer.appendChild(createStatRow('Previously Processed:', previousProcessed.toLocaleString(), 'blue', true));
-    } else {
-        statsContainer.appendChild(createStatRow('Images Downloaded:', (stats.images || 0).toLocaleString(), 'blue', true));
-        statsContainer.appendChild(createStatRow('Videos Downloaded:', (stats.videos || 0).toLocaleString(), 'blue'));
-
-        // Show "Unique Memories Downloaded" if we have timestamp collisions
-        const reportSuccessCount = typeof stats.report_success_count === 'number' ? stats.report_success_count : stats.success;
-        const actualFilesOnDisk = typeof stats.actual_files_on_disk === 'number' ? stats.actual_files_on_disk : stats.success;
-
-        if (reportSuccessCount > actualFilesOnDisk) {
-            statsContainer.appendChild(createStatRow('Unique Memories Downloaded:', actualFilesOnDisk.toLocaleString(), 'blue'));
+    const rowItems = buildSuccessModalRowsHelper(stats, summary);
+    for (const item of rowItems) {
+        if (item.type === 'row') {
+            statsContainer.appendChild(createStatRow(item.label, item.value, item.valueClass, item.isDivider));
+            continue;
         }
-    }
-
-    if (isCloudModeStats) {
-        statsContainer.appendChild(createStatRow(
-            'Delivered to Cloud Folder:',
-            confirmedInDestination.toLocaleString(),
-            cloudHasErrors ? 'orange' : 'green',
-            true
-        ));
-        statsContainer.appendChild(createStatRow(
-            'Copied this run:',
-            copiedThisRun.toLocaleString(),
-            cloudHasErrors ? 'orange' : 'green',
-        ));
-        statsContainer.appendChild(createStatRow(
-            'Already in Cloud Folder:',
-            alreadyInDestination.toLocaleString(),
-            cloudHasErrors ? 'orange' : 'green'
-        ));
-        if (uploadErrorEvents > 0) {
-            statsContainer.appendChild(createStatRow('Upload Error Events:', uploadErrorEvents.toLocaleString(), 'orange'));
-        }
-    }
-    if (!isCloudModeStats) {
-        statsContainer.appendChild(createStatRow('Already Existed (Skipped):', stats.duplicates.toLocaleString(), 'orange', true));
-
-        // Duplicate info note (if applicable)
-        if (stats.duplicates > 0) {
+        if (item.type === 'note') {
             const noteDiv = document.createElement('div');
-            noteDiv.className = 'stat-note info';
-            noteDiv.textContent = `ℹ️ Skipped ${stats.duplicates.toLocaleString()} files that already exist in the destination folder.`;
+            noteDiv.className = `stat-note ${item.noteClass}`;
+            if (item.style) {
+                if (item.style.marginTop) noteDiv.style.marginTop = item.style.marginTop;
+                if (item.style.fontWeight) noteDiv.style.fontWeight = item.style.fontWeight;
+            }
+            noteDiv.textContent = item.text;
             statsContainer.appendChild(noteDiv);
         }
-    }
-
-    statsContainer.appendChild(createStatRow('Corrupted/Errors:', stats.errors.toString(), 'red'));
-
-    // Add timestamp collision note and "all accounted for" message
-    // Use cumulative totals if in resume mode, otherwise current run totals
-    const cumulativeSuccessCount = usedTrustManifest && typeof stats.manifest_processed_count === 'number'
-        ? stats.manifest_processed_count
-        : (typeof stats.report_success_count === 'number' ? stats.report_success_count : stats.success);
-
-    const actualFilesOnDisk = typeof stats.actual_files_on_disk === 'number' ? stats.actual_files_on_disk : stats.success;
-
-    // Show timestamp collision note if applicable
-    if (cumulativeSuccessCount > actualFilesOnDisk) {
-        const timestampCollisions = cumulativeSuccessCount - actualFilesOnDisk;
-        const collisionDiv = document.createElement('div');
-        collisionDiv.className = 'stat-note info';
-        collisionDiv.style.marginTop = '12px';
-        collisionDiv.textContent = `ℹ️ ${timestampCollisions} ${timestampCollisions === 1 ? 'memory shares' : 'memories share'} identical timestamps - saved as single ${timestampCollisions === 1 ? 'file' : 'files'}`;
-        statsContainer.appendChild(collisionDiv);
-    }
-
-    // Add "All Memories Accounted For" message if everything matches
-    if (manifestTotalFiles && !isCloudModeStats) {
-        // Count total entries in report: cumulative_success + duplicates + errors
-        const totalAccountedFor = cumulativeSuccessCount + stats.duplicates + stats.errors;
-        if (totalAccountedFor === manifestTotalFiles) {
-            const allAccountedDiv = document.createElement('div');
-            allAccountedDiv.className = 'stat-note success';
-            allAccountedDiv.style.marginTop = '12px';
-            allAccountedDiv.style.fontWeight = '600';
-            allAccountedDiv.textContent = `✅ All ${manifestTotalFiles.toLocaleString()} memories accounted for!`;
-            statsContainer.appendChild(allAccountedDiv);
-        }
-    }
-    if (isCloudModeStats && hasCloudDeliveryStats && confirmedInDestination > 0) {
-        const cloudAccountingDiv = document.createElement('div');
-        cloudAccountingDiv.className = 'stat-note info';
-        cloudAccountingDiv.style.marginTop = '12px';
-        const prefix = cloudHasErrors ? 'ℹ️ Delivery summary:' : 'ℹ️ Delivered:';
-        cloudAccountingDiv.textContent = `${prefix} ${copiedThisRun.toLocaleString()} copied + ${alreadyInDestination.toLocaleString()} already present = ${confirmedInDestination.toLocaleString()} total. Errors: ${stats.errors.toLocaleString()}.`;
-        statsContainer.appendChild(cloudAccountingDiv);
     }
 
     successModal.classList.remove('hidden');

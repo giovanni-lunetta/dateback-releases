@@ -5,6 +5,9 @@
     "main": "main.js",
     "scripts": {
         "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+        "test": "node --test",
+        "check": "node --check main.js && node --check src/renderer.js && node --check src/renderer.helpers.js",
+        "test:all": "npm run check && npm test",
         "build": "env -u ELECTRON_RUN_AS_NODE electron-builder --mac",
         "build:mac": "env -u ELECTRON_RUN_AS_NODE electron-builder --mac"
     },

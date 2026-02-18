@@ -75,6 +75,56 @@ let lastError = null;
 let isQuitting = false;
 let lastPythonSampleLogAt = 0; // Rate limit for Python stdout sampling
 
+function setPythonProcess(proc) {
+    pythonProcess = proc;
+}
+
+function clearPythonProcess() {
+    pythonProcess = null;
+}
+
+function setSessionOutputDir(dirPath) {
+    currentValidatedOutputDir = dirPath;
+}
+
+function clearSessionOutputDir() {
+    currentValidatedOutputDir = null;
+}
+
+function restoreSessionOutputDir(previousDir) {
+    currentValidatedOutputDir = previousDir;
+}
+
+function markIntentionalStop() {
+    intentionalStop = true;
+}
+
+function consumeIntentionalStop() {
+    if (!intentionalStop) {
+        return false;
+    }
+    intentionalStop = false;
+    return true;
+}
+
+function stopCaffeinateSafely() {
+    if (caffeinateProcess) {
+        caffeinateProcess.kill();
+        caffeinateProcess = null;
+    }
+}
+
+function startCaffeinateSafely() {
+    try {
+        caffeinateProcess = spawnProcess('caffeinate', ['-i'], { shell: false });
+        caffeinateProcess.on('error', (err) => {
+            console.warn('Could not start caffeinate:', err.message);
+        });
+    } catch (e) {
+        console.warn('Caffeinate not available:', e.message);
+    }
+}
+
 // Security: Normalize renderer document URLs for strict trust checks across dev + packaged builds.
 function normalizeRendererDocumentKey(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') {
@@ -188,6 +238,34 @@ function validateSender(event) {
         return false;
     }
     return true;
+}
+
+function isMainTestMode() {
+    return process.env.DATEBACK_TEST_MODE === '1' || process.env.NODE_ENV === 'test';
+}
+
+function getMainTestOverride(name) {
+    if (!isMainTestMode()) {
+        return undefined;
+    }
+    const overrides = globalThis.__DATEBACK_MAIN_TEST_OVERRIDES;
+    if (!overrides || typeof overrides !== 'object') {
+        return undefined;
+    }
+    if (!Object.prototype.hasOwnProperty.call(overrides, name)) {
+        return undefined;
+    }
+    return overrides[name];
+}
+
+function getMainDep(name, fallback) {
+    const override = getMainTestOverride(name);
+    return override !== undefined ? override : fallback;
+}
+
+function spawnProcess(command, args, options) {
+    const spawnFn = getMainDep('spawn', spawn);
+    return spawnFn(command, args, options);
 }
 
 function sanitizePathInput(value, label = 'Path') {
@@ -324,6 +402,84 @@ function isSensitiveRoot(dirPath) {
     return false;
 }
 
+function getCanonicalDefaultOutputDir() {
+    const homeDir = app.getPath('home');
+    const defaultPicDir = path.join(homeDir, 'Pictures', 'SnapchatMemories');
+    return getCanonicalPath(defaultPicDir);
+}
+
+function authorizeOutputDirForOperation(canonicalOutputDir, options = {}) {
+    const {
+        rejectSensitiveRoot = false,
+        sensitiveRootError = 'Output directory is a restricted system folder.',
+        allowDefaultSubpath = false,
+        allowApprovedExact = false,
+        allowCurrentSessionExact = false,
+        unapprovedError = 'Output directory not approved',
+        unapprovedLogPrefix = null
+    } = options;
+
+    if (rejectSensitiveRoot && isSensitiveRoot(canonicalOutputDir)) {
+        return { success: false, response: { success: false, error: sensitiveRootError } };
+    }
+
+    const canonicalDefault = allowDefaultSubpath ? getCanonicalDefaultOutputDir() : null;
+    const isDefault = !!canonicalDefault && (
+        canonicalOutputDir === canonicalDefault ||
+        canonicalOutputDir.startsWith(canonicalDefault + path.sep)
+    );
+    const isUserApproved = allowApprovedExact && approvedOutputDirs.has(canonicalOutputDir);
+    const isCurrentSession = allowCurrentSessionExact && currentValidatedOutputDir && canonicalOutputDir === currentValidatedOutputDir;
+
+    if (!isDefault && !isUserApproved && !isCurrentSession) {
+        if (unapprovedLogPrefix) {
+            console.error(`${unapprovedLogPrefix}: ${canonicalOutputDir}`);
+        }
+        return { success: false, response: { success: false, error: unapprovedError } };
+    }
+
+    return { success: true };
+}
+
+function authorizeOpenFolderTarget(canonicalPath) {
+    return (
+        (currentValidatedOutputDir && isPathInsideDir(canonicalPath, currentValidatedOutputDir)) ||
+        Array.from(approvedOutputDirs).some(approvedRoot => isPathInsideDir(canonicalPath, approvedRoot))
+    );
+}
+
+function sanitizeAndCanonicalizePath(rawPath, label) {
+    let normalizedPath;
+    try {
+        normalizedPath = sanitizePathInput(rawPath, label);
+    } catch (e) {
+        return { success: false, response: { success: false, error: e.message } };
+    }
+    return { success: true, canonicalPath: getCanonicalPath(normalizedPath) };
+}
+
+function authorizeCanonicalOutputDir(canonicalOutputDir, options) {
+    const outputAuthorization = authorizeOutputDirForOperation(canonicalOutputDir, options);
+    if (!outputAuthorization.success) {
+        return { success: false, response: outputAuthorization.response };
+    }
+    return { success: true };
+}
+
+function enforceAuthorizedSender(event, unauthorizedResponse) {
+    if (!validateSender(event)) {
+        return unauthorizedResponse;
+    }
+    return null;
+}
+
+function validateExternalUrlInput(url) {
+    if (typeof url !== 'string' || url.length > 2048) {
+        return { success: false, error: 'Invalid URL' };
+    }
+    return null;
+}
+
 // Security: Safely open external URLs with protocol whitelist
 function openExternalSafely(rawUrl) {
     try {
@@ -348,25 +504,409 @@ function openExternalSafely(rawUrl) {
 
 
 
-// Validate ZIP file
-ipcMain.handle('validate-zip', async (event, zipPath) => {
-    if (!validateSender(event)) {
-        return { found: false, error: 'Unauthorized sender', count: 0 };
+function validateAndCanonicalizeOutputDir(outputDir, options = {}) {
+    const {
+        allowCurrentSession = false,
+        includeSymlinkPathValidationError = false,
+        createIfMissing = false,
+        unapprovedError = 'Output directory not approved. Please use the folder picker.',
+        unapprovedLogPrefix = '[SECURITY] Rejected unapproved output directory',
+        sensitiveRootError = null,
+        sensitiveRootLog = false
+    } = options;
+
+    let normalizedOutputDir;
+    try {
+        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
+    } catch (e) {
+        return { success: false, response: { success: false, error: e.message } };
     }
 
+    const requestedOutputDir = path.resolve(normalizedOutputDir);
+    if (includeSymlinkPathValidationError && fs.existsSync(requestedOutputDir)) {
+        try {
+            const outputStat = fs.lstatSync(requestedOutputDir);
+            if (outputStat.isSymbolicLink()) {
+                return {
+                    success: false,
+                    response: {
+                        success: false,
+                        errorType: 'PATH_VALIDATION',
+                        message: 'Output directory cannot be a symbolic link.',
+                        error: 'Output directory cannot be a symbolic link.'
+                    }
+                };
+            }
+        } catch (e) {
+            return { success: false, response: { success: false, error: `Cannot access output directory: ${e.message}` } };
+        }
+    }
+
+    const canonicalOutputDir = getCanonicalPath(requestedOutputDir);
+
+    if (isSensitiveRoot(canonicalOutputDir)) {
+        if (sensitiveRootLog) {
+            console.error(`[SECURITY] Rejected sensitive root output directory: ${canonicalOutputDir}`);
+        }
+
+        let errorMsg = sensitiveRootError;
+        if (!errorMsg) {
+            if (canonicalOutputDir.startsWith('/Volumes/')) {
+                const driveName = path.basename(canonicalOutputDir);
+                errorMsg = `Cannot use external drive root. Please create a subfolder (e.g., /Volumes/${driveName}/DateBack_Output)`;
+            } else {
+                errorMsg = 'Please select a subfolder, not the root Documents/Downloads folder.';
+            }
+        }
+
+        return { success: false, response: { success: false, error: errorMsg } };
+    }
+
+    const isUserApproved = approvedOutputDirs.has(canonicalOutputDir);
+    const homeDir = app.getPath('home');
+    const defaultPicDir = path.join(homeDir, 'Pictures', 'SnapchatMemories');
+    const canonicalDefault = getCanonicalPath(defaultPicDir);
+    const isDefault = canonicalOutputDir === canonicalDefault || canonicalOutputDir.startsWith(canonicalDefault + path.sep);
+    const isCurrentSession = allowCurrentSession && canonicalOutputDir === currentValidatedOutputDir;
+
+    if (!isDefault && !isUserApproved && !isCurrentSession) {
+        if (unapprovedLogPrefix) {
+            console.error(`${unapprovedLogPrefix}: ${canonicalOutputDir}`);
+        }
+        return { success: false, response: { success: false, error: unapprovedError } };
+    }
+
+    if (createIfMissing) {
+        try {
+            if (!fs.existsSync(canonicalOutputDir)) {
+                fs.mkdirSync(canonicalOutputDir, { recursive: true, mode: 0o700 });
+            }
+
+            const postCreateCanonical = fs.realpathSync(canonicalOutputDir);
+            if (postCreateCanonical !== canonicalOutputDir) {
+                console.error(`[SECURITY] Directory path changed after creation - possible symlink attack`);
+                return {
+                    success: false,
+                    response: {
+                        success: false,
+                        error: 'Security validation failed: directory path changed after creation'
+                    }
+                };
+            }
+
+            const stat = fs.lstatSync(canonicalOutputDir);
+            if (!stat.isDirectory()) {
+                return { success: false, response: { success: false, error: 'Output path exists but is not a directory' } };
+            }
+            if (stat.isSymbolicLink()) {
+                console.error(`[SECURITY] Output path is a symlink - blocked for security`);
+                return { success: false, response: { success: false, error: 'Symbolic links are not allowed for output directory' } };
+            }
+        } catch (e) {
+            console.error(`[SECURITY] Failed to validate/create output directory: ${e.message}`);
+            return { success: false, response: { success: false, error: `Cannot access output directory: ${e.message}` } };
+        }
+    }
+
+    return { success: true, canonicalOutputDir };
+}
+
+async function resolveAndValidateAutoUploadOptions(
+    { autoUpload, destinationDir, cacheGb, cacheLowGb, uploadMode, stagingDir, maxUploadRetries },
+    canonicalOutputDir,
+    { withDiskPreflight = false, isRetry = false, cacheComputation = null } = {}
+) {
+    const autoUploadEnabled = !!autoUpload;
+    const normalizedUploadMode = uploadMode === 'move' ? 'move' : 'copy';
+    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : 5.0;
+    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : 3.0;
+    const resolvedMaxUploadRetries = Number.isFinite(Number(maxUploadRetries)) ? Number(maxUploadRetries) : 20;
+    const providedStagingDir = typeof stagingDir === 'string' && stagingDir.trim().length > 0;
+
+    let canonicalDestinationDir = null;
+    let canonicalStagingDir = null;
+
+    if (autoUploadEnabled) {
+        if (!destinationDir || typeof destinationDir !== 'string' || destinationDir.trim().length === 0) {
+            return { success: false, response: { success: false, error: 'Destination directory is required when Auto Upload is enabled.' } };
+        }
+        if (resolvedCacheGb <= 0) {
+            return { success: false, response: { success: false, error: 'Cache GB must be greater than 0.' } };
+        }
+        if (resolvedCacheLowGb < 0 || resolvedCacheLowGb > resolvedCacheGb) {
+            return { success: false, response: { success: false, error: 'Cache Low GB must be between 0 and Cache GB.' } };
+        }
+        if (isRetry && resolvedMaxUploadRetries <= 0) {
+            return { success: false, response: { success: false, error: 'Max upload retries must be greater than 0.' } };
+        }
+
+        try {
+            canonicalDestinationDir = ensureCanonicalWritableDirectory(destinationDir.trim(), 'Destination directory');
+            const stagingCandidate = providedStagingDir
+                ? stagingDir.trim()
+                : path.join(canonicalOutputDir, '.staging');
+            canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
+        } catch (e) {
+            return { success: false, response: { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message } };
+        }
+
+        if (canonicalDestinationDir === canonicalStagingDir) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Destination and staging folders must be different.',
+                    error: 'Destination and staging folders must be different.'
+                }
+            };
+        }
+
+        if (isPathInsideDir(canonicalDestinationDir, canonicalStagingDir)) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Destination folder cannot be inside the staging folder.',
+                    error: 'Destination folder cannot be inside the staging folder.'
+                }
+            };
+        }
+
+        if (isPathInsideDir(canonicalStagingDir, canonicalDestinationDir)) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Staging folder cannot be inside the destination folder.',
+                    error: 'Staging folder cannot be inside the destination folder.'
+                }
+            };
+        }
+
+        if (isPathInsideDir(canonicalDestinationDir, canonicalOutputDir)) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Destination folder cannot be inside the processing output root.',
+                    error: 'Destination folder cannot be inside the processing output root.'
+                }
+            };
+        }
+
+        if (isPathInsideDir(canonicalOutputDir, canonicalDestinationDir)) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Destination folder cannot be a parent of the processing output root.',
+                    error: 'Destination folder cannot be a parent of the processing output root.'
+                }
+            };
+        }
+
+        if (withDiskPreflight) {
+            const stagingPathForCheck = canonicalStagingDir || path.join(canonicalOutputDir, '.staging');
+            try {
+                const { freeBytes, volumePath } = await getDiskFreeBytesForPath(stagingPathForCheck);
+                const gib = 1024 ** 3;
+                const freeGb = freeBytes / gib;
+                const safetyBufferGb = Math.max(10, Math.round((freeGb * 0.10) * 10) / 10);
+                const requiredGb = resolvedCacheGb + safetyBufferGb;
+                const requiredBytes = requiredGb * gib;
+                const roundedFreeGb = Math.round(freeGb * 10) / 10;
+                const roundedRequiredGb = Math.round(requiredGb * 10) / 10;
+
+                console.log(`[AUTO UPLOAD PREFLIGHT] free=${roundedFreeGb} GB required=${roundedRequiredGb} GB cache=${resolvedCacheGb} GB buffer=${safetyBufferGb} GB stagingPath=${stagingPathForCheck}`);
+
+                if (freeBytes < requiredBytes) {
+                    return {
+                        success: false,
+                        response: {
+                            success: false,
+                            errorType: 'DISK_SPACE',
+                            message: 'Not enough free disk space on the staging volume for Auto Upload Mode.',
+                            details: {
+                                free_gb: roundedFreeGb,
+                                cache_gb: resolvedCacheGb,
+                                safety_buffer_gb: safetyBufferGb,
+                                required_gb: roundedRequiredGb,
+                                path: stagingPathForCheck,
+                                volume_path: volumePath
+                            }
+                        }
+                    };
+                }
+            } catch (e) {
+                return {
+                    success: false,
+                    response: {
+                        success: false,
+                        errorType: 'DISK_SPACE',
+                        message: `Unable to check free disk space for staging volume: ${e.message}`,
+                        details: {
+                            cache_gb: resolvedCacheGb,
+                            path: stagingPathForCheck
+                        }
+                    }
+                };
+            }
+
+            if (cacheComputation && cacheComputation.mode === 'automatic') {
+                const freeGb = Number(cacheComputation.freeGb);
+                const reserveGb = Number(cacheComputation.reserveGb);
+                const volumePath = typeof cacheComputation.volumePath === 'string' ? cacheComputation.volumePath : 'unknown';
+                const debugLine = `Auto cache computed: free=${freeGb.toFixed(1)} GB, reserve=${reserveGb.toFixed(1)} GB, cache_gb=${resolvedCacheGb}, cache_low_gb=${resolvedCacheLowGb}, volumePath=${volumePath}`;
+                console.log(debugLine);
+                if (logger) {
+                    logger.debug('Auto cache computed', {
+                        freeGb,
+                        reserveGb,
+                        cacheGb: resolvedCacheGb,
+                        cacheLowGb: resolvedCacheLowGb,
+                        volumePath
+                    });
+                }
+            }
+        }
+    }
+
+    return {
+        success: true,
+        options: {
+            autoUploadEnabled,
+            normalizedUploadMode,
+            resolvedCacheGb,
+            resolvedCacheLowGb,
+            resolvedMaxUploadRetries,
+            providedStagingDir,
+            canonicalDestinationDir,
+            canonicalStagingDir
+        }
+    };
+}
+
+function buildOrganizerArgsForStart({
+    canonicalZipPath,
+    canonicalOutputDir,
+    pauseBetweenBatches,
+    resumeMode,
+    autoUploadOptions
+}) {
+    const cliArgs = [
+        '--zip', canonicalZipPath,
+        '--output', canonicalOutputDir
+    ];
+
+    if (pauseBetweenBatches) {
+        cliArgs.push('--pause-batches');
+    }
+    if (resumeMode === 'trust') {
+        cliArgs.push('--trust-manifest');
+    }
+    if (autoUploadOptions.autoUploadEnabled) {
+        cliArgs.push('--auto-upload');
+        cliArgs.push('--destination-dir', autoUploadOptions.canonicalDestinationDir);
+        cliArgs.push('--cache-gb', String(autoUploadOptions.resolvedCacheGb));
+        cliArgs.push('--cache-low-gb', String(autoUploadOptions.resolvedCacheLowGb));
+        cliArgs.push('--upload-mode', autoUploadOptions.normalizedUploadMode);
+        if (autoUploadOptions.providedStagingDir) {
+            cliArgs.push('--staging-dir', autoUploadOptions.canonicalStagingDir);
+        }
+    }
+
+    return cliArgs;
+}
+
+function buildOrganizerArgsForRetry({
+    reportPath,
+    canonicalOutputDir,
+    autoUploadOptions
+}) {
+    const retryArgs = [
+        '--retry-report', reportPath,
+        '--output', canonicalOutputDir
+    ];
+
+    if (autoUploadOptions.autoUploadEnabled) {
+        retryArgs.push('--auto-upload');
+        retryArgs.push('--destination-dir', autoUploadOptions.canonicalDestinationDir);
+        retryArgs.push('--cache-gb', String(autoUploadOptions.resolvedCacheGb));
+        retryArgs.push('--cache-low-gb', String(autoUploadOptions.resolvedCacheLowGb));
+        retryArgs.push('--upload-mode', autoUploadOptions.normalizedUploadMode);
+        retryArgs.push('--max-upload-retries', String(autoUploadOptions.resolvedMaxUploadRetries));
+        if (autoUploadOptions.providedStagingDir) {
+            retryArgs.push('--staging-dir', autoUploadOptions.canonicalStagingDir);
+        }
+    }
+
+    return retryArgs;
+}
+
+function prepareStartOrganizerRun({
+    isDev,
+    cliArgs,
+    pauseBetweenBatches,
+    autoUploadEnabled,
+    cleanupOrphanedProcessesFn,
+    resolveOrganizerCommandFn
+}) {
+    // CLEANUP: Kill any orphaned processes before starting new one
+    cleanupOrphanedProcessesFn();
+    const organizer = resolveOrganizerCommandFn(isDev, cliArgs);
+
+    // Prepare process environment with logging directory
+    const processEnv = {
+        ...process.env,
+        FFMPEG_PATH: organizer.ffmpegPath
+    };
+
+    // Add logging directory if logger is initialized
+    if (logger) {
+        processEnv.DATEBACK_LOG_DIR = logger.getLogDirectory();
+        logger.info('Starting processing', {
+            pauseBetweenBatches,
+            autoUpload: autoUploadEnabled
+        });
+    }
+
+    return { organizer, processEnv };
+}
+
+function prepareRetryOrganizerRun({
+    isDev,
+    retryArgs,
+    resolveOrganizerCommandFn
+}) {
+    const organizer = resolveOrganizerCommandFn(isDev, retryArgs);
+    return {
+        organizer,
+        processEnv: {
+            ...process.env,
+            FFMPEG_PATH: organizer.ffmpegPath
+        }
+    };
+}
+
+function validateZipArchive(canonicalZipPath) {
     try {
-        const normalizedZipPath = sanitizePathInput(zipPath, 'ZIP path');
-        const canonicalZipPath = getCanonicalPath(normalizedZipPath);
         if (!canonicalZipPath.toLowerCase().endsWith('.zip')) {
             return { found: false, error: 'Selected file is not a ZIP archive.', count: 0 };
         }
 
-        const zipStat = fs.lstatSync(canonicalZipPath);
+        const fsLstatSync = getMainDep('fsLstatSync', fs.lstatSync.bind(fs));
+        const zipStat = fsLstatSync(canonicalZipPath);
         if (!zipStat.isFile() || zipStat.isSymbolicLink()) {
             return { found: false, error: 'ZIP path must be a regular file (symlinks are blocked).', count: 0 };
         }
 
-        const zip = new AdmZip(canonicalZipPath);
+        const AdmZipCtor = getMainDep('AdmZip', AdmZip);
+        const zip = new AdmZipCtor(canonicalZipPath);
         const zipEntries = zip.getEntries();
 
         // ZIP BOMB PROTECTION
@@ -446,6 +986,21 @@ ipcMain.handle('validate-zip', async (event, zipPath) => {
         }
 
         return { found: !!jsonEntry, count };
+    } catch (error) {
+        return { found: false, error: error.message, count: 0 };
+    }
+}
+
+// Validate ZIP file
+ipcMain.handle('validate-zip', async (event, zipPath) => {
+    if (!validateSender(event)) {
+        return { found: false, error: 'Unauthorized sender', count: 0 };
+    }
+
+    try {
+        const normalizedZipPath = sanitizePathInput(zipPath, 'ZIP path');
+        const canonicalZipPath = getCanonicalPath(normalizedZipPath);
+        return validateZipArchive(canonicalZipPath);
     } catch (error) {
         return { found: false, error: error.message, count: 0 };
     }
@@ -711,6 +1266,173 @@ function resolveOrganizerCommand(isDev, baseArgs = []) {
     };
 }
 
+function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null }) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const settle = (payload) => {
+            if (settled) return;
+            settled = true;
+            resolve(payload);
+        };
+
+        let proc;
+        const previousValidatedOutputDir = currentValidatedOutputDir;
+        if (mode === 'start') {
+            try {
+                proc = spawnProcess(organizer.command, organizer.args, {
+                    stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for resume signals
+                    env,
+                    shell: false
+                });
+            } catch (err) {
+                if (logger) {
+                    logger.error('Python process spawn threw synchronously', { error: err.message, stack: err.stack });
+                }
+                settle({ success: false, error: `Failed to start processing: ${err.message}` });
+                return;
+            }
+            setPythonProcess(proc);
+            if (typeof sessionOutputDir === 'string' && sessionOutputDir.trim().length > 0) {
+                setSessionOutputDir(sessionOutputDir);
+            }
+        } else {
+            proc = spawnProcess(organizer.command, organizer.args, {
+                env,
+                shell: false
+            });
+        }
+
+        let output = '';
+        let stats = null;
+
+        proc.stdout.on('data', (data) => {
+            if (mode === 'start') {
+                const lines = data.toString().split('\n').filter(l => l.trim());
+
+                // Log sample (first 3 lines only) for debugging - rate limited to avoid queue overflow
+                const now = Date.now();
+                if (logger && lines.length > 0 && now - lastPythonSampleLogAt > 2000) {
+                    lastPythonSampleLogAt = now;
+                    logger.debug('Python output', { sampleLines: lines.slice(0, 3) });
+                }
+
+                for (const line of lines) {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        try {
+                            const msg = JSON.parse(line);
+                            mainWindow.webContents.send('progress-update', msg);
+                        } catch (e) {
+                            // Regular log line
+                            mainWindow.webContents.send('log-message', line);
+                        }
+                    }
+                }
+                return;
+            }
+
+            const text = data.toString();
+            output += text;
+
+            // Try to parse JSON progress/complete messages
+            for (const line of text.split('\n')) {
+                if (line.trim().startsWith('{')) {
+                    try {
+                        const msg = JSON.parse(line);
+                        if (msg.type === 'complete' && msg.stats) {
+                            stats = msg.stats;
+                        }
+                    } catch (e) { }
+                }
+            }
+
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('log-message', text);
+            }
+        });
+
+        proc.stderr.on('data', (data) => {
+            if (mode === 'start') {
+                const stderrOutput = data.toString();
+
+                // Log first 500 chars of stderr
+                if (logger) {
+                    logger.warn('Python stderr', { output: stderrOutput.substring(0, 500) });
+                }
+
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('log-message', stderrOutput);
+                }
+                return;
+            }
+
+            output += data.toString();
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('log-message', data.toString());
+            }
+        });
+
+        proc.on('close', (code) => {
+            if (mode === 'start') {
+                // Log exit code
+                if (logger) {
+                    logger.info('Python process exited', { exitCode: code, intentionalStop });
+
+                    // Track error for error report generation
+                    if (code !== 0 && !intentionalStop) {
+                        lastError = {
+                            error: new Error(`Python process exited with code ${code}`),
+                            step: 'Memory Processing',
+                            context: { pythonExitCode: code }
+                        };
+                    }
+                }
+
+                // Kill caffeinate when processing ends
+                stopCaffeinateSafely();
+                clearPythonProcess();
+                clearSessionOutputDir();
+
+                // Check if this was an intentional stop (user clicked Stop/Cancel/Pause)
+                if (consumeIntentionalStop()) {
+                    settle({ success: true, stopped: true });
+                } else if (code === 0) {
+                    settle({ success: true });
+                } else {
+                    settle({ success: false, error: `Process exited with code ${code}` });
+                }
+                return;
+            }
+
+            if (code === 0) {
+                settle({ success: true, message: output, stats });
+            } else {
+                settle({ success: false, error: output || 'Retry process failed' });
+            }
+        });
+
+        proc.on('error', (err) => {
+            if (mode === 'start') {
+                // Log spawn error
+                if (logger) {
+                    logger.error('Python process spawn failed', { error: err.message, stack: err.stack });
+                }
+                lastError = { error: err, step: 'Spawn Memory Organizer', context: {} };
+
+                // Send error to renderer for user feedback
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('log-message', `❌ Fatal Error: ${err.message}`);
+                }
+                clearPythonProcess();
+                restoreSessionOutputDir(previousValidatedOutputDir);
+                settle({ success: false, error: `Failed to start processing: ${err.message}` });
+                return;
+            }
+
+            settle({ success: false, error: err.message });
+        });
+    });
+}
+
 function createWindow() {
     trustedRendererDocumentKey = null;
     mainWindow = new BrowserWindow({
@@ -920,6 +1642,7 @@ app.on('before-quit', (e) => {
 app.on('window-all-closed', () => {
     if (pythonProcess) {
         pythonProcess.kill();
+        clearPythonProcess();
     }
     if (process.platform !== 'darwin') {
         app.quit();
@@ -986,8 +1709,9 @@ ipcMain.handle('find-zip', async (event) => {
 
 // Open folder dialog for output selection
 ipcMain.handle('select-folder', async (event) => {
-    if (!validateSender(event)) {
-        return null;
+    const unauthorizedResponse = enforceAuthorizedSender(event, null);
+    if (unauthorizedResponse !== null) {
+        return unauthorizedResponse;
     }
 
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -1015,19 +1739,16 @@ ipcMain.handle('select-folder', async (event) => {
 
 // Open folder in Finder
 ipcMain.handle('open-folder', async (event, folderPath) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
 
-    let normalizedPath;
-    try {
-        normalizedPath = sanitizePathInput(folderPath, 'Folder path');
-    } catch (e) {
-        return { success: false, error: e.message };
+    const canonicalPathResult = sanitizeAndCanonicalizePath(folderPath, 'Folder path');
+    if (!canonicalPathResult.success) {
+        return canonicalPathResult.response;
     }
-
-    // Security: Validate path existence and type
-    const canonicalPath = getCanonicalPath(normalizedPath);
+    const canonicalPath = canonicalPathResult.canonicalPath;
 
     try {
         if (!fs.existsSync(canonicalPath)) {
@@ -1045,9 +1766,7 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
     // Security: Only allow opening approved directories or current session dir
     // We strictly verify the CANONICAL path against our approved set.
     // UX Update: Allow subfolders of approved directories.
-    const isApproved =
-        (currentValidatedOutputDir && isPathInsideDir(canonicalPath, currentValidatedOutputDir)) ||
-        Array.from(approvedOutputDirs).some(approvedRoot => isPathInsideDir(canonicalPath, approvedRoot));
+    const isApproved = authorizeOpenFolderTarget(canonicalPath);
 
     // We removed the broad "safeDefaults" (Documents/Downloads) to prevent arbitrary file access.
     // Users must strictly pick a folder to "approve" it for opening.
@@ -1063,22 +1782,26 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
 
 // Open URL in browser (ELEC-002: Whitelist protocols)
 ipcMain.handle('open-url', async (event, url) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
-    if (typeof url !== 'string' || url.length > 2048) {
-        return { success: false, error: 'Invalid URL' };
+    const invalidUrlResponse = validateExternalUrlInput(url);
+    if (invalidUrlResponse) {
+        return invalidUrlResponse;
     }
     return openExternalSafely(url);
 });
 
 // Open external URL (e.g., mailto: links for email)
 ipcMain.handle('open-external', async (event, url) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
-    if (typeof url !== 'string' || url.length > 2048) {
-        return { success: false, error: 'Invalid URL' };
+    const invalidUrlResponse = validateExternalUrlInput(url);
+    if (invalidUrlResponse) {
+        return invalidUrlResponse;
     }
     return openExternalSafely(url);
 });
@@ -1118,31 +1841,27 @@ ipcMain.handle('get-defaults', async (event) => {
 
 // Get resume manifest (for Trust Manifest mode)
 ipcMain.handle('get-resume-manifest', async (event, payload = {}) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
     const { outputDir, zipPath } = payload && typeof payload === 'object' ? payload : {};
-    let normalizedOutputDir;
-    try {
-        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
-    } catch (e) {
-        return { success: false, error: e.message };
+    const canonicalOutputDirResult = sanitizeAndCanonicalizePath(outputDir, 'Output directory');
+    if (!canonicalOutputDirResult.success) {
+        return canonicalOutputDirResult.response;
     }
-
-    const canonicalOutputDir = getCanonicalPath(normalizedOutputDir);
-
-    if (isSensitiveRoot(canonicalOutputDir)) {
-        return { success: false, error: 'Output directory is a restricted system folder.' };
-    }
-
-    const homeDir = app.getPath('home');
-    const defaultPicDir = path.join(homeDir, 'Pictures', 'SnapchatMemories');
-    const canonicalDefault = getCanonicalPath(defaultPicDir);
-    const isDefault = canonicalOutputDir === canonicalDefault || canonicalOutputDir.startsWith(canonicalDefault + path.sep);
-    const isUserApproved = approvedOutputDirs.has(canonicalOutputDir);
-
-    if (!isDefault && !isUserApproved) {
-        return { success: false, error: 'Output directory not approved' };
+    const canonicalOutputDir = canonicalOutputDirResult.canonicalPath;
+    const outputAuthorization = authorizeCanonicalOutputDir(canonicalOutputDir, {
+        rejectSensitiveRoot: true,
+        sensitiveRootError: 'Output directory is a restricted system folder.',
+        allowDefaultSubpath: true,
+        allowApprovedExact: true,
+        allowCurrentSessionExact: false,
+        unapprovedError: 'Output directory not approved',
+        unapprovedLogPrefix: null
+    });
+    if (!outputAuthorization.success) {
+        return outputAuthorization.response;
     }
 
     // Manifest is stored in PARENT directory (matches Python logic)
@@ -1221,15 +1940,12 @@ ipcMain.handle('stop-processing', async (event) => {
         return { success: false, error: 'Unauthorized sender' };
     }
     // Kill caffeinate if running
-    if (caffeinateProcess) {
-        caffeinateProcess.kill();
-        caffeinateProcess = null;
-    }
+    stopCaffeinateSafely();
 
     if (pythonProcess) {
-        intentionalStop = true; // Flag to prevent error message on process exit
+        markIntentionalStop(); // Flag to prevent error message on process exit
         pythonProcess.kill('SIGTERM');
-        pythonProcess = null;
+        clearPythonProcess();
         return { success: true };
     }
     return { success: false, error: 'No process running' };
@@ -1237,27 +1953,26 @@ ipcMain.handle('stop-processing', async (event) => {
 
 // Clear output folder (for Start Over functionality)
 ipcMain.handle('clear-output-folder', async (event, payload = {}) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
     const { outputDir } = payload && typeof payload === 'object' ? payload : {};
-    let normalizedOutputDir;
-    try {
-        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
-    } catch (e) {
-        return { success: false, error: e.message };
+    const canonicalOutputDirResult = sanitizeAndCanonicalizePath(outputDir, 'Output directory');
+    if (!canonicalOutputDirResult.success) {
+        return canonicalOutputDirResult.response;
     }
-
-    // Security: Validate outputDir is approved
-    const canonicalOutputDir = getCanonicalPath(normalizedOutputDir);
-    // User requirement: Only allow explicitly approved dirs or the current session dir
-    const isUserApproved = approvedOutputDirs.has(canonicalOutputDir);
-    const isCurrentSession = currentValidatedOutputDir && canonicalOutputDir === currentValidatedOutputDir;
-
-    // Re-verify it matches confirmed canonical path
-    if (!isUserApproved && !isCurrentSession) {
-        console.error(`[SECURITY] Rejected unapproved output directory for clearing: ${canonicalOutputDir}`);
-        return { success: false, error: 'Output directory not approved.' };
+    const canonicalOutputDir = canonicalOutputDirResult.canonicalPath;
+    const outputAuthorization = authorizeCanonicalOutputDir(canonicalOutputDir, {
+        rejectSensitiveRoot: false,
+        allowDefaultSubpath: false,
+        allowApprovedExact: true,
+        allowCurrentSessionExact: true,
+        unapprovedError: 'Output directory not approved.',
+        unapprovedLogPrefix: '[SECURITY] Rejected unapproved output directory for clearing'
+    });
+    if (!outputAuthorization.success) {
+        return outputAuthorization.response;
     }
 
     try {
@@ -1345,9 +2060,16 @@ ipcMain.handle('clear-output-folder', async (event, payload = {}) => {
 
 // Start processing
 ipcMain.handle('start-processing', async (event, payload = {}) => {
-    if (!validateSender(event)) {
+    const validateSenderFn = getMainDep('validateSender', validateSender);
+    if (!validateSenderFn(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
+    const validateOutputDirFn = getMainDep('validateAndCanonicalizeOutputDir', validateAndCanonicalizeOutputDir);
+    const resolveAutoUploadOptionsFn = getMainDep('resolveAndValidateAutoUploadOptions', resolveAndValidateAutoUploadOptions);
+    const buildStartArgsFn = getMainDep('buildOrganizerArgsForStart', buildOrganizerArgsForStart);
+    const resolveOrganizerCommandFn = getMainDep('resolveOrganizerCommand', resolveOrganizerCommand);
+    const runOrganizerSubprocessFn = getMainDep('runOrganizerSubprocess', runOrganizerSubprocess);
+    const cleanupOrphanedProcessesFn = getMainDep('cleanupOrphanedProcesses', cleanupOrphanedProcesses);
     const {
         zipPath,
         outputDir,
@@ -1361,105 +2083,19 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
         stagingDir,
         cacheComputation
     } = payload && typeof payload === 'object' ? payload : {};
-    let normalizedOutputDir;
-    try {
-        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
-    } catch (e) {
-        return { success: false, error: e.message };
+    const outputValidation = validateOutputDirFn(outputDir, {
+        allowCurrentSession: false,
+        includeSymlinkPathValidationError: true,
+        createIfMissing: true,
+        unapprovedError: 'Output directory not approved. Please use the folder picker.',
+        unapprovedLogPrefix: '[SECURITY] Rejected unapproved output directory',
+        sensitiveRootError: null,
+        sensitiveRootLog: true
+    });
+    if (!outputValidation.success) {
+        return outputValidation.response;
     }
-
-    // Security: Validate and approve outputDir using CANONICAL path
-    // This ensures that "validated value" == "used value".
-    // Try to resolve realpath if it exists (it might not yet).
-    const requestedOutputDir = path.resolve(normalizedOutputDir);
-    if (fs.existsSync(requestedOutputDir)) {
-        try {
-            const outputStat = fs.lstatSync(requestedOutputDir);
-            if (outputStat.isSymbolicLink()) {
-                return {
-                    success: false,
-                    errorType: 'PATH_VALIDATION',
-                    message: 'Output directory cannot be a symbolic link.',
-                    error: 'Output directory cannot be a symbolic link.'
-                };
-            }
-        } catch (e) {
-            return { success: false, error: `Cannot access output directory: ${e.message}` };
-        }
-    }
-    let canonicalOutputDir = getCanonicalPath(requestedOutputDir);
-
-    // If it doesn't exist, we must check the PARENT's approval or standard paths
-    // But for simplicity/security, we only allow if the resolved path is approved/safe.
-
-    // Check if this directory was approved via select-folder
-    // Note: We removed the "default location" bypass. Explicit approval only.
-    const isUserApproved = approvedOutputDirs.has(canonicalOutputDir);
-
-    // Also allow if strict subpath of an approved dir? 
-    // For now, strict equality or "is default location" logic.
-    // Re-adding restricted default logic: Allow ~/Pictures/SnapchatMemories specifically.
-    const homeDir = app.getPath('home');
-    const defaultPicDir = path.join(homeDir, 'Pictures', 'SnapchatMemories');
-    // Ensure we compare canonicals. Use isPathInsideDir to allow subfolders of the default location.
-    const canonicalDefault = getCanonicalPath(defaultPicDir);
-
-    // SECURITY: Deny sensitive roots even if somehow approved
-    if (isSensitiveRoot(canonicalOutputDir)) {
-        console.error(`[SECURITY] Rejected sensitive root output directory: ${canonicalOutputDir}`);
-
-        // Provide specific error message based on path type
-        let errorMsg;
-        if (canonicalOutputDir.startsWith('/Volumes/')) {
-            const driveName = path.basename(canonicalOutputDir);
-            errorMsg = `Cannot use external drive root. Please create a subfolder (e.g., /Volumes/${driveName}/DateBack_Output)`;
-        } else {
-            errorMsg = 'Please select a subfolder, not the root Documents/Downloads folder.';
-        }
-
-        return { success: false, error: errorMsg };
-    }
-
-    // Allow if it IS the default dir OR a subfolder of it
-    const isDefault = canonicalOutputDir === canonicalDefault || canonicalOutputDir.startsWith(canonicalDefault + path.sep);
-
-    if (!isDefault && !isUserApproved) {
-        console.error(`[SECURITY] Rejected unapproved output directory: ${canonicalOutputDir}`);
-        return { success: false, error: 'Output directory not approved. Please use the folder picker.' };
-    }
-
-    // Ensure directory exists (create if needed)
-    try {
-        if (!fs.existsSync(canonicalOutputDir)) {
-            fs.mkdirSync(canonicalOutputDir, { recursive: true, mode: 0o700 });
-        }
-
-        // TOCTOU PROTECTION: Re-validate AFTER creation
-        const postCreateCanonical = fs.realpathSync(canonicalOutputDir);
-        if (postCreateCanonical !== canonicalOutputDir) {
-            console.error(`[SECURITY] Directory path changed after creation - possible symlink attack`);
-            return {
-                success: false,
-                error: 'Security validation failed: directory path changed after creation'
-            };
-        }
-
-        // Use lstat (not stat) to detect if target is a symlink
-        const stat = fs.lstatSync(canonicalOutputDir);
-        if (!stat.isDirectory()) {
-            return { success: false, error: 'Output path exists but is not a directory' };
-        }
-        if (stat.isSymbolicLink()) {
-            console.error(`[SECURITY] Output path is a symlink - blocked for security`);
-            return { success: false, error: 'Symbolic links are not allowed for output directory' };
-        }
-    } catch (e) {
-        console.error(`[SECURITY] Failed to validate/create output directory: ${e.message}`);
-        return { success: false, error: `Cannot access output directory: ${e.message}` };
-    }
-
-    // Store validated output directory for secure resume operations
-    currentValidatedOutputDir = canonicalOutputDir;
+    const canonicalOutputDir = outputValidation.canonicalOutputDir;
 
     const autoUploadEnabled = !!autoUpload;
     const manualCloudUploadEnabled = !!pauseBetweenBatches;
@@ -1471,137 +2107,15 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
             error: 'Choose either Store Memories on Cloud or Store Memories on Computer with Pause after batch (not both).'
         };
     }
-    const normalizedUploadMode = uploadMode === 'move' ? 'move' : 'copy';
-    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : 5.0;
-    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : 3.0;
-    const providedStagingDir = typeof stagingDir === 'string' && stagingDir.trim().length > 0;
-
-    let canonicalDestinationDir = null;
-    let canonicalStagingDir = null;
-
-    if (autoUploadEnabled) {
-        if (!destinationDir || typeof destinationDir !== 'string' || destinationDir.trim().length === 0) {
-            return { success: false, error: 'Destination directory is required when Auto Upload is enabled.' };
-        }
-        if (resolvedCacheGb <= 0) {
-            return { success: false, error: 'Cache GB must be greater than 0.' };
-        }
-        if (resolvedCacheLowGb < 0 || resolvedCacheLowGb > resolvedCacheGb) {
-            return { success: false, error: 'Cache Low GB must be between 0 and Cache GB.' };
-        }
-
-        try {
-            canonicalDestinationDir = ensureCanonicalWritableDirectory(destinationDir.trim(), 'Destination directory');
-            const stagingCandidate = providedStagingDir
-                ? stagingDir.trim()
-                : path.join(canonicalOutputDir, '.staging');
-            canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
-        } catch (e) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message };
-        }
-
-        if (canonicalDestinationDir === canonicalStagingDir) {
-            return {
-                success: false,
-                errorType: 'PATH_VALIDATION',
-                message: 'Destination and staging folders must be different.',
-                error: 'Destination and staging folders must be different.'
-            };
-        }
-
-        if (isPathInsideDir(canonicalDestinationDir, canonicalStagingDir)) {
-            return {
-                success: false,
-                errorType: 'PATH_VALIDATION',
-                message: 'Destination folder cannot be inside the staging folder.',
-                error: 'Destination folder cannot be inside the staging folder.'
-            };
-        }
-
-        if (isPathInsideDir(canonicalStagingDir, canonicalDestinationDir)) {
-            return {
-                success: false,
-                errorType: 'PATH_VALIDATION',
-                message: 'Staging folder cannot be inside the destination folder.',
-                error: 'Staging folder cannot be inside the destination folder.'
-            };
-        }
-
-        if (isPathInsideDir(canonicalDestinationDir, canonicalOutputDir)) {
-            return {
-                success: false,
-                errorType: 'PATH_VALIDATION',
-                message: 'Destination folder cannot be inside the processing output root.',
-                error: 'Destination folder cannot be inside the processing output root.'
-            };
-        }
-
-        if (isPathInsideDir(canonicalOutputDir, canonicalDestinationDir)) {
-            return {
-                success: false,
-                errorType: 'PATH_VALIDATION',
-                message: 'Destination folder cannot be a parent of the processing output root.',
-                error: 'Destination folder cannot be a parent of the processing output root.'
-            };
-        }
-
-        const stagingPathForCheck = canonicalStagingDir || path.join(canonicalOutputDir, '.staging');
-        try {
-            const { freeBytes, volumePath } = await getDiskFreeBytesForPath(stagingPathForCheck);
-            const gib = 1024 ** 3;
-            const freeGb = freeBytes / gib;
-            const safetyBufferGb = Math.max(10, Math.round((freeGb * 0.10) * 10) / 10);
-            const requiredGb = resolvedCacheGb + safetyBufferGb;
-            const requiredBytes = requiredGb * gib;
-            const roundedFreeGb = Math.round(freeGb * 10) / 10;
-            const roundedRequiredGb = Math.round(requiredGb * 10) / 10;
-
-            console.log(`[AUTO UPLOAD PREFLIGHT] free=${roundedFreeGb} GB required=${roundedRequiredGb} GB cache=${resolvedCacheGb} GB buffer=${safetyBufferGb} GB stagingPath=${stagingPathForCheck}`);
-
-            if (freeBytes < requiredBytes) {
-                return {
-                    success: false,
-                    errorType: 'DISK_SPACE',
-                    message: 'Not enough free disk space on the staging volume for Auto Upload Mode.',
-                    details: {
-                        free_gb: roundedFreeGb,
-                        cache_gb: resolvedCacheGb,
-                        safety_buffer_gb: safetyBufferGb,
-                        required_gb: roundedRequiredGb,
-                        path: stagingPathForCheck,
-                        volume_path: volumePath
-                    }
-                };
-            }
-        } catch (e) {
-            return {
-                success: false,
-                errorType: 'DISK_SPACE',
-                message: `Unable to check free disk space for staging volume: ${e.message}`,
-                details: {
-                    cache_gb: resolvedCacheGb,
-                    path: stagingPathForCheck
-                }
-            };
-        }
-
-        if (cacheComputation && cacheComputation.mode === 'automatic') {
-            const freeGb = Number(cacheComputation.freeGb);
-            const reserveGb = Number(cacheComputation.reserveGb);
-            const volumePath = typeof cacheComputation.volumePath === 'string' ? cacheComputation.volumePath : 'unknown';
-            const debugLine = `Auto cache computed: free=${freeGb.toFixed(1)} GB, reserve=${reserveGb.toFixed(1)} GB, cache_gb=${resolvedCacheGb}, cache_low_gb=${resolvedCacheLowGb}, volumePath=${volumePath}`;
-            console.log(debugLine);
-            if (logger) {
-                logger.debug('Auto cache computed', {
-                    freeGb,
-                    reserveGb,
-                    cacheGb: resolvedCacheGb,
-                    cacheLowGb: resolvedCacheLowGb,
-                    volumePath
-                });
-            }
-        }
+    const autoUploadValidation = await resolveAutoUploadOptionsFn(
+        { autoUpload, destinationDir, cacheGb, cacheLowGb, uploadMode, stagingDir, maxUploadRetries: undefined },
+        canonicalOutputDir,
+        { withDiskPreflight: true, isRetry: false, cacheComputation }
+    );
+    if (!autoUploadValidation.success) {
+        return autoUploadValidation.response;
     }
+    const autoUploadOptions = autoUploadValidation.options;
 
     return new Promise((resolve) => {
         let settled = false;
@@ -1620,14 +2134,7 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
         const isDev = !app.isPackaged;
 
         // Start caffeinate to prevent sleep during processing (Insomniac Mode)
-        try {
-            caffeinateProcess = spawn('caffeinate', ['-i'], { shell: false });
-            caffeinateProcess.on('error', (err) => {
-                console.warn('Could not start caffeinate:', err.message);
-            });
-        } catch (e) {
-            console.warn('Caffeinate not available:', e.message);
-        }
+        startCaffeinateSafely();
 
         // SECURITY: Validate zipPath before passing to subprocess
         if (!zipPath || typeof zipPath !== 'string') {
@@ -1659,154 +2166,39 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
         // Build CLI arguments
         // CRITICAL SECURITY: Pass the CANONICAL paths to the CLI
         const cliArgs = [
-            '--zip', canonicalZipPath,  // Use validated canonical path
-            '--output', canonicalOutputDir // Use validated canonical path
+            ...buildStartArgsFn({
+                canonicalZipPath,
+                canonicalOutputDir,
+                pauseBetweenBatches,
+                resumeMode,
+                autoUploadOptions
+            })
         ];
-
-        if (pauseBetweenBatches) {
-            cliArgs.push('--pause-batches');
-        }
-        if (resumeMode === 'trust') {
-            cliArgs.push('--trust-manifest');
-        }
-        if (autoUploadEnabled) {
-            cliArgs.push('--auto-upload');
-            cliArgs.push('--destination-dir', canonicalDestinationDir);
-            cliArgs.push('--cache-gb', String(resolvedCacheGb));
-            cliArgs.push('--cache-low-gb', String(resolvedCacheLowGb));
-            cliArgs.push('--upload-mode', normalizedUploadMode);
-            if (providedStagingDir) {
-                cliArgs.push('--staging-dir', canonicalStagingDir);
-            }
-        }
 
         // Process paused check is handled by Python script resume signal logic
 
-        // CLEANUP: Kill any orphaned processes before starting new one
-        cleanupOrphanedProcesses();
-        const organizer = resolveOrganizerCommand(isDev, cliArgs);
-
-        // Prepare process environment with logging directory
-        const processEnv = {
-            ...process.env,
-            FFMPEG_PATH: organizer.ffmpegPath
-        };
-
-        // Add logging directory if logger is initialized
-        if (logger) {
-            processEnv.DATEBACK_LOG_DIR = logger.getLogDirectory();
-            logger.info('Starting processing', {
-                pauseBetweenBatches,
-                autoUpload: autoUploadEnabled
-            });
-        }
-
-        // Spawn the standalone executable
-        try {
-            pythonProcess = spawn(organizer.command, organizer.args, {
-                stdio: ['pipe', 'pipe', 'pipe'], // Enable stdin for resume signals
-                env: processEnv,
-                shell: false
-            });
-        } catch (err) {
-            if (logger) {
-                logger.error('Python process spawn threw synchronously', { error: err.message, stack: err.stack });
-            }
-            failStart(`Failed to start processing: ${err.message}`);
-            return;
-        }
-
-        pythonProcess.stdout.on('data', (data) => {
-            const lines = data.toString().split('\n').filter(l => l.trim());
-
-            // Log sample (first 3 lines only) for debugging - rate limited to avoid queue overflow
-            const now = Date.now();
-            if (logger && lines.length > 0 && now - lastPythonSampleLogAt > 2000) {
-                lastPythonSampleLogAt = now;
-                logger.debug('Python output', { sampleLines: lines.slice(0, 3) });
-            }
-
-            for (const line of lines) {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    try {
-                        const msg = JSON.parse(line);
-                        mainWindow.webContents.send('progress-update', msg);
-                    } catch (e) {
-                        // Regular log line
-                        mainWindow.webContents.send('log-message', line);
-                    }
-                }
-            }
+        const { organizer, processEnv } = prepareStartOrganizerRun({
+            isDev,
+            cliArgs,
+            pauseBetweenBatches,
+            autoUploadEnabled,
+            cleanupOrphanedProcessesFn,
+            resolveOrganizerCommandFn
         });
-
-        pythonProcess.stderr.on('data', (data) => {
-            const output = data.toString();
-
-            // Log first 500 chars of stderr
-            if (logger) {
-                logger.warn('Python stderr', { output: output.substring(0, 500) });
-            }
-
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('log-message', output);
-            }
-        });
-
-        pythonProcess.on('close', (code) => {
-            // Log exit code
-            if (logger) {
-                logger.info('Python process exited', { exitCode: code, intentionalStop });
-
-                // Track error for error report generation
-                if (code !== 0 && !intentionalStop) {
-                    lastError = {
-                        error: new Error(`Python process exited with code ${code}`),
-                        step: 'Memory Processing',
-                        context: { pythonExitCode: code }
-                    };
-                }
-            }
-
-            // Kill caffeinate when processing ends
-            if (caffeinateProcess) {
-                caffeinateProcess.kill();
-                caffeinateProcess = null;
-            }
-
-            pythonProcess = null;
-
-            // Check if this was an intentional stop (user clicked Stop/Cancel/Pause)
-            if (intentionalStop) {
-                intentionalStop = false; // Reset for next run
-                settle({ success: true, stopped: true });
-            } else if (code === 0) {
-                settle({ success: true });
-            } else {
-                settle({ success: false, error: `Process exited with code ${code}` });
-            }
-        });
-
-        pythonProcess.on('error', (err) => {
-            // Log spawn error
-            if (logger) {
-                logger.error('Python process spawn failed', { error: err.message, stack: err.stack });
-            }
-            lastError = { error: err, step: 'Spawn Memory Organizer', context: {} };
-
-            // Send error to renderer for user feedback
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('log-message', `❌ Fatal Error: ${err.message}`);
-            }
-            pythonProcess = null;
-            settle({ success: false, error: `Failed to start processing: ${err.message}` });
-        });
+        runOrganizerSubprocessFn({
+            organizer,
+            env: processEnv,
+            mode: 'start',
+            sessionOutputDir: canonicalOutputDir
+        }).then(settle);
     });
 });
 
 // Resume batch processing (ELEC-001: Hardened - main process controls file path)
 ipcMain.handle('resume-batch', async (event) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
 
     // Security: Use hardcoded signal filename inside validated output directory
@@ -1850,177 +2242,74 @@ ipcMain.handle('retry-corrupted', async (event, {
     stagingDir,
     maxUploadRetries
 } = {}) => {
-    if (!validateSender(event)) {
+    const validateSenderFn = getMainDep('validateSender', validateSender);
+    if (!validateSenderFn(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
-    let normalizedOutputDir;
-    try {
-        normalizedOutputDir = sanitizePathInput(outputDir, 'Output directory');
-    } catch (e) {
-        return { success: false, error: e.message };
+    const validateOutputDirFn = getMainDep('validateAndCanonicalizeOutputDir', validateAndCanonicalizeOutputDir);
+    const resolveAutoUploadOptionsFn = getMainDep('resolveAndValidateAutoUploadOptions', resolveAndValidateAutoUploadOptions);
+    const buildRetryArgsFn = getMainDep('buildOrganizerArgsForRetry', buildOrganizerArgsForRetry);
+    const resolveOrganizerCommandFn = getMainDep('resolveOrganizerCommand', resolveOrganizerCommand);
+    const runOrganizerSubprocessFn = getMainDep('runOrganizerSubprocess', runOrganizerSubprocess);
+    const fsExistsSyncFn = getMainDep('fsExistsSync', fs.existsSync.bind(fs));
+    const outputValidation = validateOutputDirFn(outputDir, {
+        allowCurrentSession: true,
+        includeSymlinkPathValidationError: false,
+        createIfMissing: false,
+        unapprovedError: 'Output directory not approved',
+        unapprovedLogPrefix: '[SECURITY] retry-corrupted rejected unapproved outputDir',
+        sensitiveRootError: 'Output directory is a restricted system folder.',
+        sensitiveRootLog: false
+    });
+    if (!outputValidation.success) {
+        return outputValidation.response;
     }
+    const canonicalOutputDir = outputValidation.canonicalOutputDir;
 
-    // Security: Validate outputDir is approved (same logic as start-processing)
-    // Use Canonical path
-    let canonicalOutputDir = getCanonicalPath(normalizedOutputDir);
-
-    if (isSensitiveRoot(canonicalOutputDir)) {
-        return { success: false, error: 'Output directory is a restricted system folder.' };
+    const autoUploadValidation = await resolveAutoUploadOptionsFn(
+        { autoUpload, destinationDir, cacheGb, cacheLowGb, uploadMode, stagingDir, maxUploadRetries },
+        canonicalOutputDir,
+        { withDiskPreflight: false, isRetry: true, cacheComputation: null }
+    );
+    if (!autoUploadValidation.success) {
+        return autoUploadValidation.response;
     }
-
-    // If not approved/current, reject
-    const isUserApproved = approvedOutputDirs.has(canonicalOutputDir);
-    const isCurrentSession = canonicalOutputDir === currentValidatedOutputDir;
-    // Also check default path logic if relevant, but let's be strict:
-    const homeDir = app.getPath('home');
-    const defaultPicDir = getCanonicalPath(path.join(homeDir, 'Pictures', 'SnapchatMemories'));
-
-    // Align with start-processing: allow subfolders of default
-    const isDefault = canonicalOutputDir === defaultPicDir || canonicalOutputDir.startsWith(defaultPicDir + path.sep);
-
-    if (!isDefault && !isUserApproved && !isCurrentSession) {
-        console.error(`[SECURITY] retry-corrupted rejected unapproved outputDir: ${canonicalOutputDir}`);
-        return { success: false, error: 'Output directory not approved' };
-    }
-
-    const autoUploadEnabled = !!autoUpload;
-    const normalizedUploadMode = uploadMode === 'move' ? 'move' : 'copy';
-    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : 5.0;
-    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : 3.0;
-    const resolvedMaxUploadRetries = Number.isFinite(Number(maxUploadRetries)) ? Number(maxUploadRetries) : 20;
-    const providedStagingDir = typeof stagingDir === 'string' && stagingDir.trim().length > 0;
-
-    let canonicalDestinationDir = null;
-    let canonicalStagingDir = null;
-
-    if (autoUploadEnabled) {
-        if (!destinationDir || typeof destinationDir !== 'string' || destinationDir.trim().length === 0) {
-            return { success: false, error: 'Destination directory is required when Auto Upload is enabled.' };
-        }
-        if (resolvedCacheGb <= 0) {
-            return { success: false, error: 'Cache GB must be greater than 0.' };
-        }
-        if (resolvedCacheLowGb < 0 || resolvedCacheLowGb > resolvedCacheGb) {
-            return { success: false, error: 'Cache Low GB must be between 0 and Cache GB.' };
-        }
-        if (resolvedMaxUploadRetries <= 0) {
-            return { success: false, error: 'Max upload retries must be greater than 0.' };
-        }
-
-        try {
-            canonicalDestinationDir = ensureCanonicalWritableDirectory(destinationDir.trim(), 'Destination directory');
-            const stagingCandidate = providedStagingDir
-                ? stagingDir.trim()
-                : path.join(canonicalOutputDir, '.staging');
-            canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
-        } catch (e) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message };
-        }
-
-        if (canonicalDestinationDir === canonicalStagingDir) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination and staging folders must be different.', error: 'Destination and staging folders must be different.' };
-        }
-        if (isPathInsideDir(canonicalDestinationDir, canonicalStagingDir)) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination folder cannot be inside the staging folder.', error: 'Destination folder cannot be inside the staging folder.' };
-        }
-        if (isPathInsideDir(canonicalStagingDir, canonicalDestinationDir)) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: 'Staging folder cannot be inside the destination folder.', error: 'Staging folder cannot be inside the destination folder.' };
-        }
-        if (isPathInsideDir(canonicalDestinationDir, canonicalOutputDir)) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination folder cannot be inside the processing output root.', error: 'Destination folder cannot be inside the processing output root.' };
-        }
-        if (isPathInsideDir(canonicalOutputDir, canonicalDestinationDir)) {
-            return { success: false, errorType: 'PATH_VALIDATION', message: 'Destination folder cannot be a parent of the processing output root.', error: 'Destination folder cannot be a parent of the processing output root.' };
-        }
-    }
+    const autoUploadOptions = autoUploadValidation.options;
 
     return new Promise((resolve) => {
-        const fs = require('fs');
-
         // Find the detailed_report.json
         const reportPath = path.join(canonicalOutputDir, 'detailed_report.json');
 
-        if (!fs.existsSync(reportPath)) {
+        if (!fsExistsSyncFn(reportPath)) {
             resolve({ success: false, error: 'No detailed_report.json found. Run full processing first.' });
             return;
         }
 
         const isDev = !app.isPackaged;
-        const retryArgs = [
-            '--retry-report', reportPath,
-            '--output', canonicalOutputDir // Use canonical path
-        ];
-        if (autoUploadEnabled) {
-            retryArgs.push('--auto-upload');
-            retryArgs.push('--destination-dir', canonicalDestinationDir);
-            retryArgs.push('--cache-gb', String(resolvedCacheGb));
-            retryArgs.push('--cache-low-gb', String(resolvedCacheLowGb));
-            retryArgs.push('--upload-mode', normalizedUploadMode);
-            retryArgs.push('--max-upload-retries', String(resolvedMaxUploadRetries));
-            if (providedStagingDir) {
-                retryArgs.push('--staging-dir', canonicalStagingDir);
-            }
-        }
-        const organizer = resolveOrganizerCommand(isDev, retryArgs);
-
-        const proc = spawn(organizer.command, organizer.args, {
-            env: {
-                ...process.env,
-                FFMPEG_PATH: organizer.ffmpegPath
-            },
-            shell: false
+        const retryArgs = buildRetryArgsFn({
+            reportPath,
+            canonicalOutputDir,
+            autoUploadOptions
         });
-
-        let output = '';
-        let stats = null;
-
-        proc.stdout.on('data', (data) => {
-            const text = data.toString();
-            output += text;
-
-            // Try to parse JSON progress/complete messages
-            for (const line of text.split('\n')) {
-                if (line.trim().startsWith('{')) {
-                    try {
-                        const msg = JSON.parse(line);
-                        if (msg.type === 'complete' && msg.stats) {
-                            stats = msg.stats;
-                        }
-                    } catch (e) { }
-                }
-            }
-
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('log-message', text);
-            }
+        const { organizer, processEnv } = prepareRetryOrganizerRun({
+            isDev,
+            retryArgs,
+            resolveOrganizerCommandFn
         });
-
-        proc.stderr.on('data', (data) => {
-            output += data.toString();
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('log-message', data.toString());
-            }
-        });
-
-        proc.on('close', (code) => {
-            if (code === 0) {
-                resolve({ success: true, message: output, stats });
-            } else {
-                resolve({ success: false, error: output || 'Retry process failed' });
-            }
-        });
-
-        proc.on('error', (err) => {
-            resolve({ success: false, error: err.message });
-        });
+        runOrganizerSubprocessFn({
+            organizer,
+            env: processEnv,
+            mode: 'retry'
+        }).then(resolve);
     });
 });
 
 // License Management
 
 ipcMain.handle('validate-license', async (event, licenseKey) => {
-    if (!validateSender(event)) {
-        return { success: false, valid: false, message: 'Unauthorized sender' };
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, valid: false, message: 'Unauthorized sender' });
+    if (unauthorizedResponse) {
+        return unauthorizedResponse;
     }
 
     // Rate limiting to prevent brute-force attacks
