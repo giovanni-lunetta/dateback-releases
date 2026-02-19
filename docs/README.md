@@ -3,6 +3,7 @@
 ## Core Docs
 - [Workstream Summary](./WORKSTREAM_SUMMARY.md)
 - [Testing Guide](./TESTING.md)
+- [Build Notes](./BUILD.md)
 
 ## Release Notes
 - [v1.0.0](./release-notes-v1.0.0.md)
