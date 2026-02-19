@@ -692,6 +692,55 @@ test('open-folder rejects unapproved directories', async () => {
     }
 });
 
+test('open-folder allows the same outputDir after successful start-processing validation', async () => {
+    const tmpZipPath = mkTmpFile('open-folder-approved-by-start.zip', 'zip');
+    const tmpOutDir = mkTmpDirReal('dateback-open-folder-approved-');
+
+    withOverrides({
+        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
+        resolveAndValidateAutoUploadOptions: async () => ({
+            success: true,
+            options: {
+                autoUploadEnabled: false,
+                normalizedUploadMode: 'copy',
+                resolvedCacheGb: 5,
+                resolvedCacheLowGb: 3,
+                resolvedMaxUploadRetries: 20,
+                providedStagingDir: false,
+                canonicalDestinationDir: null,
+                canonicalStagingDir: null
+            }
+        }),
+        buildOrganizerArgsForStart: () => ['--open-folder-approved-by-start'],
+        resolveOrganizerCommand: () => ({
+            command: 'dummy-organizer',
+            args: ['--open-folder-approved-by-start'],
+            ffmpegPath: '/ffmpeg'
+        }),
+        cleanupOrphanedProcesses: () => { },
+        runOrganizerSubprocess: () => Promise.resolve({ success: true })
+    });
+
+    try {
+        const startResult = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: tmpZipPath,
+            outputDir: tmpOutDir,
+            pauseBetweenBatches: false,
+            resumeMode: 'skip',
+            autoUpload: false
+        });
+        assert.deepEqual(startResult, { success: true });
+
+        const openResult = await callHandler('open-folder', createAuthorizedEvent(), tmpOutDir);
+        assert.deepEqual(openResult, { success: true });
+
+        const shellCalls = getShellCalls();
+        assert.deepEqual(shellCalls.openPath, [tmpOutDir]);
+    } finally {
+        cleanupTmp([tmpOutDir, tmpZipPath]);
+    }
+});
+
 test('get-resume-manifest rejects unauthorized sender', async () => {
     await expectUnauthorized('get-resume-manifest', { outputDir: '/tmp/out' }, { success: false, error: 'Unauthorized sender' });
 });

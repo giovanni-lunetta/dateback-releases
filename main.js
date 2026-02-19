@@ -2163,6 +2163,9 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
             return;
         }
 
+        // Approve the validated output directory for open-folder actions in this session.
+        approvedOutputDirs.add(canonicalOutputDir);
+
         // Build CLI arguments
         // CRITICAL SECURITY: Pass the CANONICAL paths to the CLI
         const cliArgs = [
