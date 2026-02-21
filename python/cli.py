@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CLI wrapper for MemSavr
+CLI wrapper for DateBack
 Outputs JSON progress for Electron IPC communication
 """
 
@@ -34,7 +34,7 @@ def progress_callback(progress):
         json_output("progress", {"percent": progress})
 
 def main():
-    parser = argparse.ArgumentParser(description='MemSavr CLI')
+    parser = argparse.ArgumentParser(description='DateBack CLI')
     parser.add_argument('--zip', help='Path to mydata.zip file')
     parser.add_argument('--output', help='Output directory')
     parser.add_argument('--limit', type=int, help='Limit number of memories to process')
