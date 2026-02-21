@@ -1020,7 +1020,7 @@ test('validate-license sandbox mode targets sandbox Polar endpoint and sandbox o
         const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
         assert.equal(result.success, true);
         assert.equal(result.valid, true);
-        assert.equal(capturedUrl, 'https://sandbox.polar.sh/v1/customer-portal/license-keys/validate');
+        assert.equal(capturedUrl, 'https://sandbox-api.polar.sh/v1/customer-portal/license-keys/validate');
         assert.deepEqual(capturedBody, {
             key: 'ABC-123',
             organization_id: 'sandbox-org-id'

@@ -42,7 +42,7 @@ const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const RATE_LIMIT_MAX = 5; // 5 attempts per minute
 const POLAR_PROD_BASE_URL = 'https://api.polar.sh';
-const POLAR_SANDBOX_BASE_URL = 'https://sandbox.polar.sh';
+const POLAR_SANDBOX_BASE_URL = 'https://sandbox-api.polar.sh';
 const POLAR_FALLBACK_PROD_ORG_ID = '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
 
 function checkRateLimit(identifier) {
