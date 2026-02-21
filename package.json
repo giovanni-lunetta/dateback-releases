@@ -71,6 +71,7 @@
         "adm-zip": "^0.5.16",
         "axios": "^1.13.2",
         "check-disk-space": "^3.4.0",
+        "dotenv": "^16.6.1",
         "electron-store": "^8.1.0",
         "electron-updater": "^6.6.2",
         "glob": "^13.0.0"

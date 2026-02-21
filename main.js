@@ -11,8 +11,12 @@ const { autoUpdater } = require('electron-updater');
 const Logger = require('./src/logger');
 const SupportLogs = require('./src/supportLogs');
 
-// Load environment variables from .env file
-require('dotenv').config();
+// Load environment variables from .env file when available.
+try {
+    require('dotenv').config();
+} catch (_dotenvError) {
+    // dotenv is optional in packaged runtime environments.
+}
 
 const store = new Store();
 
