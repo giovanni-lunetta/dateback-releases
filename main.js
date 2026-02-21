@@ -41,6 +41,9 @@ const SECURITY_DEBUG_ENABLED = DEBUG_SECURITY === '1' || DEBUG_SECURITY === 'tru
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const RATE_LIMIT_MAX = 5; // 5 attempts per minute
+const POLAR_PROD_BASE_URL = 'https://api.polar.sh';
+const POLAR_SANDBOX_BASE_URL = 'https://sandbox.polar.sh';
+const POLAR_FALLBACK_PROD_ORG_ID = '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
 
 function checkRateLimit(identifier) {
     const now = Date.now();
@@ -60,6 +63,22 @@ function checkRateLimit(identifier) {
 
     record.count++;
     return true;
+}
+
+function getPolarLicenseValidationConfig() {
+    const polarEnv = String(process.env.DATEBACK_POLAR_ENV || '').toLowerCase();
+    const allowSandbox = process.env.DATEBACK_ALLOW_SANDBOX === '1';
+    const isSandbox = polarEnv === 'sandbox' && allowSandbox;
+    if (isSandbox) {
+        return {
+            baseUrl: POLAR_SANDBOX_BASE_URL,
+            orgId: process.env.POLAR_ORG_ID_SANDBOX || process.env.POLAR_ORG_ID || POLAR_FALLBACK_PROD_ORG_ID
+        };
+    }
+    return {
+        baseUrl: POLAR_PROD_BASE_URL,
+        orgId: process.env.POLAR_ORG_ID || POLAR_FALLBACK_PROD_ORG_ID
+    };
 }
 
 // Cleanup old rate limit entries every 5 minutes
@@ -2332,10 +2351,8 @@ ipcMain.handle('validate-license', async (event, licenseKey) => {
         // Polar.sh License Validation API (uses JSON data)
         // Documentation: https://docs.polar.sh/api/license-keys
 
-        // Use environment variable in development, fallback to hardcoded production ID
-        const orgId = process.env.POLAR_ORG_ID || '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
-
-        const response = await axios.post('https://api.polar.sh/v1/customer-portal/license-keys/validate', {
+        const { baseUrl, orgId } = getPolarLicenseValidationConfig();
+        const response = await axios.post(`${baseUrl}/v1/customer-portal/license-keys/validate`, {
             key: licenseKey,
             organization_id: orgId
         }, {

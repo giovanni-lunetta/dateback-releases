@@ -221,6 +221,29 @@ function cleanupTmp(paths) {
     }
 }
 
+async function withEnv(overrides, callback) {
+    const previous = new Map();
+    for (const [key, value] of Object.entries(overrides)) {
+        previous.set(key, process.env[key]);
+        if (value === undefined) {
+            delete process.env[key];
+        } else {
+            process.env[key] = value;
+        }
+    }
+    try {
+        return await callback();
+    } finally {
+        for (const [key, value] of previous.entries()) {
+            if (value === undefined) {
+                delete process.env[key];
+            } else {
+                process.env[key] = value;
+            }
+        }
+    }
+}
+
 function makeSpawnRecorder() {
     const calls = [];
     const procs = [];
@@ -918,5 +941,89 @@ test('validate-license returns connectivity failure message on request error', a
         success: false,
         valid: false,
         message: 'Failed to validate license. Please check your internet connection.'
+    });
+});
+
+test('validate-license default config targets production Polar endpoint and fallback org', async () => {
+    await withEnv({
+        DATEBACK_POLAR_ENV: undefined,
+        POLAR_ORG_ID: undefined,
+        POLAR_ORG_ID_SANDBOX: undefined
+    }, async () => {
+        let capturedUrl = null;
+        let capturedBody = null;
+        let capturedConfig = null;
+        setAxiosPostImpl(async (url, body, config) => {
+            capturedUrl = url;
+            capturedBody = body;
+            capturedConfig = config;
+            return { status: 200, data: { id: 'lic_prod_1' } };
+        });
+
+        const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
+        assert.equal(result.success, true);
+        assert.equal(result.valid, true);
+        assert.equal(capturedUrl, 'https://api.polar.sh/v1/customer-portal/license-keys/validate');
+        assert.deepEqual(capturedBody, {
+            key: 'ABC-123',
+            organization_id: '4fee54f8-96c3-4302-8c3f-e71fd47da3fb'
+        });
+        assert.deepEqual(capturedConfig?.headers, {
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+        });
+        assert.equal(capturedConfig?.timeout, 15000);
+    });
+});
+
+test('validate-license sandbox env falls back to production unless allow flag is enabled', async () => {
+    await withEnv({
+        DATEBACK_POLAR_ENV: 'sandbox',
+        DATEBACK_ALLOW_SANDBOX: undefined,
+        POLAR_ORG_ID: undefined,
+        POLAR_ORG_ID_SANDBOX: 'sandbox-org-id'
+    }, async () => {
+        let capturedUrl = null;
+        let capturedBody = null;
+        setAxiosPostImpl(async (url, body) => {
+            capturedUrl = url;
+            capturedBody = body;
+            return { status: 200, data: { id: 'lic_prod_guard_1' } };
+        });
+
+        const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
+        assert.equal(result.success, true);
+        assert.equal(result.valid, true);
+        assert.equal(capturedUrl, 'https://api.polar.sh/v1/customer-portal/license-keys/validate');
+        assert.deepEqual(capturedBody, {
+            key: 'ABC-123',
+            organization_id: '4fee54f8-96c3-4302-8c3f-e71fd47da3fb'
+        });
+    });
+});
+
+test('validate-license sandbox mode targets sandbox Polar endpoint and sandbox org id when allow flag is set', async () => {
+    await withEnv({
+        DATEBACK_POLAR_ENV: 'sandbox',
+        DATEBACK_ALLOW_SANDBOX: '1',
+        POLAR_ORG_ID: 'prod-org-id',
+        POLAR_ORG_ID_SANDBOX: 'sandbox-org-id'
+    }, async () => {
+        let capturedUrl = null;
+        let capturedBody = null;
+        setAxiosPostImpl(async (url, body) => {
+            capturedUrl = url;
+            capturedBody = body;
+            return { status: 200, data: { id: 'lic_sandbox_1' } };
+        });
+
+        const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
+        assert.equal(result.success, true);
+        assert.equal(result.valid, true);
+        assert.equal(capturedUrl, 'https://sandbox.polar.sh/v1/customer-portal/license-keys/validate');
+        assert.deepEqual(capturedBody, {
+            key: 'ABC-123',
+            organization_id: 'sandbox-org-id'
+        });
     });
 });
