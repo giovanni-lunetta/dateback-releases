@@ -43,7 +43,7 @@
         <!-- Main Content -->
         <main class="main-content">
             <!-- Step 1: ZIP Selection with Drag & Drop -->
-            <section class="input-section">
+            <section class="input-section phase-step">
                 <div class="section-label-row">
                     <label class="section-label">1. Select Downloaded Snapchat File</label>
                     <button type="button" class="section-help-icon"
@@ -59,22 +59,24 @@
                     <input type="text" id="zip-path" class="text-input hidden" readonly>
                 </div>
                 <!-- Auto-Search Button (Outside drop zone to prevent event bubbling) -->
-                <button id="btn-find-zip" class="btn btn-secondary" style="margin-top: 12px; width: 100%;">
+                <button id="btn-find-zip" class="btn btn-secondary btn-zip-auto-find">
                     🔍 Find My Zip Automatically
                 </button>
-                <div id="file-selected" class="file-selected hidden">
-                    <span class="file-icon">📦</span>
-                    <span id="file-name" class="file-name"></span>
-                    <button id="btn-clear-file" class="btn-clear">✕</button>
-                </div>
-                <div id="zip-validation" class="zip-validation hidden">
-                    <span id="validation-status" class="validation-status"></span>
-                    <button id="btn-validation-help" class="btn btn-small btn-warning hidden">What do I do?</button>
+                <div class="zip-selected-stack">
+                    <div id="file-selected" class="file-selected hidden">
+                        <span class="file-icon">📦</span>
+                        <span id="file-name" class="file-name"></span>
+                        <button id="btn-clear-file" class="btn-clear">✕</button>
+                    </div>
+                    <div id="zip-validation" class="zip-validation hidden">
+                        <span id="validation-status" class="validation-status"></span>
+                        <button id="btn-validation-help" class="btn btn-small btn-warning hidden">What do I do?</button>
+                    </div>
                 </div>
             </section>
 
             <!-- Step 2: Working Folder -->
-            <section class="input-section">
+            <section class="input-section phase-step">
                 <div class="section-label-row">
                     <label class="section-label">2. Select Where You Want Your Memories Stored</label>
                     <button type="button" class="section-help-icon"
@@ -88,21 +90,21 @@
             </section>
 
             <!-- Storage Check Section -->
-            <section id="storage-check" class="input-section hidden">
+            <section id="storage-check" class="input-section phase-step storage-check-shell hidden">
                 <label class="section-label">3. Storage Check</label>
                 <div class="storage-stats">
-                    <div class="stat-box">
+                    <div class="stat-box stat-box-total">
                         <span class="stat-title">Total Memories</span>
                         <span id="storage-count" class="stat-value-large">-</span>
                     </div>
-                    <div class="stat-box">
+                    <div class="stat-box stat-box-available">
                         <span class="stat-title">Available Space</span>
                         <div class="stat-value-row">
                             <span id="storage-available" class="stat-value-large">-</span>
                             <span id="storage-status-icon" class="status-icon-inline">⏳</span>
                         </div>
                     </div>
-                    <div class="stat-box">
+                    <div class="stat-box stat-box-required">
                         <span class="stat-title">Est. Required</span>
                         <span id="storage-required" class="stat-value-large">-</span>
                     </div>
@@ -113,7 +115,7 @@
             </section>
 
             <!-- Processing Options -->
-            <section class="options-section">
+            <section class="options-section phase-step mode-shell">
                 <label class="section-label">4. Select a Mode</label>
                 <div class="mode-grid">
                     <div class="mode-column">
@@ -165,21 +167,21 @@
                     </div>
                 </div>
 
-                <section id="cloud-destination-section" class="input-section hidden">
-                    <div id="auto-upload-settings" class="hidden">
+                <section id="cloud-destination-section" class="input-section hidden cloud-followup-section">
+                    <div id="auto-upload-settings" class="hidden cloud-followup-shell">
                         <div class="section-label-row">
                             <label class="section-label">5. Cloud Destination Folder</label>
                             <button type="button" class="section-help-icon"
                                 aria-label="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack will copy your processed memories into this folder."
                                 data-tooltip="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack will copy your processed memories into this folder.">?</button>
                         </div>
-                        <div class="input-group cloud-destination-input-group">
+                        <div class="input-group cloud-destination-input-group destination-primary-row">
                             <input type="text" id="destination-path" class="text-input" placeholder="Destination folder (Dropbox/Drive/iCloud...)" readonly>
                             <button id="btn-browse-destination" class="btn btn-secondary">Choose folder...</button>
                         </div>
                         <p id="cloud-destination-error" class="destination-error hidden">Choose a cloud destination folder (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box).</p>
 
-                        <details id="auto-upload-advanced" class="auto-upload-advanced">
+                        <details id="auto-upload-advanced" class="auto-upload-advanced flow-advanced-panel">
                             <summary>Advanced</summary>
                             <div class="disk-usage-row" style="margin-top: 10px;">
                                 <span class="disk-usage-label">Disk usage</span>
