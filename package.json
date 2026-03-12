@@ -53,11 +53,12 @@
         ],
         "extraResources": [
             {
-                "from": "assets/bin",
-                "to": "bin",
-                "filter": [
-                    "**/*"
-                ]
+                "from": "assets/bin/memory-organizer",
+                "to": "bin/memory-organizer"
+            },
+            {
+                "from": "assets/bin/ffmpeg",
+                "to": "bin/ffmpeg"
             }
         ],
         "asarUnpack": [
