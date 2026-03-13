@@ -18,3 +18,4 @@
 - [v1.1.1](./release-notes-v1.1.1.md)
 - [v1.1.2](./release-notes-v1.1.2.md)
 - [v1.1.3](./release-notes-v1.1.3.md)
+- [v1.1.4](./release-notes-v1.1.4.md)
