@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-qa/
 build/
 *.dmg
 
@@ -22,3 +23,6 @@ python/dist/
 
 # Local package manager cache
 .npm-cache/
+
+# Internal working notes (do not publish)
+FAQ_TRUTH_NOTES.md
