@@ -78,7 +78,7 @@
             <!-- Step 2: Working Folder -->
             <section class="input-section phase-step">
                 <div class="section-label-row">
-                    <label class="section-label">2. Select Where You Want Your Memories Stored</label>
+                    <label id="working-folder-label" class="section-label">2. Select Where You Want Your Memories Stored</label>
                     <button type="button" class="section-help-icon"
                         aria-label="Choose the folder where DateBack will save your processed memories. If Store on Cloud is selected, this folder is used temporarily for staging, and the cloud destination you choose below is where your memories end up."
                         data-tooltip="Choose the folder where DateBack will save your processed memories. If Store on Cloud is selected, this folder is used temporarily for staging, and the cloud destination you choose below is where your memories end up.">?</button>
@@ -86,6 +86,12 @@
                 <div class="input-group">
                     <input type="text" id="output-path" class="text-input" placeholder="/path/to/output" readonly>
                     <button id="btn-browse-output" class="btn btn-secondary">Change</button>
+                </div>
+                <p id="working-folder-help" class="context-helper">Select a storage mode below to continue.</p>
+                <div id="storage-summary" class="storage-summary hidden" aria-live="polite">
+                    <span id="staging-free-space">Free space on staging drive: --</span>
+                    <span class="storage-summary-separator">•</span>
+                    <span id="staging-cache-usage">DateBack will use up to: -- temporary space</span>
                 </div>
             </section>
 
@@ -179,7 +185,12 @@
                             <input type="text" id="destination-path" class="text-input" placeholder="Destination folder (Dropbox/Drive/iCloud...)" readonly>
                             <button id="btn-browse-destination" class="btn btn-secondary">Choose folder...</button>
                         </div>
+                        <div class="handoff-helper-row" aria-live="polite">
+                            <span id="handoff-helper-text">DateBack copies into this synced folder. Your cloud app uploads from there.</span>
+                            <span id="handoff-tooltip" class="handoff-tooltip" aria-label="Cloud mode uses your Step 2 folder for temporary staging before copying files into this synced destination.">i</span>
+                        </div>
                         <p id="cloud-destination-error" class="destination-error hidden">Choose a cloud destination folder (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box).</p>
+                        <p id="sync-folder-warning" class="sync-folder-warning hidden"></p>
 
                         <details id="auto-upload-advanced" class="auto-upload-advanced flow-advanced-panel">
                             <summary>Advanced</summary>
@@ -252,6 +263,7 @@
                     Restart
                 </button>
             </div>
+            <p id="cta-helper" class="cta-helper" aria-live="polite"></p>
 
             <!-- Progress Section -->
             <section class="progress-section">
@@ -671,6 +683,7 @@
         <div class="modal-content modal-small">
             <h2 id="message-modal-title">Notice</h2>
             <p id="message-modal-text" class="modal-message"></p>
+            <p id="message-modal-subtext" class="modal-subtext hidden"></p>
             <div class="modal-buttons">
                 <button id="btn-message-ok" class="btn btn-primary">OK</button>
             </div>
@@ -707,7 +720,7 @@
     <div id="license-modal" class="modal hidden">
         <div class="modal-content">
             <h2>🔑 Activate DateBack</h2>
-            <p class="modal-message">Ready to archive your memories? Enter your license key below.</p>
+            <p class="modal-message">Enter the license key from your purchase email to activate DateBack on this Mac.</p>
 
             <div class="form-group" style="margin: 20px 0;">
                 <label for="license-key-input" style="display: block; margin-bottom: 8px; font-weight: 500;">License
@@ -721,8 +734,12 @@
                 <!-- Status messages appear here -->
             </div>
 
-            <p style="text-align: center; margin-bottom: 20px; font-size: 14px; color: var(--text-secondary);">
-                Enter the license key you received via email after purchase.
+            <p style="text-align: center; margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">
+                Paste the key exactly as it appears in your purchase email.
+            </p>
+
+            <p style="text-align: center; margin-bottom: 20px; font-size: 13px; color: var(--text-secondary);">
+                Internet is required once to validate your key.
             </p>
 
             <div class="modal-buttons" style="justify-content: center;">
@@ -730,7 +747,7 @@
             </div>
 
             <p style="text-align: center; margin-top: 20px; font-size: 12px; color: var(--text-secondary);">
-                Having trouble? Contact <a href="mailto:support@dateback.app"
+                Need help finding your key? Contact <a href="mailto:support@dateback.app"
                     style="color: var(--accent-green); text-decoration: none;">support@dateback.app</a>
             </p>
         </div>

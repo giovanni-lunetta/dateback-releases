@@ -1862,6 +1862,13 @@ ipcMain.handle('get-defaults', async (event) => {
     };
 });
 
+ipcMain.handle('get-app-version', async (event) => {
+    if (!validateSender(event)) {
+        return null;
+    }
+    return app.getVersion();
+});
+
 // Get resume manifest (for Trust Manifest mode)
 ipcMain.handle('get-resume-manifest', async (event, payload = {}) => {
     const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });

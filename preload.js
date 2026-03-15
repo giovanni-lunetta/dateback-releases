@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
 
     // Get default paths
     getDefaults: () => ipcRenderer.invoke('get-defaults'),
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
     // Processing
     startProcessing: (args) => ipcRenderer.invoke('start-processing', args && typeof args === 'object' ? args : {}),

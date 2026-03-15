@@ -11,6 +11,8 @@ const btnStop = document.getElementById('btn-stop');
 const btnToggleLog = document.getElementById('btn-toggle-log');
 const btnViewSummary = document.getElementById('btn-view-summary');
 const btnOpenFolder = document.getElementById('btn-open-folder');
+const workingFolderLabel = document.getElementById('working-folder-label');
+const ctaHelper = document.getElementById('cta-helper');
 const progressBar = document.getElementById('progress-fill').parentElement; // The progress-bar container
 const progressFill = document.getElementById('progress-fill');
 const progressText = document.getElementById('progress-text');
@@ -102,6 +104,11 @@ const storageWarningText = document.getElementById('storage-warning-text');
 const storageWarningSubtext = document.getElementById('storage-warning-subtext');
 const btnStorageCancel = document.getElementById('btn-storage-cancel');
 const btnStorageContinue = document.getElementById('btn-storage-continue');
+const messageModal = document.getElementById('message-modal');
+const messageModalTitle = document.getElementById('message-modal-title');
+const messageModalText = document.getElementById('message-modal-text');
+const messageModalSubtext = document.getElementById('message-modal-subtext');
+const btnMessageOk = document.getElementById('btn-message-ok');
 
 // State
 let isProcessing = false;
@@ -557,9 +564,79 @@ function getActiveProcessingModeName() {
     return 'No Storage Mode Selected';
 }
 
+function updateModeAwareCopy() {
+    const mode = getStorageMode();
+
+    if (workingFolderLabel) {
+        workingFolderLabel.textContent = mode === 'CLOUD'
+            ? '2. Select Your Working Folder'
+            : '2. Select Where You Want Your Memories Stored';
+    }
+
+    if (btnOpenFolder) {
+        btnOpenFolder.textContent = mode === 'CLOUD'
+            ? 'Open Cloud Folder'
+            : 'Open Output Folder';
+    }
+}
+
+function getStartButtonHelperText() {
+    if (!ctaHelper || btnStart.classList.contains('hidden') || isProcessing) {
+        return '';
+    }
+
+    const mode = getStorageMode();
+    const hasZipPath = !!zipPathInput.value.trim();
+    const zipIsValid = zipValidation.classList.contains('valid');
+    const hasOutput = !!outputPathInput.value.trim();
+    const cloudValidation = validateCloudDestinationForCurrentMode();
+
+    if (!hasZipPath) {
+        return 'Choose your downloaded Snapchat ZIP file to continue.';
+    }
+
+    if (!zipIsValid) {
+        return 'Choose a Snapchat export ZIP that includes the required JSON files.';
+    }
+
+    if (!hasOutput) {
+        return mode === 'CLOUD'
+            ? 'Choose a working folder for temporary staging.'
+            : 'Choose where you want your memories stored.';
+    }
+
+    if (mode === 'NONE') {
+        return 'Choose where to store your memories to continue.';
+    }
+
+    if (mode === 'CLOUD' && !cloudValidation.valid) {
+        return cloudValidation.message;
+    }
+
+    if (isStorageCriticallyLow) {
+        return 'Free up space or choose a different folder before starting.';
+    }
+
+    return 'Ready to start.';
+}
+
+function updateStartButtonHelper() {
+    if (!ctaHelper) {
+        return;
+    }
+
+    const helperText = getStartButtonHelperText();
+    ctaHelper.textContent = helperText;
+    ctaHelper.classList.toggle('hidden', !helperText);
+    ctaHelper.classList.toggle('is-ready', helperText === 'Ready to start.');
+}
+
 function updateStartButtonState() {
+    updateModeAwareCopy();
+
     if (isProcessing) {
         btnStart.disabled = true;
+        updateStartButtonHelper();
         return;
     }
 
@@ -570,6 +647,7 @@ function updateStartButtonState() {
     const cloudValidation = validateCloudDestinationForCurrentMode();
     const hasDestination = mode !== 'CLOUD' || cloudValidation.valid;
     btnStart.disabled = !(hasZip && hasOutput && hasMode && hasDestination && !isStorageCriticallyLow);
+    updateStartButtonHelper();
 }
 
 function computeAutoCacheValues(freeBytes) {
@@ -1083,13 +1161,18 @@ function isAllowedCloudFolder(pathValue) {
 
 function buildCloudHandoffTooltip(providerInfo) {
     return [
-        'By default, staging uses your Working Folder in Step 2 (inside a hidden .staging folder).',
-        'Advanced staging lets you choose a different drive for staging.'
+        'Step 2 is temporary working space for Cloud mode (inside a hidden .staging folder by default).',
+        'DateBack copies finished files into this synced destination folder.',
+        'Your cloud provider app uploads them from there.',
+        'Advanced staging lets you choose a different drive for temporary working space.'
     ].join('\n');
 }
 
 function buildCloudHandoffHelperText(providerInfo) {
-    return 'Cloud mode stages files temporarily, then copies them into your cloud folder.';
+    if (providerInfo && providerInfo.displayName) {
+        return `DateBack copies into this ${providerInfo.displayName} folder. Your cloud app uploads from there.`;
+    }
+    return 'DateBack copies into this synced cloud folder. Your cloud app uploads from there.';
 }
 
 function updateCloudHandoffCopy() {
@@ -1222,7 +1305,7 @@ async function validateZipFile(path) {
                 <circle cx="10" cy="10" r="9" fill="var(--accent-primary)" stroke="var(--accent-primary)" stroke-width="1.5"/>
                 <path d="M6 10L9 13L14 7" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            memories_history.json found
+            Snapchat export looks valid
         `;
         btnValidationHelp.classList.add('hidden');
 
@@ -1234,7 +1317,7 @@ async function validateZipFile(path) {
     } else {
         zipValidation.classList.add('invalid');
         validationStatus.classList.add('invalid');
-        validationStatus.textContent = '❌ memories_history.json not found';
+        validationStatus.textContent = '❌ This export is missing the required Snapchat JSON file';
         btnValidationHelp.classList.remove('hidden');
         storageCheckSection.classList.add('hidden');
         isStorageCriticallyLow = false;
@@ -1249,7 +1332,11 @@ async function setFilePath(path) {
 
     // Validate and check if it's a zip file
     if (!path.toLowerCase().endsWith('.zip')) {
-        alert('Please select a valid ZIP file');
+        showMessage(
+            'Choose a ZIP file',
+            'Select your downloaded Snapchat export ZIP to continue.',
+            'DateBack only works with Snapchat export ZIP files.'
+        );
         return;
     }
 
@@ -1337,7 +1424,11 @@ btnFindZip.addEventListener('click', async (e) => {
         // Reset text but keep disabled (setFilePath already disables it)
         btnFindZip.textContent = '🔍 Find My Zip Automatically';
     } else {
-        alert(`Could not find mydata~*.zip file.\n\n${result.error}\n\nPlease select your ZIP file manually.`);
+        showMessage(
+            'Could not find your ZIP automatically',
+            'DateBack could not find a Snapchat export ZIP in your Downloads folder.',
+            'Choose your ZIP manually, or download a fresh export from Snapchat and try again.'
+        );
         // Only re-enable if search failed
         btnFindZip.disabled = false;
         btnFindZip.textContent = '🔍 Find My Zip Automatically';
@@ -1374,7 +1465,11 @@ dropZone.addEventListener('drop', (e) => {
         if (file.name.endsWith('.zip')) {
             setFilePath(file.path);
         } else {
-            alert('Please drop a .zip file');
+            showMessage(
+                'Wrong file type',
+                'Drop your downloaded Snapchat ZIP file here.',
+                'DateBack cannot process folders, images, or other file types in this step.'
+            );
         }
     }
 });
@@ -1466,7 +1561,11 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     console.log('[START] zipPath:', zipPath, 'outputDir:', outputDir);
 
     if (!zipPath) {
-        alert('Please select your mydata.zip file first!');
+        showMessage(
+            'Choose your Snapchat ZIP first',
+            'Select your downloaded Snapchat export ZIP before starting.',
+            'Once the ZIP is selected and validated, DateBack can continue with setup.'
+        );
         return;
     }
 
@@ -1545,11 +1644,19 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     if (autoUpload) {
         if (diskUsageMode === 'manual') {
             if (!Number.isFinite(manualCacheGb) || manualCacheGb <= 0) {
-                alert('Cache GB must be greater than 0.');
+                showMessage(
+                    'Check your staging limit',
+                    'Staging limit must be greater than 0 GB.',
+                    'Enter a larger value or switch back to Automatic.'
+                );
                 return;
             }
             if (!Number.isFinite(manualCacheLowGb) || manualCacheLowGb < 0 || manualCacheLowGb >= manualCacheGb) {
-                alert('Cache Low GB must be less than Cache GB.');
+                showMessage(
+                    'Check your safety buffer',
+                    'Safety buffer must be lower than the staging limit.',
+                    'Lower the safety buffer or raise the staging limit.'
+                );
                 return;
             }
             resolvedCacheGb = manualCacheGb;
@@ -1675,6 +1782,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
 
     // UI Updates
     btnStart.classList.add('hidden');
+    if (typeof updateStartButtonHelper === 'function') {
+        updateStartButtonHelper();
+    }
     // Hide restart options while running.
     resumeRestartContainer.classList.add('hidden');
 
@@ -1695,12 +1805,15 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     // Get pause between batches preference
     const failStartValidation = (message, showAlert = true) => {
         if (showAlert && message) {
-            alert(message);
+            showMessage('Cannot start processing', message);
         }
         isProcessing = false;
         const idleUiState = computeProcessingUiStateHelper({ isProcessing: false, stoppedByUser: false });
         applyProcessingUiState(idleUiState);
         btnStart.classList.remove('hidden');
+        if (typeof updateStartButtonHelper === 'function') {
+            updateStartButtonHelper();
+        }
         progressTextContent.textContent = 'Ready';
         progressEta.textContent = '';
         updateAutoUploadUiState();
@@ -1756,6 +1869,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                     hasProcessedBefore = true;
                     resumeRestartContainer.classList.add('hidden');
                     btnStart.classList.add('hidden');
+                    if (typeof updateStartButtonHelper === 'function') {
+                        updateStartButtonHelper();
+                    }
                     document.getElementById('btn-restart-complete').classList.remove('hidden');
                 } else {
                     progressTextContent.innerHTML = `
@@ -1771,6 +1887,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                     // Show the Restart button (not Start) after successful completion
                     resumeRestartContainer.classList.add('hidden');
                     btnStart.classList.add('hidden');
+                    if (typeof updateStartButtonHelper === 'function') {
+                        updateStartButtonHelper();
+                    }
                     document.getElementById('btn-restart-complete').classList.remove('hidden');
                 }
             } else if (result.errorType === 'MODE_CONFLICT') {
@@ -1823,6 +1942,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                 progressTextContent.textContent = `❌ Error: ${result.error}`;
                 progressFill.style.background = 'var(--accent-red)';
                 btnStart.classList.add('hidden');
+                if (typeof updateStartButtonHelper === 'function') {
+                    updateStartButtonHelper();
+                }
                 resumeRestartContainer.classList.remove('hidden');
             }
         }
@@ -1832,6 +1954,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
             progressTextContent.textContent = `❌ Error: ${error.message}`;
             console.error(error);
             btnStart.classList.add('hidden');
+            if (typeof updateStartButtonHelper === 'function') {
+                updateStartButtonHelper();
+            }
             resumeRestartContainer.classList.remove('hidden');
         }
     } finally {
@@ -2058,6 +2183,9 @@ btnConfirmRestart.addEventListener('click', async () => {
 function resetUIForNewRun() {
     // Reset the UI state
     btnStart.classList.remove('hidden');
+    if (typeof updateStartButtonHelper === 'function') {
+        updateStartButtonHelper();
+    }
     resumeRestartContainer.classList.add('hidden');
 
     // Re-enable storage mode controls and output location change on restart
@@ -2100,6 +2228,9 @@ btnRestartComplete.addEventListener('click', () => {
     // Hide the restart button, show the start button
     btnRestartComplete.classList.add('hidden');
     btnStart.classList.remove('hidden');
+    if (typeof updateStartButtonHelper === 'function') {
+        updateStartButtonHelper();
+    }
 
     // Reset progress visuals
     progressFill.style.width = '0%';
@@ -2168,6 +2299,9 @@ btnConfirmStop.addEventListener('click', async () => {
 
     // Show Resume/Restart options but DISABLED initially
     btnStart.classList.add('hidden');
+    if (typeof updateStartButtonHelper === 'function') {
+        updateStartButtonHelper();
+    }
     resumeRestartContainer.classList.remove('hidden');
 
     // Disable all buttons while Python is cleaning up
@@ -2272,19 +2406,11 @@ btnCancelOffline.addEventListener('click', () => {
 
 // Validation Help - explain what to do when JSON is missing
 btnValidationHelp.addEventListener('click', () => {
-    alert(`Your ZIP file is missing "memories_history.json"
-
-This happens when you didn't select the right options on Snapchat's download page.
-
-To fix this:
-1. Go back to Snapchat's "Download My Data" page
-2. Make sure you toggle ON:
-   • "Export your Memories"
-   • "Export JSON Files"
-3. Request a new data download
-4. Wait for the email and download the new ZIP
-
-Your current ZIP file cannot be processed without the JSON file.`);
+    showMessage(
+        'This export is missing required Snapchat data',
+        'DateBack needs the JSON file that Snapchat includes when both Memories and JSON export are enabled.',
+        'To fix this:\n1. Go back to Snapchat\'s Download My Data page.\n2. Turn on Export your Memories and Export JSON Files.\n3. Request a new export and download the new ZIP.\n\nThis ZIP cannot be processed without that JSON file.'
+    );
 });
 
 // Toggle Log
@@ -2301,14 +2427,32 @@ const btnContinueBatch = document.getElementById('btn-continue-batch');
 const btnPauseAfterBatch = document.getElementById('btn-pause-after-batch');
 
 // Generic Message Modal
-const messageModal = document.getElementById('message-modal');
-const messageModalTitle = document.getElementById('message-modal-title');
-const messageModalText = document.getElementById('message-modal-text');
-const btnMessageOk = document.getElementById('btn-message-ok');
+function setModalTextContent(target, text) {
+    if (!target) {
+        return;
+    }
+    target.textContent = '';
+    const lines = String(text || '').split('\n');
+    lines.forEach((line, index) => {
+        if (index > 0) {
+            target.appendChild(document.createElement('br'));
+        }
+        target.appendChild(document.createTextNode(line));
+    });
+}
 
-function showMessage(title, text) {
+function showMessage(title, text, subtext = '') {
     messageModalTitle.textContent = title;
-    messageModalText.textContent = text;
+    setModalTextContent(messageModalText, text);
+    if (messageModalSubtext) {
+        if (subtext) {
+            setModalTextContent(messageModalSubtext, subtext);
+            messageModalSubtext.classList.remove('hidden');
+        } else {
+            messageModalSubtext.textContent = '';
+            messageModalSubtext.classList.add('hidden');
+        }
+    }
     messageModal.classList.remove('hidden');
 }
 
@@ -2341,7 +2485,11 @@ btnContinueBatch.addEventListener('click', async () => {
         console.log('[Pause-After-Batch] resumeBatch result:', result);
         if (!result.success) {
             console.error('[Pause-After-Batch] Failed to resume batch:', result.error);
-            alert(`Failed to resume processing: ${result.error}\n\nPlease restart the application.`);
+            showMessage(
+                'Could not resume processing',
+                result.error || 'DateBack could not continue to the next batch.',
+                'Please restart DateBack and try again.'
+            );
             progressTextContent.textContent = '⚠️ Resume failed';
         } else {
             console.log('[Pause-After-Batch] Successfully resumed batch');
@@ -2349,7 +2497,11 @@ btnContinueBatch.addEventListener('click', async () => {
         }
     } catch (err) {
         console.error('[Pause-After-Batch] Error resuming batch:', err);
-        alert(`Error resuming processing: ${err.message}\n\nPlease restart the application.`);
+        showMessage(
+            'Could not resume processing',
+            err.message || 'DateBack hit an unexpected error while resuming.',
+            'Please restart DateBack and try again.'
+        );
         progressTextContent.textContent = '⚠️ Resume error';
     }
 });
@@ -2371,6 +2523,9 @@ btnPauseAfterBatch.addEventListener('click', async () => {
 
         // Show Resume/Restart options but DISABLED initially (while cleaning up)
         btnStart.classList.add('hidden');
+        if (typeof updateStartButtonHelper === 'function') {
+            updateStartButtonHelper();
+        }
         resumeRestartContainer.classList.remove('hidden');
 
         // Disable all buttons while Python is cleaning up
@@ -3299,7 +3454,7 @@ btnActivateLicense.addEventListener('click', async () => {
         showLicenseStatus('Failed to validate license. Please check your internet connection.', true);
     } finally {
         btnActivateLicense.disabled = false;
-        btnActivateLicense.textContent = 'Activate';
+        btnActivateLicense.textContent = 'Activate License';
     }
 });
 
@@ -3327,11 +3482,20 @@ function closeContactModal() {
     contactModal.classList.remove('active');
 }
 
+async function getSupportEmailVersion() {
+    try {
+        return await window.api.getAppVersion() || 'Unknown';
+    } catch {
+        return 'Unknown';
+    }
+}
+
 // Handle email support button - opens user's default email client
 if (btnEmailSupport) {
-    btnEmailSupport.addEventListener('click', () => {
+    btnEmailSupport.addEventListener('click', async () => {
+        const appVersion = await getSupportEmailVersion();
         const subject = encodeURIComponent('DateBack Support Request');
-        const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nDateBack Version: 1.0.4\nPlatform: macOS');
+        const body = encodeURIComponent(`Please describe your issue:\n\n\n\n---\nDateBack Version: ${appVersion}\nPlatform: macOS`);
         window.api.openExternal(`mailto:support@dateback.app?subject=${subject}&body=${body}`);
         closeContactModal(); // Close modal after opening email
     });
@@ -3386,9 +3550,10 @@ function closeLogsExportModal() {
 
 // Email link click handler
 if (logsSupportEmail) {
-    logsSupportEmail.addEventListener('click', () => {
+    logsSupportEmail.addEventListener('click', async () => {
+        const appVersion = await getSupportEmailVersion();
         const subject = encodeURIComponent('DateBack Support Request - Logs Attached');
-        const body = encodeURIComponent('Please describe your issue:\n\n\n\n---\nDateBack Version: 1.0.4\nPlatform: macOS\n\nSupport logs are attached to this email.');
+        const body = encodeURIComponent(`Please describe your issue:\n\n\n\n---\nDateBack Version: ${appVersion}\nPlatform: macOS\n\nSupport logs are attached to this email.`);
         window.api.openExternal(`mailto:support@dateback.app?subject=${subject}&body=${body}`);
     });
 }
