@@ -2854,7 +2854,32 @@ function updateAutoUploadUiState() {
     applyVisibilityState(visibilityState);
 }
 
-function bindModeCardClick(cardEl, checkboxEl, ignoreSelector = null) {
+function refreshModeDependentUi() {
+    syncStorageModeFromControls();
+    updateAutoUploadUiState();
+    if (currentMemoryCount > 0) {
+        void checkStorage(currentMemoryCount);
+    }
+}
+
+function selectStorageMode(mode) {
+    if (!computerModeCheckbox || !cloudModeCheckbox) {
+        return;
+    }
+
+    const nextComputerChecked = mode === 'computer';
+    const nextCloudChecked = mode === 'cloud';
+
+    if (computerModeCheckbox.checked === nextComputerChecked && cloudModeCheckbox.checked === nextCloudChecked) {
+        return;
+    }
+
+    computerModeCheckbox.checked = nextComputerChecked;
+    cloudModeCheckbox.checked = nextCloudChecked;
+    refreshModeDependentUi();
+}
+
+function bindModeCardSelection(cardEl, checkboxEl, mode, ignoreSelector = null) {
     if (!cardEl || !checkboxEl) {
         return;
     }
@@ -2871,12 +2896,13 @@ function bindModeCardClick(cardEl, checkboxEl, ignoreSelector = null) {
         if (e.target.closest('input, button, select, textarea, a')) {
             return;
         }
-        checkboxEl.click();
+        e.preventDefault();
+        selectStorageMode(mode);
     });
 }
 
-bindModeCardClick(computerModeCard, computerModeCheckbox, '#computer-suboptions');
-bindModeCardClick(cloudModeCard, cloudModeCheckbox);
+bindModeCardSelection(computerModeCard, computerModeCheckbox, 'computer', '#computer-suboptions');
+bindModeCardSelection(cloudModeCard, cloudModeCheckbox, 'cloud');
 
 cloudModeCheckbox.addEventListener('change', () => {
     if (cloudModeCheckbox.disabled) {
@@ -2952,13 +2978,19 @@ updateAutoUploadUiState();
 computerModeCheckbox.addEventListener('click', (e) => {
     if (computerModeCheckbox.disabled) {
         e.preventDefault();
+        return;
     }
+    e.preventDefault();
+    selectStorageMode('computer');
 });
 
 cloudModeCheckbox.addEventListener('click', (e) => {
     if (cloudModeCheckbox.disabled) {
         e.preventDefault();
+        return;
     }
+    e.preventDefault();
+    selectStorageMode('cloud');
 });
 
 if (pauseAfterBatchCheckbox) {
@@ -3535,11 +3567,15 @@ async function checkLicense() {
 function showLicenseModal() {
     licenseModal.classList.remove('hidden');
     licenseKeyInput.value = '';
+    licenseStatus.textContent = '';
     licenseStatus.classList.add('hidden');
+    licenseStatus.classList.remove('success', 'error');
 }
 
 function showLicenseStatus(message, isError = false) {
     licenseStatus.classList.remove('hidden');
+    licenseStatus.classList.remove('success', 'error');
+    licenseStatus.classList.add(isError ? 'error' : 'success');
 
     // Security: Use safe DOM creation instead of innerHTML to prevent XSS from API responses
     licenseStatus.textContent = ''; // Clear existing content
@@ -3555,9 +3591,6 @@ function showLicenseStatus(message, isError = false) {
     svg.style.marginRight = '6px';
 
     if (isError) {
-        licenseStatus.style.backgroundColor = 'rgba(255, 99, 71, 0.1)';
-        licenseStatus.style.color = 'var(--accent-red)';
-
         // Warning triangle icon
         const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path1.setAttribute('d', 'M10 2L2 17h16L10 2z');
@@ -3574,9 +3607,6 @@ function showLicenseStatus(message, isError = false) {
         svg.appendChild(path1);
         svg.appendChild(path2);
     } else {
-        licenseStatus.style.backgroundColor = 'rgba(76, 175, 80, 0.1)';
-        licenseStatus.style.color = 'var(--accent-primary)';
-
         // Success checkmark icon
         const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         circle.setAttribute('cx', '10');
@@ -3654,12 +3684,12 @@ const btnEmailSupport = document.getElementById('btn-email-support');
 
 // Open contact modal
 function openContactModal() {
-    contactModal.classList.add('active');
+    contactModal.classList.remove('hidden');
 }
 
 // Close contact modal
 function closeContactModal() {
-    contactModal.classList.remove('active');
+    contactModal.classList.add('hidden');
 }
 
 async function getSupportEmailVersion() {
@@ -3699,10 +3729,10 @@ contactModal.addEventListener('click', (e) => {
 
 // Close modal with ESC key
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && contactModal.classList.contains('active')) {
+    if (e.key === 'Escape' && !contactModal.classList.contains('hidden')) {
         closeContactModal();
     }
-    if (e.key === 'Escape' && logsExportModal.classList.contains('active')) {
+    if (e.key === 'Escape' && !logsExportModal.classList.contains('hidden')) {
         closeLogsExportModal();
     }
 });
@@ -3720,12 +3750,12 @@ const logsExportModalCloseBtn = document.getElementById('logs-export-modal-close
 // Open logs export modal
 function openLogsExportModal(filename) {
     logsExportFilename.textContent = filename;
-    logsExportModal.classList.add('active');
+    logsExportModal.classList.remove('hidden');
 }
 
 // Close logs export modal
 function closeLogsExportModal() {
-    logsExportModal.classList.remove('active');
+    logsExportModal.classList.add('hidden');
 }
 
 // Email link click handler

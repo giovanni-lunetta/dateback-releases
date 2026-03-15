@@ -719,58 +719,51 @@
 
     <!-- License Activation Modal -->
     <div id="license-modal" class="modal hidden">
-        <div class="modal-content">
+        <div class="modal-content modal-small modal-license-shell">
             <h2>🔑 Activate DateBack</h2>
             <p class="modal-message">Enter the license key from your purchase email to activate DateBack on this Mac.</p>
 
-            <div class="form-group" style="margin: 20px 0;">
-                <label for="license-key-input" style="display: block; margin-bottom: 8px; font-weight: 500;">License
-                    Key</label>
-                <input type="text" id="license-key-input" class="text-input" placeholder="XXXX-XXXX-XXXX-XXXX"
-                    style="width: 100%; font-family: 'Courier New', monospace; text-transform: uppercase;">
+            <div class="form-group modal-form-group">
+                <label for="license-key-input" class="modal-label">License Key</label>
+                <input type="text" id="license-key-input" class="text-input modal-input-mono" placeholder="XXXX-XXXX-XXXX-XXXX">
             </div>
 
-            <div id="license-status" class="hidden"
-                style="margin-bottom: 20px; padding: 12px; border-radius: 8px; font-size: 14px;">
+            <div id="license-status" class="form-status modal-status hidden">
                 <!-- Status messages appear here -->
             </div>
 
-            <p style="text-align: center; margin-bottom: 10px; font-size: 14px; color: var(--text-secondary);">
+            <p class="modal-subtext modal-subtext-tight">
                 Paste the key exactly as it appears in your purchase email.
             </p>
 
-            <p style="text-align: center; margin-bottom: 20px; font-size: 13px; color: var(--text-secondary);">
+            <p class="modal-caption">
                 Internet is required once to validate your key.
             </p>
 
-            <div class="modal-buttons" style="justify-content: center;">
-                <button id="btn-activate-license" class="btn btn-primary">Activate License</button>
+            <div class="modal-buttons modal-buttons-centered">
+                <button id="btn-activate-license" class="btn btn-primary btn-large modal-primary-action">Activate License</button>
             </div>
 
-            <p style="text-align: center; margin-top: 20px; font-size: 12px; color: var(--text-secondary);">
-                Need help finding your key? Contact <a href="mailto:support@dateback.app"
-                    style="color: var(--accent-green); text-decoration: none;">support@dateback.app</a>
+            <p class="modal-caption modal-caption-bottom">
+                Need help finding your key? Contact <a href="mailto:support@dateback.app" class="modal-link">support@dateback.app</a>
             </p>
         </div>
     </div>
 
 
     <!-- Contact Support Modal -->
-    <!-- Contact Support Modal -->
-    <div id="contact-modal" class="contact-modal">
-        <div class="contact-modal-content">
-            <span id="contact-modal-close-btn" class="contact-modal-close">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <div id="contact-modal" class="modal hidden">
+        <div class="modal-content modal-small modal-support-shell">
+            <button id="contact-modal-close-btn" class="modal-close-btn" type="button" aria-label="Close support modal">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                 </svg>
-            </span>
+            </button>
             <h2>Contact Support</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 24px;">
-                Have a question or need help? Send us an email and we'll get back to you soon.
-            </p>
+            <p class="modal-message">Have a question or need help? Send us an email and we'll get back to you soon.</p>
 
-            <button id="btn-email-support" class="btn btn-primary" style="width: 100%; margin-bottom: 16px;">
-                <svg style="vertical-align: middle; margin-right: 8px;" width="20" height="20" viewBox="0 0 24 24"
+            <button id="btn-email-support" class="btn btn-primary btn-large modal-primary-action" type="button">
+                <svg class="modal-button-icon" width="20" height="20" viewBox="0 0 24 24"
                     fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
@@ -780,13 +773,12 @@
                 Email Support
             </button>
 
-            <p style="color: var(--text-secondary); font-size: 0.9em; text-align: center; margin-top: 8px;">
+            <p class="modal-caption">
                 Opens in your default email app. You can attach screenshots, logs, or other files.
             </p>
 
-            <div
-                style="margin-top: 20px; padding: 16px; background: rgba(59, 142, 208, 0.1); border: 1px solid rgba(59, 142, 208, 0.3); border-radius: 8px;">
-                <p style="color: var(--text-secondary); font-size: 0.85em; margin: 0;">
+            <div class="modal-note modal-note-info">
+                <p>
                     💡 <strong>Tip:</strong> If you're experiencing an error, export your support logs via <strong>Help
                         → Export Support Logs</strong> and attach the ZIP file to your email for faster troubleshooting.
                 </p>
@@ -795,18 +787,16 @@
     </div>
 
     <!-- Support Logs Export Success Modal -->
-    <div id="logs-export-modal" class="contact-modal">
-        <div class="contact-modal-content" style="max-width: 580px; padding: 40px;">
-            <span id="logs-export-modal-close-btn" class="contact-modal-close">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <div id="logs-export-modal" class="modal hidden">
+        <div class="modal-content modal-medium modal-logs-shell">
+            <button id="logs-export-modal-close-btn" class="modal-close-btn" type="button" aria-label="Close logs export modal">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                 </svg>
-            </span>
+            </button>
 
-            <!-- Success Icon -->
-            <div style="text-align: center; margin-bottom: 28px;">
-                <div
-                    style="width: 88px; height: 88px; margin: 0 auto; background: linear-gradient(135deg, #2cc069 0%, #3b8ed0 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 12px 32px rgba(44, 192, 105, 0.5), 0 0 0 8px rgba(44, 192, 105, 0.1);">
+            <div class="modal-success-icon-wrap">
+                <div class="modal-success-icon">
                     <svg width="44" height="44" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M20 6L9 17l-5-5" stroke="white" stroke-width="3" stroke-linecap="round"
                             stroke-linejoin="round" />
@@ -814,44 +804,30 @@
                 </div>
             </div>
 
-            <!-- Title -->
-            <h2 style="margin: 0 0 12px 0; font-size: 32px; text-align: center; font-weight: 700;">Logs Exported!</h2>
-            <p
-                style="color: var(--text-secondary); margin: 0 0 32px 0; font-size: 15px; text-align: center; line-height: 1.5;">
-                Your diagnostic logs have been packaged and saved
+            <h2>Support Logs Ready</h2>
+            <p class="modal-subtext modal-centered">
+                Your diagnostic logs have been packaged and saved.
             </p>
 
-            <!-- File Location Box -->
-            <div
-                style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; margin-bottom: 24px;">
-                <p
-                    style="color: var(--text-secondary); margin: 0 0 10px 0; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">
-                    📁 File Location
-                </p>
-                <p id="logs-export-filename"
-                    style="color: var(--text-main); font-weight: 600; font-size: 15px; margin: 0; word-break: break-all; font-family: 'SF Mono', 'Monaco', 'Courier New', monospace; line-height: 1.6;">
+            <div class="modal-file-box">
+                <p class="modal-file-label">Saved file</p>
+                <p id="logs-export-filename" class="modal-file-path">
                     DateBack-SupportLogs-2026-01-03.zip
                 </p>
             </div>
 
-            <!-- Email Instruction Box -->
-            <div
-                style="background: linear-gradient(135deg, rgba(59, 142, 208, 0.15) 0%, rgba(44, 192, 105, 0.15) 100%); border: 1.5px solid rgba(59, 142, 208, 0.5); border-radius: 14px; padding: 28px; margin-bottom: 28px; text-align: center;">
-                <p
-                    style="color: var(--text-main); font-size: 15px; margin: 0 0 16px 0; line-height: 1.6; font-weight: 500;">
+            <div class="modal-note modal-note-accent modal-centered">
+                <p class="modal-note-title">
                     📧 <strong>Next Step:</strong> Attach this ZIP to your support email
                 </p>
-                <button id="logs-support-email"
-                    style="all: unset; color: white; cursor: pointer; font-weight: 700; font-size: 17px; display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #3b8ed0 0%, #2cc069 100%); border-radius: 10px; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(59, 142, 208, 0.4); letter-spacing: 0.3px;">
+                <button id="logs-support-email" class="btn btn-primary btn-large modal-email-button" type="button">
                     support@dateback.app
                 </button>
             </div>
 
-            <!-- Close Button -->
-            <button id="btn-logs-export-ok" class="btn btn-primary btn-large"
-                style="box-shadow: 0 4px 16px rgba(44, 192, 105, 0.25);">
-                Got it!
-            </button>
+            <div class="modal-buttons modal-buttons-centered">
+                <button id="btn-logs-export-ok" class="btn btn-secondary btn-large" type="button">Close</button>
+            </div>
         </div>
     </div>
 
