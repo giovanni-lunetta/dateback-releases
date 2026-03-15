@@ -1784,6 +1784,11 @@ textarea {
     animation: readyPulse 2s ease-in-out infinite;
 }
 
+.progress-section.needs-attention .progress-bar {
+    border-color: rgba(255, 68, 68, 0.22);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.28), 0 0 18px rgba(255, 68, 68, 0.14);
+}
+
 @keyframes readyPulse {
 
     0%,
@@ -1830,6 +1835,63 @@ textarea {
     gap: 14px;
     flex-wrap: wrap;
     min-height: 20px;
+}
+
+.progress-phase {
+    margin: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(20, 28, 40, 0.68);
+    color: rgba(198, 216, 232, 0.78);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.progress-phase.is-hidden {
+    display: none;
+}
+
+.progress-text.is-hidden,
+.progress-eta.is-hidden {
+    display: none;
+}
+
+.progress-phase.phase-idle,
+.progress-phase.phase-preparing {
+    border-color: rgba(255, 255, 255, 0.08);
+    color: rgba(198, 216, 232, 0.74);
+}
+
+.progress-phase.phase-processing,
+.progress-phase.phase-verifying,
+.progress-phase.phase-uploading,
+.progress-phase.phase-resuming,
+.progress-phase.phase-retrying {
+    border-color: rgba(136, 189, 242, 0.3);
+    background: rgba(47, 70, 98, 0.3);
+    color: rgba(226, 240, 255, 0.94);
+}
+
+.progress-phase.phase-pausing,
+.progress-phase.phase-paused {
+    border-color: rgba(247, 211, 107, 0.3);
+    background: rgba(105, 82, 28, 0.18);
+    color: rgba(250, 227, 152, 0.92);
+}
+
+.progress-phase.phase-complete {
+    border-color: rgba(136, 189, 242, 0.32);
+    background: rgba(66, 89, 118, 0.24);
+    color: rgba(226, 240, 255, 0.96);
+}
+
+.progress-phase.phase-error {
+    border-color: rgba(255, 68, 68, 0.34);
+    background: rgba(96, 37, 44, 0.2);
+    color: rgba(255, 220, 220, 0.96);
 }
 
 .progress-text {
@@ -1981,6 +2043,13 @@ textarea {
 }
 
 .btn-log-toggle.expanded .log-icon {
+    opacity: 1;
+}
+
+.btn-log-toggle.needs-attention {
+    border-color: rgba(255, 68, 68, 0.28);
+    background: rgba(84, 39, 44, 0.2);
+    color: rgba(255, 226, 226, 0.92);
     opacity: 1;
 }
 

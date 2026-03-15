@@ -13,6 +13,7 @@ const btnViewSummary = document.getElementById('btn-view-summary');
 const btnOpenFolder = document.getElementById('btn-open-folder');
 const workingFolderLabel = document.getElementById('working-folder-label');
 const ctaHelper = document.getElementById('cta-helper');
+const progressSection = document.querySelector('.progress-section');
 const progressBar = document.getElementById('progress-fill').parentElement; // The progress-bar container
 const progressFill = document.getElementById('progress-fill');
 const progressText = document.getElementById('progress-text');
@@ -648,6 +649,62 @@ function updateStartButtonState() {
     const hasDestination = mode !== 'CLOUD' || cloudValidation.valid;
     btnStart.disabled = !(hasZip && hasOutput && hasMode && hasDestination && !isStorageCriticallyLow);
     updateStartButtonHelper();
+}
+
+function setProgressPhase(label, tone = 'idle') {
+    const phaseEl = typeof document !== 'undefined' ? document.getElementById('progress-phase') : null;
+    if (!phaseEl) {
+        return;
+    }
+    phaseEl.textContent = label;
+    phaseEl.className = `progress-phase phase-${tone}${tone === 'idle' ? ' is-hidden' : ''}`;
+}
+
+function setProgressStatusVisibility(visible) {
+    if (progressText) {
+        progressText.classList.toggle('is-hidden', !visible);
+    }
+    if (progressEta) {
+        progressEta.classList.toggle('is-hidden', !visible && !progressEta.textContent);
+        if (visible) {
+            progressEta.classList.remove('is-hidden');
+        }
+    }
+}
+
+function setLogToggleState({ attention = false } = {}) {
+    if (!btnToggleLog) {
+        return;
+    }
+    const textSpan = btnToggleLog.querySelector('span');
+    if (textSpan) {
+        textSpan.textContent = logContainer.classList.contains('hidden') ? 'View Log' : 'Hide Log';
+    }
+    btnToggleLog.classList.toggle('expanded', !logContainer.classList.contains('hidden'));
+    btnToggleLog.classList.toggle('needs-attention', attention);
+}
+
+function clearRecoveryUi() {
+    if (progressSection) {
+        progressSection.classList.remove('needs-attention');
+    }
+    setLogToggleState({ attention: false });
+}
+
+function revealRecoveryUi(hint = '') {
+    if (progressSection) {
+        progressSection.classList.add('needs-attention');
+    }
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
+    if (logContainer.classList.contains('hidden')) {
+        logContainer.classList.remove('hidden');
+    }
+    if (hint) {
+        progressEta.textContent = hint;
+    }
+    setLogToggleState({ attention: true });
 }
 
 function computeAutoCacheValues(freeBytes) {
@@ -1394,6 +1451,11 @@ async function init() {
 
     updateAutoUploadUiState();
     updateStartButtonState();
+    setProgressPhase('Ready', 'idle');
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(false);
+    }
+    setLogToggleState({ attention: false });
 }
 
 // ==========================================
@@ -1779,6 +1841,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
 
     const runningUiState = computeProcessingUiStateHelper({ isProcessing: true, stoppedByUser: false });
     applyProcessingUiState(runningUiState);
+    if (typeof clearRecoveryUi === 'function') {
+        clearRecoveryUi();
+    }
 
     // UI Updates
     btnStart.classList.add('hidden');
@@ -1793,14 +1858,26 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     progressBar.classList.remove('ready'); // Remove ready pulse
 
     if (isResume) {
+        if (typeof setProgressPhase === 'function') {
+            setProgressPhase('Resuming', 'resuming');
+        }
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
         progressTextContent.textContent = resumeMode === 'trust' ? 'Resuming (Skip Files Already Processed)...' : 'Resuming...';
+        progressEta.textContent = 'Picking up from your saved progress.';
     } else {
         progressFill.style.width = '0%';
+        if (typeof setProgressPhase === 'function') {
+            setProgressPhase('Preparing', 'preparing');
+        }
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
         progressTextContent.textContent = 'Starting...';
         logOutput.textContent = ''; // Only clear log on fresh start/restart
+        progressEta.textContent = '';
     }
-
-    progressEta.textContent = '';
 
     // Get pause between batches preference
     const failStartValidation = (message, showAlert = true) => {
@@ -1816,6 +1893,12 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         }
         progressTextContent.textContent = 'Ready';
         progressEta.textContent = '';
+        if (typeof setProgressPhase === 'function') {
+            setProgressPhase('Ready', 'idle');
+        }
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(false);
+        }
         updateAutoUploadUiState();
         updateStartButtonState();
     };
@@ -1939,8 +2022,15 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                 return;
             } else {
                 // Error occurred - show Resume/Restart options (not Start)
-                progressTextContent.textContent = `❌ Error: ${result.error}`;
+                progressTextContent.textContent = 'Processing needs attention.';
                 progressFill.style.background = 'var(--accent-red)';
+                progressEta.textContent = result.error || 'Open the log for details. Contact support if this keeps happening.';
+                if (typeof setProgressPhase === 'function') {
+                    setProgressPhase('Needs Attention', 'error');
+                }
+                if (typeof revealRecoveryUi === 'function') {
+                    revealRecoveryUi();
+                }
                 btnStart.classList.add('hidden');
                 if (typeof updateStartButtonHelper === 'function') {
                     updateStartButtonHelper();
@@ -1951,7 +2041,14 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     } catch (error) {
         if (!stoppedByUser) {
             // Error in try/catch - show Resume/Restart options
-            progressTextContent.textContent = `❌ Error: ${error.message}`;
+            progressTextContent.textContent = 'Processing stopped unexpectedly.';
+            progressEta.textContent = error.message || 'Open the log for details. Contact support if this keeps happening.';
+            if (typeof setProgressPhase === 'function') {
+                setProgressPhase('Needs Attention', 'error');
+            }
+            if (typeof revealRecoveryUi === 'function') {
+                revealRecoveryUi();
+            }
             console.error(error);
             btnStart.classList.add('hidden');
             if (typeof updateStartButtonHelper === 'function') {
@@ -1964,7 +2061,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         const stoppedUiState = computeProcessingUiStateHelper({ isProcessing: false, stoppedByUser });
         applyProcessingUiState(stoppedUiState);
         progressText.classList.remove('processing');
-        progressBar.classList.add('ready'); // Restore ready pulse
+        if (typeof progressSection === 'undefined' || !progressSection || !progressSection.classList.contains('needs-attention')) {
+            progressBar.classList.add('ready');
+        }
 
         // If stopped by user, controls stay disabled until Restart is clicked.
         updateAutoUploadUiState();
@@ -2182,6 +2281,9 @@ btnConfirmRestart.addEventListener('click', async () => {
 // Helper function to reset UI for a new run
 function resetUIForNewRun() {
     // Reset the UI state
+    if (btnRestartComplete) {
+        btnRestartComplete.classList.add('hidden');
+    }
     btnStart.classList.remove('hidden');
     if (typeof updateStartButtonHelper === 'function') {
         updateStartButtonHelper();
@@ -2201,6 +2303,7 @@ function resetUIForNewRun() {
     if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
     if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
     updateAutoUploadUiState();
+    updateStartButtonState();
 
     // Reset progress visuals
     progressFill.style.width = '0%';
@@ -2209,6 +2312,11 @@ function resetUIForNewRun() {
     progressTextContent.textContent = 'Ready';
     progressText.classList.remove('processing');
     progressEta.textContent = '';
+    setProgressPhase('Ready', 'idle');
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(false);
+    }
+    clearRecoveryUi();
     logOutput.textContent = '';
 
     // Reset partial run tracking
@@ -2225,32 +2333,7 @@ btnCancelRestart.addEventListener('click', () => {
 // Restart button after successful completion (resets UI to start state)
 const btnRestartComplete = document.getElementById('btn-restart-complete');
 btnRestartComplete.addEventListener('click', () => {
-    // Hide the restart button, show the start button
-    btnRestartComplete.classList.add('hidden');
-    btnStart.classList.remove('hidden');
-    if (typeof updateStartButtonHelper === 'function') {
-        updateStartButtonHelper();
-    }
-
-    // Reset progress visuals
-    progressFill.style.width = '0%';
-    progressFill.style.background = '';
-    progressFill.classList.remove('complete');
-    progressTextContent.textContent = 'Ready';
-    progressText.classList.remove('processing');
-    progressEta.textContent = '';
-    logOutput.textContent = '';
-    computerModeCheckbox.disabled = false;
-    cloudModeCheckbox.disabled = false;
-    if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = false;
-    btnBrowseDestination.disabled = false;
-    btnBrowseStaging.disabled = false;
-    cacheGbInput.disabled = false;
-    cacheLowGbInput.disabled = false;
-    uploadModeSelect.disabled = false;
-    if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = false;
-    if (diskUsageManualRadio) diskUsageManualRadio.disabled = false;
-    updateAutoUploadUiState();
+    resetUIForNewRun();
 });
 
 // Stop Processing
@@ -2293,7 +2376,11 @@ btnConfirmStop.addEventListener('click', async () => {
     btnStop.classList.add('hidden');
 
     // Show "Stopping..." state immediately
-    progressTextContent.textContent = '⏸️ Pausing...';
+    setProgressPhase('Pausing', 'pausing');
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
+    progressTextContent.textContent = 'Saving your progress...';
     progressFill.style.background = 'var(--accent-primary)';
     progressEta.textContent = '';
 
@@ -2312,7 +2399,9 @@ btnConfirmStop.addEventListener('click', async () => {
     const result = await window.api.stopProcessing();
     if (result.success) {
         // Python is cleaning up - buttons stay disabled
-        progressTextContent.textContent = '⏸️ Paused - Cleaning up...';
+        setProgressPhase('Pausing', 'pausing');
+        progressTextContent.textContent = 'Saving progress safely...';
+        progressEta.textContent = 'DateBack is finishing the current cleanup step.';
 
         // Wait for Python to fully exit (indicated by isProcessing becoming false)
         // This happens in the finally block of startProcessingRoutine
@@ -2325,7 +2414,9 @@ btnConfirmStop.addEventListener('click', async () => {
                 btnContinueLater.disabled = false;
                 btnRestartProc.disabled = false;
 
-                progressTextContent.textContent = '⏹️ Paused';
+                setProgressPhase('Paused', 'paused');
+                progressTextContent.textContent = 'Paused safely';
+                progressEta.textContent = 'Resume when you are ready, or save this run for later.';
                 btnOpenFolder.disabled = false;
 
                 // Hide "Start Over" when either storage mode is selected to prevent accidental deletion.
@@ -2416,8 +2507,7 @@ btnValidationHelp.addEventListener('click', () => {
 // Toggle Log
 btnToggleLog.addEventListener('click', () => {
     logContainer.classList.toggle('hidden');
-    const textSpan = btnToggleLog.querySelector('span');
-    textSpan.textContent = logContainer.classList.contains('hidden') ? 'View Log' : 'Hide Log';
+    setLogToggleState({ attention: btnToggleLog.classList.contains('needs-attention') && logContainer.classList.contains('hidden') });
 });
 
 // Batch Pause Modal Elements
@@ -2468,7 +2558,7 @@ let lastTotalBatches = 0;
 function showBatchPauseModal(batchNum, totalBatches) {
     lastCompletedBatch = batchNum;
     lastTotalBatches = totalBatches;
-    batchPauseMessage.textContent = `Batch ${batchNum} of ${totalBatches} complete. Paused for manual upload.`;
+    batchPauseMessage.textContent = `Batch ${batchNum} of ${totalBatches} is ready. Let your cloud app finish syncing this batch, then continue when you're ready.`;
     batchPauseModal.classList.remove('hidden');
 }
 
@@ -2477,7 +2567,12 @@ btnContinueBatch.addEventListener('click', async () => {
     console.log('[Pause-After-Batch] Continue Batch button clicked');
     batchPauseModal.classList.add('hidden');
     // Update UI to show we're resuming
-    progressTextContent.textContent = '▶️ Resuming next batch...';
+    setProgressPhase('Processing', 'processing');
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
+    progressTextContent.textContent = 'Continuing with the next batch...';
+    progressEta.textContent = 'DateBack will resume as soon as the next batch starts.';
 
     try {
         console.log('[Pause-After-Batch] Calling resumeBatch API');
@@ -2490,7 +2585,9 @@ btnContinueBatch.addEventListener('click', async () => {
                 result.error || 'DateBack could not continue to the next batch.',
                 'Please restart DateBack and try again.'
             );
-            progressTextContent.textContent = '⚠️ Resume failed';
+            setProgressPhase('Needs Attention', 'error');
+            progressTextContent.textContent = 'Could not continue this run.';
+            revealRecoveryUi('Open the log for details. If this keeps happening, contact support.');
         } else {
             console.log('[Pause-After-Batch] Successfully resumed batch');
             // Progress will update automatically when Python sends next progress message
@@ -2502,7 +2599,9 @@ btnContinueBatch.addEventListener('click', async () => {
             err.message || 'DateBack hit an unexpected error while resuming.',
             'Please restart DateBack and try again.'
         );
-        progressTextContent.textContent = '⚠️ Resume error';
+        setProgressPhase('Needs Attention', 'error');
+        progressTextContent.textContent = 'Could not continue this run.';
+        revealRecoveryUi('Open the log for details. If this keeps happening, contact support.');
     }
 });
 
@@ -2510,7 +2609,12 @@ btnContinueBatch.addEventListener('click', async () => {
 btnPauseAfterBatch.addEventListener('click', async () => {
     console.log('[Pause-After-Batch] Pause After Batch button clicked');
     batchPauseModal.classList.add('hidden');
-    progressTextContent.textContent = 'Pausing...';
+    setProgressPhase('Pausing', 'pausing');
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
+    progressTextContent.textContent = 'Saving your progress...';
+    progressEta.textContent = 'DateBack is stopping after this completed batch.';
 
     try {
         // Set stoppedByUser to prevent completion handler from overriding our pause state
@@ -2543,7 +2647,9 @@ btnPauseAfterBatch.addEventListener('click', async () => {
         console.log('[Pause-After-Batch] Set hadPartialRun=true, lastProcessedCount=', lastProcessedCount);
 
         // Update UI to show cleaning up state
-        progressTextContent.textContent = '⏸️ Paused - Cleaning up...';
+        setProgressPhase('Pausing', 'pausing');
+        progressTextContent.textContent = 'Saving progress safely...';
+        progressEta.textContent = 'DateBack is finishing cleanup before this run can be resumed.';
 
         // Wait for Python to fully exit (indicated by isProcessing becoming false)
         const checkCleanupComplete = setInterval(() => {
@@ -2555,7 +2661,9 @@ btnPauseAfterBatch.addEventListener('click', async () => {
                 btnContinueLater.disabled = false;
                 btnRestartProc.disabled = false;
 
-                progressTextContent.textContent = '⏹️ Paused';
+                setProgressPhase('Paused', 'paused');
+                progressTextContent.textContent = 'Paused safely';
+                progressEta.textContent = 'Resume when you are ready, or save this run for later.';
                 btnOpenFolder.disabled = false;
 
                 // Pause-after-batch UX: Hide "Start Over" button (since this modal is only for pause-after-batch flow)
@@ -2567,7 +2675,9 @@ btnPauseAfterBatch.addEventListener('click', async () => {
     } catch (err) {
         console.error('Error pausing after batch:', err);
         stoppedByUser = false; // Reset on error
-        progressTextContent.textContent = '⚠️ Pause error';
+        setProgressPhase('Needs Attention', 'error');
+        progressTextContent.textContent = 'Could not pause safely.';
+        revealRecoveryUi('Open the log for details. If this keeps happening, contact support.');
 
         // Re-enable buttons on error
         btnResumeProc.disabled = false;
@@ -2884,7 +2994,11 @@ window.api.onProgressUpdate((data) => {
 
         // Handle verification phase (Fast Pass check)
         if (count === -1) {
-            progressTextContent.textContent = `Verifying existing files... (${total.toLocaleString()} to check)`;
+            setProgressPhase('Verifying', 'verifying');
+            if (typeof setProgressStatusVisibility === 'function') {
+                setProgressStatusVisibility(true);
+            }
+            progressTextContent.textContent = `Checking files already on disk... (${total.toLocaleString()} to verify)`;
             progressFill.style.width = '0%';
             progressEta.textContent = '';
             // Reset ETA tracking when entering verification
@@ -2896,7 +3010,11 @@ window.api.onProgressUpdate((data) => {
 
         const percent = (count / total) * 100;
         progressFill.style.width = `${percent}%`;
-        progressTextContent.textContent = `Processed: ${count} / ${total}`;
+        setProgressPhase('Processing', 'processing');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
+        progressTextContent.textContent = `Organizing memories: ${count.toLocaleString()} / ${total.toLocaleString()}`;
 
         // Calculate ETA using rolling window (last 100 items)
         const now = Date.now();
@@ -2936,7 +3054,11 @@ window.api.onProgressUpdate((data) => {
 
     } else if (data.type === 'batch_pause') {
         // Python is requesting a pause for cloud sync
-        progressTextContent.textContent = `Batch ${data.batch} complete - Paused`;
+        setProgressPhase('Paused', 'paused');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
+        progressTextContent.textContent = `Batch ${data.batch} is ready for cloud sync.`;
         progressEta.textContent = '';
         // Note: signal file path is now handled by main process, not renderer
         showBatchPauseModal(data.batch, data.totalBatches);
@@ -2950,28 +3072,53 @@ window.api.onProgressUpdate((data) => {
         const stagedCount = Number.isFinite(data.staged_count) ? data.staged_count : 0;
         const stagingBytes = Number.isFinite(data.staging_bytes) ? data.staging_bytes : 0;
         const uploadedCount = Number.isFinite(data.uploaded_count) ? data.uploaded_count : 0;
-        progressEta.textContent = `Upload: ${uploadedCount.toLocaleString()} uploaded, ${stagedCount.toLocaleString()} staged (${formatBytes(stagingBytes)})`;
+        setProgressPhase('Uploading', 'uploading');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
+        progressTextContent.textContent = 'Copying memories into your cloud folder...';
+        progressEta.textContent = `${uploadedCount.toLocaleString()} copied, ${stagedCount.toLocaleString()} waiting in staging (${formatBytes(stagingBytes)})`;
 
     } else if (data.type === 'auto_pause') {
         const stagingGb = Number.isFinite(data.staging_gb) ? data.staging_gb : 0;
         const cacheGb = Number.isFinite(data.cache_gb) ? data.cache_gb : 0;
-        progressEta.textContent = `Auto paused: staging cache ${stagingGb}GB / ${cacheGb}GB`;
+        setProgressPhase('Paused', 'paused');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
+        progressTextContent.textContent = 'Cloud delivery paused to protect free space.';
+        progressEta.textContent = `Temporary storage is full (${stagingGb} GB of ${cacheGb} GB). Upload or wait for sync to continue.`;
 
     } else if (data.type === 'auto_resume') {
         const stagingGb = Number.isFinite(data.staging_gb) ? data.staging_gb : 0;
         const lowGb = Number.isFinite(data.cache_low_gb) ? data.cache_low_gb : 0;
-        progressEta.textContent = `Auto resumed: staging ${stagingGb}GB <= ${lowGb}GB`;
+        setProgressPhase('Uploading', 'uploading');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
+        progressTextContent.textContent = 'Cloud delivery resumed.';
+        progressEta.textContent = `Temporary storage dropped to ${stagingGb} GB, below your ${lowGb} GB resume threshold.`;
 
     } else if (data.type === 'upload_error') {
         const attempt = Number.isFinite(data.attempt) ? data.attempt : 0;
-        progressEta.textContent = `Upload retry: attempt ${attempt} (${data.error || 'temporary error'})`;
+        setProgressPhase('Retrying', 'retrying');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
+        progressTextContent.textContent = 'Retrying cloud delivery...';
+        progressEta.textContent = `Attempt ${attempt}: ${data.error || 'temporary upload issue'}`;
 
     } else if (data.type === 'upload_fatal') {
-        progressTextContent.textContent = `❌ Upload failed: ${data.message || 'Destination unavailable'}`;
+        setProgressPhase('Needs Attention', 'error');
+        progressTextContent.textContent = 'Cloud delivery needs attention.';
         progressFill.style.background = 'var(--accent-red)';
-        progressEta.textContent = data.last_error ? `Last error: ${data.last_error}` : '';
+        revealRecoveryUi(data.last_error || data.message || 'Open the log for details. If this keeps happening, contact support.');
 
     } else if (data.type === 'complete') {
+        setProgressPhase('Complete', 'complete');
+        if (typeof setProgressStatusVisibility === 'function') {
+            setProgressStatusVisibility(true);
+        }
         progressEta.textContent = '';
         etaTimestamps = [];
         lastProgressCount = 0;
@@ -2990,8 +3137,11 @@ window.api.onLogMessage((message) => {
     // Detect expired link errors and show alert once
     if (message.includes('LINKS_EXPIRED') && !expiredLinkAlertShown) {
         expiredLinkAlertShown = true;
-        progressTextContent.textContent = '⚠️ Download links expired!';
+        setProgressPhase('Needs Attention', 'error');
+        setProgressStatusVisibility(true);
+        progressTextContent.textContent = 'Snapchat download links expired.';
         progressFill.style.background = 'var(--accent-red)';
+        revealRecoveryUi('Request a fresh Snapchat export, then restart processing.');
 
         // Show custom modal instead of alert
         const expiredLinkModal = document.getElementById('expired-link-modal');
@@ -3015,6 +3165,15 @@ let lastStats = null;
 
 function showSuccessModal(stats) {
     lastStats = stats; // Store for View Summary button
+    if (typeof clearRecoveryUi === 'function') {
+        clearRecoveryUi();
+    }
+    if (typeof setProgressPhase === 'function') {
+        setProgressPhase('Complete', 'complete');
+    }
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
     const summary = buildSuccessModalCopyHelper(stats);
     const {
         isCloudModeStats,
@@ -3185,10 +3344,16 @@ btnRetryCorrupted.addEventListener('click', async () => {
     successModal.classList.add('hidden');
     btnRetryCorrupted.classList.add('hidden');
 
-    progressTextContent.textContent = 'Retrying corrupted files...';
+    clearRecoveryUi();
+    setProgressPhase('Retrying', 'retrying');
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
+    progressTextContent.textContent = 'Retrying failed files...';
     progressText.classList.add('processing');
     progressFill.style.width = '50%'; // Indeterminate
     progressBar.classList.remove('ready');
+    progressEta.textContent = 'DateBack is reprocessing the files that failed last time.';
 
     try {
         const outputDir = outputPathInput.value.trim() || currentOutputDir;
@@ -3202,7 +3367,14 @@ btnRetryCorrupted.addEventListener('click', async () => {
         let retryCacheLowGb = Number.parseFloat(cacheLowGbInput.value);
         if (autoUpload) {
             if (!destinationDir) {
-                progressTextContent.textContent = '❌ Retry failed: Choose a cloud destination folder first.';
+                setProgressPhase('Needs Attention', 'error');
+                progressTextContent.textContent = 'Retry needs a cloud destination folder.';
+                progressEta.textContent = 'Choose your cloud destination in Step 5, then try Retry Corrupted Files again.';
+                showMessage(
+                    'Choose a cloud destination first',
+                    'Retrying failed files in Cloud mode requires a cloud destination folder.',
+                    'Choose a destination in Step 5, then try Retry Corrupted Files again.'
+                );
                 return;
             }
             if (getDiskUsageMode() === 'automatic') {
@@ -3233,7 +3405,9 @@ btnRetryCorrupted.addEventListener('click', async () => {
         });
 
         if (result.success) {
-            progressTextContent.textContent = '✅ Retry complete!';
+            setProgressPhase('Complete', 'complete');
+            progressTextContent.textContent = 'Retry complete.';
+            progressEta.textContent = 'DateBack finished reprocessing the files that failed last time.';
             progressFill.style.width = '100%';
             progressFill.classList.add('complete');
 
@@ -3242,13 +3416,19 @@ btnRetryCorrupted.addEventListener('click', async () => {
                 showSuccessModal(result.stats);
             }
         } else {
-            progressTextContent.textContent = `❌ Retry failed: ${result.error}`;
+            setProgressPhase('Needs Attention', 'error');
+            progressTextContent.textContent = 'Retry could not finish.';
+            revealRecoveryUi(result.error || 'Open the log for details. If this keeps happening, contact support.');
         }
     } catch (error) {
-        progressTextContent.textContent = `❌ Error: ${error.message}`;
+        setProgressPhase('Needs Attention', 'error');
+        progressTextContent.textContent = 'Retry stopped unexpectedly.';
+        revealRecoveryUi(error.message || 'Open the log for details. If this keeps happening, contact support.');
     } finally {
         progressText.classList.remove('processing');
-        progressBar.classList.add('ready');
+        if (!progressSection || !progressSection.classList.contains('needs-attention')) {
+            progressBar.classList.add('ready');
+        }
     }
 });
 

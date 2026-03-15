@@ -253,7 +253,7 @@
                         Resume Processing
                     </button>
                     <button id="btn-continue-later" class="btn btn-secondary btn-large">
-                        Continue Later
+                        Save Progress for Later
                     </button>
                     <button id="btn-restart-proc" class="btn btn-danger-outline btn-large">
                         Start Over
@@ -271,6 +271,7 @@
                     <div id="progress-fill" class="progress-fill"></div>
                 </div>
                 <div class="progress-info">
+                    <p id="progress-phase" class="progress-phase phase-idle">Ready</p>
                     <p id="progress-text" class="progress-text">
                         <span id="progress-text-content">Ready</span>
                     </p>
@@ -434,7 +435,7 @@
             <p class="thanks">Thanks for using DateBack!</p>
 
             <div class="modal-buttons">
-                <button id="btn-next-steps-guide" class="btn btn-primary">What's Next?</button>
+                <button id="btn-next-steps-guide" class="btn btn-primary">Next Steps</button>
                 <button id="btn-retry-corrupted" class="btn btn-warning hidden">🔄 Retry Corrupted Files</button>
                 <button id="btn-open-staging-folder" class="btn btn-secondary hidden">📂 Open Staging Folder</button>
                 <button id="btn-close-success" class="btn btn-secondary">Close</button>
