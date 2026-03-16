@@ -222,6 +222,6 @@ test('renderer fallback visibility helper references isProcessing consistently',
     const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
     assert.equal(rendererSource.includes('isProcessing: processing'), false);
     assert.ok(rendererSource.includes('pauseAfterBatchDisabled: !computerEnabled || isProcessing'));
-    assert.ok(rendererSource.includes('disableComputerModeCheckbox: isProcessing || cloudEnabled'));
-    assert.ok(rendererSource.includes('disableCloudModeCheckbox: isProcessing || computerEnabled'));
+    assert.ok(rendererSource.includes('disableComputerModeCheckbox: isProcessing'));
+    assert.ok(rendererSource.includes('disableCloudModeCheckbox: isProcessing'));
 });

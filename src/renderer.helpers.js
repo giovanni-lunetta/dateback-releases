@@ -17,7 +17,7 @@
         if (mode === 'CLOUD') {
             return 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.';
         }
-        return 'Select a storage mode below to continue.';
+        return 'Choose a storage mode above to continue.';
     }
 
     function resolveStorageMode({ computerChecked, cloudChecked }) {
@@ -487,13 +487,13 @@
             computerModeSettingsExpanded: computerEnabled,
             showCloudDestinationSection: cloudEnabled,
             showAutoUploadSettings: cloudEnabled,
-            showHandoffHelperRow: cloudEnabled,
+            showHandoffHelperRow: false,
             showManualCacheSettings: cloudEnabled && manualMode && advancedOpen,
             showCacheAutoHint: cloudEnabled && !manualMode && advancedOpen,
             showAutoCachePreview: cloudEnabled && !manualMode && advancedOpen,
             shouldHideCacheLowSpaceWarning: !cloudEnabled || manualMode || !advancedOpen,
-            disableComputerModeCheckbox: isProcessing || cloudEnabled && false,
-            disableCloudModeCheckbox: isProcessing || computerEnabled && false,
+            disableComputerModeCheckbox: isProcessing,
+            disableCloudModeCheckbox: isProcessing,
             computerCardSelected: computerEnabled,
             cloudCardSelected: cloudEnabled,
             computerModeDescriptionHidden: cloudEnabled,

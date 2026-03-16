@@ -11,6 +11,7 @@ const btnStop = document.getElementById('btn-stop');
 const btnToggleLog = document.getElementById('btn-toggle-log');
 const btnViewSummary = document.getElementById('btn-view-summary');
 const btnOpenFolder = document.getElementById('btn-open-folder');
+const modeStepLabel = document.getElementById('mode-step-label');
 const workingFolderLabel = document.getElementById('working-folder-label');
 const workingFolderCloudNote = document.getElementById('working-folder-cloud-note');
 const ctaHelper = document.getElementById('cta-helper');
@@ -30,6 +31,7 @@ const btnValidationHelp = document.getElementById('btn-validation-help');
 
 // Storage Check elements
 const storageCheckSection = document.getElementById('storage-check');
+const storageCheckLabel = document.getElementById('storage-check-label');
 const storageAvailable = document.getElementById('storage-available');
 const storageRequired = document.getElementById('storage-required');
 const storageRequiredTitle = document.getElementById('storage-required-title');
@@ -202,7 +204,7 @@ const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilitySt
     const cloudEnabled = mode === 'CLOUD';
     const computerEnabled = mode === 'COMPUTER';
     const manualMode = diskUsageMode === 'manual';
-    let workingFolderHelpText = 'Select a storage mode below to continue.';
+    let workingFolderHelpText = 'Choose a storage mode above to continue.';
     if (computerEnabled) {
         workingFolderHelpText = 'Your processed memories will be saved here.';
     } else if (cloudEnabled) {
@@ -217,13 +219,13 @@ const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilitySt
         computerModeSettingsExpanded: computerEnabled,
         showCloudDestinationSection: cloudEnabled,
         showAutoUploadSettings: cloudEnabled,
-        showHandoffHelperRow: cloudEnabled,
+        showHandoffHelperRow: false,
         showManualCacheSettings: cloudEnabled && manualMode && advancedOpen,
         showCacheAutoHint: cloudEnabled && !manualMode && advancedOpen,
         showAutoCachePreview: cloudEnabled && !manualMode && advancedOpen,
         shouldHideCacheLowSpaceWarning: !cloudEnabled || manualMode || !advancedOpen,
-        disableComputerModeCheckbox: isProcessing || cloudEnabled && false,
-        disableCloudModeCheckbox: isProcessing || computerEnabled && false,
+        disableComputerModeCheckbox: isProcessing,
+        disableCloudModeCheckbox: isProcessing,
         computerCardSelected: computerEnabled,
         cloudCardSelected: cloudEnabled,
         computerModeDescriptionHidden: cloudEnabled,
@@ -573,16 +575,26 @@ function getActiveProcessingModeName() {
 function updateModeAwareCopy() {
     const mode = getStorageMode();
 
+    if (modeStepLabel) {
+        modeStepLabel.textContent = '2. Choose How to Store Your Memories';
+    }
+
     if (workingFolderLabel) {
         workingFolderLabel.textContent = mode === 'CLOUD'
-            ? '2. Select Your Working Folder'
-            : '2. Select Where You Want Your Memories Stored';
+            ? '3. Select Your Working Folder'
+            : '3. Select Where You Want Your Memories Stored';
     }
 
     if (cloudDestinationLabel) {
         cloudDestinationLabel.textContent = mode === 'CLOUD'
-            ? '5. Select Your Synced Cloud Folder'
+            ? '4. Select Your Synced Cloud Folder'
             : '5. Cloud Destination Folder';
+    }
+
+    if (storageCheckLabel) {
+        storageCheckLabel.textContent = mode === 'CLOUD'
+            ? '5. Review Storage Readiness'
+            : '4. Review Storage Readiness';
     }
 
     if (btnOpenFolder) {
@@ -604,11 +616,9 @@ function updateCloudModeEducation() {
     }
 
     if (cloudDestinationLead) {
-        if (providerInfo && providerInfo.displayName) {
-            cloudDestinationLead.textContent = `Step 2 prepares files locally. Step 5 is your final ${providerInfo.displayName} folder, where DateBack copies finished memories for your cloud app to upload.`;
-        } else {
-            cloudDestinationLead.textContent = 'Step 2 prepares files locally. Step 5 is the final synced folder where DateBack copies finished memories for your cloud app to upload.';
-        }
+        cloudDestinationLead.textContent = providerInfo && providerInfo.displayName
+            ? `Choose the ${providerInfo.displayName} folder where finished memories should land.`
+            : 'Choose the synced cloud folder where finished memories should land.';
     }
 
     if (storageRequiredTitle) {
@@ -1295,8 +1305,8 @@ function isAllowedCloudFolder(pathValue) {
 
 function buildCloudHandoffTooltip(providerInfo) {
     return [
-        'Step 2 is temporary local working space for Cloud mode (inside a hidden .staging folder by default).',
-        'DateBack copies finished files into this synced destination folder in Step 5.',
+        'Step 3 is temporary local working space for Cloud mode (inside a hidden .staging folder by default).',
+        'DateBack copies finished files into this synced destination folder in Step 4.',
         'Your cloud provider app uploads them from there.',
         'Advanced options let you choose a different drive for temporary working space.'
     ].join('\n');
@@ -1304,15 +1314,19 @@ function buildCloudHandoffTooltip(providerInfo) {
 
 function buildCloudHandoffHelperText(providerInfo) {
     if (providerInfo && providerInfo.displayName) {
-        return `Finished memories are copied into this ${providerInfo.displayName} folder. Your cloud app uploads them from there.`;
+        return `DateBack copies finished memories into this ${providerInfo.displayName} folder. Your cloud app uploads them from there.`;
     }
-    return 'Finished memories are copied into this synced cloud folder. Your cloud app uploads them from there.';
+    return 'DateBack copies finished memories into this synced cloud folder. Your cloud app uploads them from there.';
 }
 
 function updateCloudHandoffCopy() {
+    const destinationValue = destinationPathInput.value.trim();
     const providerInfo = detectCloudProvider(destinationPathInput.value.trim());
     if (handoffHelperText) {
         handoffHelperText.textContent = buildCloudHandoffHelperText(providerInfo);
+    }
+    if (handoffHelperRow) {
+        handoffHelperRow.classList.toggle('hidden', !isCloudModeSelected() || !destinationValue);
     }
     if (handoffTooltip) {
         const tooltipText = buildCloudHandoffTooltip(providerInfo);
@@ -3461,11 +3475,11 @@ btnRetryCorrupted.addEventListener('click', async () => {
             if (!destinationDir) {
                 setProgressPhase('Needs Attention', 'error');
                 progressTextContent.textContent = 'Retry needs a cloud destination folder.';
-                progressEta.textContent = 'Choose your cloud destination in Step 5, then try Retry Corrupted Files again.';
+                progressEta.textContent = 'Choose your cloud destination in Step 4, then try Retry Corrupted Files again.';
                 showMessage(
                     'Choose a cloud destination first',
                     'Retrying failed files in Cloud mode requires a cloud destination folder.',
-                    'Choose a destination in Step 5, then try Retry Corrupted Files again.'
+                    'Choose a destination in Step 4, then try Retry Corrupted Files again.'
                 );
                 return;
             }

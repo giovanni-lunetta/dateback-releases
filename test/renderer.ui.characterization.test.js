@@ -164,7 +164,7 @@ test('updateAutoUploadUiState glue: NONE mode stopped', () => {
 
     runUpdateAutoUploadUiState(context);
 
-    assert.equal(elements.workingFolderHelp.textContent, 'Select a storage mode below to continue.');
+    assert.equal(elements.workingFolderHelp.textContent, 'Choose a storage mode above to continue.');
     assert.equal(elements.cloudDestinationSection.classList.contains('hidden'), true);
     assert.equal(elements.computerModeCheckbox.disabled, false);
     assert.equal(elements.cloudModeCheckbox.disabled, false);
