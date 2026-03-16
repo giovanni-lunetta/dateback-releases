@@ -88,10 +88,11 @@
                     <button id="btn-browse-output" class="btn btn-secondary">Change</button>
                 </div>
                 <p id="working-folder-help" class="context-helper">Select a storage mode below to continue.</p>
+                <p id="working-folder-cloud-note" class="context-helper context-helper-emphasis hidden">Cloud Mode uses this folder as temporary working space. Finished memories are copied into Step 5 below.</p>
                 <div id="storage-summary" class="storage-summary hidden" aria-live="polite">
-                    <span id="staging-free-space">Free space on staging drive: --</span>
+                    <span id="staging-free-space">Free space in temporary working folder: --</span>
                     <span class="storage-summary-separator">•</span>
-                    <span id="staging-cache-usage">DateBack will use up to: -- temporary space</span>
+                    <span id="staging-cache-usage">DateBack may use up to: -- temporary staging space</span>
                 </div>
             </section>
 
@@ -111,10 +112,11 @@
                         </div>
                     </div>
                     <div class="stat-box stat-box-required">
-                        <span class="stat-title">Est. Required</span>
+                        <span id="storage-required-title" class="stat-title">Est. Required</span>
                         <span id="storage-required" class="stat-value-large">-</span>
                     </div>
                 </div>
+                <p id="storage-required-note" class="storage-context-note hidden">Cloud Mode needs free space to start for temporary staging and a safety buffer before files are copied into your synced cloud folder.</p>
                 <div id="storage-warning" class="storage-warning hidden">
                     ⚠️ <strong>Warning:</strong> You might run out of space! Please free up some storage.
                 </div>
@@ -176,11 +178,12 @@
                 <section id="cloud-destination-section" class="input-section hidden cloud-followup-section">
                     <div id="auto-upload-settings" class="hidden cloud-followup-shell">
                         <div class="section-label-row">
-                            <label class="section-label">5. Cloud Destination Folder</label>
+                            <label id="cloud-destination-label" class="section-label">5. Cloud Destination Folder</label>
                             <button type="button" class="section-help-icon"
                                 aria-label="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack will copy your processed memories into this folder."
                                 data-tooltip="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack will copy your processed memories into this folder.">?</button>
                         </div>
+                        <p id="cloud-destination-lead" class="context-helper context-helper-emphasis">Step 2 prepares files locally. Step 5 is the final synced folder where DateBack copies finished memories for your cloud app to upload.</p>
                         <div class="input-group cloud-destination-input-group destination-primary-row">
                             <input type="text" id="destination-path" class="text-input" placeholder="Destination folder (Dropbox/Drive/iCloud...)" readonly>
                             <button id="btn-browse-destination" class="btn btn-secondary">Choose folder...</button>
@@ -193,9 +196,9 @@
                         <p id="sync-folder-warning" class="sync-folder-warning hidden"></p>
 
                         <details id="auto-upload-advanced" class="auto-upload-advanced flow-advanced-panel">
-                            <summary>Advanced</summary>
+                            <summary>Advanced Cloud Options</summary>
                             <div class="disk-usage-row" style="margin-top: 10px;">
-                                <span class="disk-usage-label">Disk usage</span>
+                                <span class="disk-usage-label">Temporary storage</span>
                                 <label class="disk-usage-choice">
                                     <input type="radio" id="disk-usage-auto" name="disk-usage-mode" value="automatic" checked>
                                     <span>Automatic (Recommended)</span>
@@ -205,21 +208,22 @@
                                     <span>Manual</span>
                                 </label>
                             </div>
-                            <p id="cache-auto-hint" class="disk-usage-hint">Automatic adjusts staging based on free space and keeps a safety buffer.</p>
+                            <p id="cache-auto-hint" class="disk-usage-hint">Automatic chooses temporary storage based on free space and keeps a safety buffer so cloud delivery can continue smoothly.</p>
                             <p id="auto-cache-preview" class="disk-usage-hint hidden"></p>
-                            <p id="cache-low-space-warning" class="disk-usage-warning hidden">Low disk space detected; runs will pause frequently.</p>
+                            <p id="cache-low-space-warning" class="disk-usage-warning hidden">Low free space detected. Cloud runs may pause often until your cloud app catches up.</p>
 
                             <div id="manual-cache-settings" class="hidden" style="margin-top: 10px;">
                                 <div class="manual-cache-grid" style="margin-bottom: 10px; gap: 8px;">
                                     <div class="manual-cache-field">
-                                        <label for="cache-gb" class="manual-cache-label">Staging limit (GB)</label>
-                                        <input type="number" id="cache-gb" class="text-input" min="0.1" step="0.1" value="5" placeholder="Staging limit (GB)">
+                                        <label for="cache-gb" class="manual-cache-label">Temporary storage limit (GB)</label>
+                                        <input type="number" id="cache-gb" class="text-input" min="0.1" step="0.1" value="5" placeholder="Temporary storage limit (GB)">
                                     </div>
                                     <div class="manual-cache-field">
-                                        <label for="cache-low-gb" class="manual-cache-label">Safety buffer (GB)</label>
-                                        <input type="number" id="cache-low-gb" class="text-input" min="0" step="0.1" value="3" placeholder="Safety buffer (GB)">
+                                        <label for="cache-low-gb" class="manual-cache-label">Resume threshold (GB)</label>
+                                        <input type="number" id="cache-low-gb" class="text-input" min="0" step="0.1" value="3" placeholder="Resume threshold (GB)">
                                     </div>
                                 </div>
+                                <p class="disk-usage-hint">Cloud delivery resumes after temporary files drop below your resume threshold.</p>
                             </div>
 
                             <div id="transfer-method-section" class="hidden">
@@ -229,12 +233,12 @@
                                 </select>
                             </div>
 
-                            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Optional: Staging Drive Folder (advanced)</div>
+                            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Optional: Temporary storage folder</div>
                             <div class="input-group" style="margin-bottom: 2px;">
-                                <input type="text" id="staging-path" class="text-input" placeholder="Optional: Staging Drive Folder (advanced)" readonly>
-                                <button id="btn-browse-staging" class="btn btn-secondary">Staging</button>
+                                <input type="text" id="staging-path" class="text-input" placeholder="Optional: Temporary storage folder" readonly>
+                                <button id="btn-browse-staging" class="btn btn-secondary">Choose folder...</button>
                             </div>
-                            <p class="disk-usage-hint">If not set, DateBack uses your Step 2 Working Folder (.staging).</p>
+                            <p class="disk-usage-hint">If not set, DateBack uses your Step 2 Working Folder in a hidden .staging folder.</p>
                         </details>
                     </div>
                 </section>

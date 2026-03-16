@@ -12,6 +12,7 @@ const btnToggleLog = document.getElementById('btn-toggle-log');
 const btnViewSummary = document.getElementById('btn-view-summary');
 const btnOpenFolder = document.getElementById('btn-open-folder');
 const workingFolderLabel = document.getElementById('working-folder-label');
+const workingFolderCloudNote = document.getElementById('working-folder-cloud-note');
 const ctaHelper = document.getElementById('cta-helper');
 const progressSection = document.querySelector('.progress-section');
 const progressBar = document.getElementById('progress-fill').parentElement; // The progress-bar container
@@ -31,6 +32,8 @@ const btnValidationHelp = document.getElementById('btn-validation-help');
 const storageCheckSection = document.getElementById('storage-check');
 const storageAvailable = document.getElementById('storage-available');
 const storageRequired = document.getElementById('storage-required');
+const storageRequiredTitle = document.getElementById('storage-required-title');
+const storageRequiredNote = document.getElementById('storage-required-note');
 const storageWarning = document.getElementById('storage-warning');
 const storageCount = document.getElementById('storage-count');
 
@@ -54,6 +57,8 @@ const pauseAfterBatchCheckbox = document.getElementById('pause-after-batch');
 const computerModeSettings = document.getElementById('computer-suboptions') || document.getElementById('computer-mode-settings');
 const cloudDestinationSection = document.getElementById('cloud-destination-section');
 const autoUploadSettings = document.getElementById('auto-upload-settings');
+const cloudDestinationLabel = document.getElementById('cloud-destination-label');
+const cloudDestinationLead = document.getElementById('cloud-destination-lead');
 const destinationPathInput = document.getElementById('destination-path');
 const btnBrowseDestination = document.getElementById('btn-browse-destination');
 const syncFolderWarning = document.getElementById('sync-folder-warning');
@@ -217,8 +222,8 @@ const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilitySt
         showCacheAutoHint: cloudEnabled && !manualMode && advancedOpen,
         showAutoCachePreview: cloudEnabled && !manualMode && advancedOpen,
         shouldHideCacheLowSpaceWarning: !cloudEnabled || manualMode || !advancedOpen,
-        disableComputerModeCheckbox: isProcessing || cloudEnabled,
-        disableCloudModeCheckbox: isProcessing || computerEnabled,
+        disableComputerModeCheckbox: isProcessing || cloudEnabled && false,
+        disableCloudModeCheckbox: isProcessing || computerEnabled && false,
         computerCardSelected: computerEnabled,
         cloudCardSelected: cloudEnabled,
         computerModeDescriptionHidden: cloudEnabled,
@@ -574,10 +579,46 @@ function updateModeAwareCopy() {
             : '2. Select Where You Want Your Memories Stored';
     }
 
+    if (cloudDestinationLabel) {
+        cloudDestinationLabel.textContent = mode === 'CLOUD'
+            ? '5. Select Your Synced Cloud Folder'
+            : '5. Cloud Destination Folder';
+    }
+
     if (btnOpenFolder) {
         btnOpenFolder.textContent = mode === 'CLOUD'
             ? 'Open Cloud Folder'
             : 'Open Output Folder';
+    }
+
+    updateCloudModeEducation();
+}
+
+function updateCloudModeEducation() {
+    const mode = getStorageMode();
+    const isCloudMode = mode === 'CLOUD';
+    const providerInfo = detectCloudProvider(destinationPathInput.value.trim());
+
+    if (workingFolderCloudNote) {
+        workingFolderCloudNote.classList.toggle('hidden', !isCloudMode);
+    }
+
+    if (cloudDestinationLead) {
+        if (providerInfo && providerInfo.displayName) {
+            cloudDestinationLead.textContent = `Step 2 prepares files locally. Step 5 is your final ${providerInfo.displayName} folder, where DateBack copies finished memories for your cloud app to upload.`;
+        } else {
+            cloudDestinationLead.textContent = 'Step 2 prepares files locally. Step 5 is the final synced folder where DateBack copies finished memories for your cloud app to upload.';
+        }
+    }
+
+    if (storageRequiredTitle) {
+        storageRequiredTitle.textContent = isCloudMode
+            ? 'Free Space To Start'
+            : 'Est. Required';
+    }
+
+    if (storageRequiredNote) {
+        storageRequiredNote.classList.toggle('hidden', !isCloudMode);
     }
 }
 
@@ -1083,7 +1124,7 @@ async function updateAutoCachePreview() {
         if (requestId !== autoCachePreviewRequestId) {
             return;
         }
-        autoCachePreview.textContent = `Automatic will use up to ${autoCache.cacheGb} GB for staging.`;
+        autoCachePreview.textContent = `Automatic may use up to ${autoCache.cacheGb} GB of temporary staging space.`;
         autoCachePreview.classList.remove('hidden');
         if (cacheLowSpaceWarning) {
             cacheLowSpaceWarning.classList.toggle('hidden', !autoCache.lowSpaceWarning);
@@ -1106,8 +1147,8 @@ async function updateStorageSummary() {
     const outputDir = outputPathInput.value.trim();
     const stagingDir = stagingPathInput.value.trim();
     if (!outputDir) {
-        stagingFreeSpaceText.textContent = 'Free space on staging drive: --';
-        stagingCacheUsageText.textContent = 'DateBack will use up to: -- temporary space';
+        stagingFreeSpaceText.textContent = 'Free space in temporary working folder: --';
+        stagingCacheUsageText.textContent = 'DateBack may use up to: -- temporary staging space';
         return;
     }
 
@@ -1117,14 +1158,14 @@ async function updateStorageSummary() {
         if (requestId !== storageSummaryRequestId) {
             return;
         }
-        stagingFreeSpaceText.textContent = `Free space on staging drive: ${roundOneDecimal(preflight.preflight.freeGb)} GB`;
-        stagingCacheUsageText.textContent = `DateBack will use up to: ${roundOneDecimal(preflight.cacheGb)} GB temporary space`;
+        stagingFreeSpaceText.textContent = `Free space in temporary working folder: ${roundOneDecimal(preflight.preflight.freeGb)} GB`;
+        stagingCacheUsageText.textContent = `DateBack may use up to: ${roundOneDecimal(preflight.cacheGb)} GB temporary staging space`;
     } catch (error) {
         if (requestId !== storageSummaryRequestId) {
             return;
         }
-        stagingFreeSpaceText.textContent = 'Free space on staging drive: --';
-        stagingCacheUsageText.textContent = 'DateBack will use up to: -- temporary space';
+        stagingFreeSpaceText.textContent = 'Free space in temporary working folder: --';
+        stagingCacheUsageText.textContent = 'DateBack may use up to: -- temporary staging space';
     }
 }
 
@@ -1218,18 +1259,18 @@ function isAllowedCloudFolder(pathValue) {
 
 function buildCloudHandoffTooltip(providerInfo) {
     return [
-        'Step 2 is temporary working space for Cloud mode (inside a hidden .staging folder by default).',
-        'DateBack copies finished files into this synced destination folder.',
+        'Step 2 is temporary local working space for Cloud mode (inside a hidden .staging folder by default).',
+        'DateBack copies finished files into this synced destination folder in Step 5.',
         'Your cloud provider app uploads them from there.',
-        'Advanced staging lets you choose a different drive for temporary working space.'
+        'Advanced options let you choose a different drive for temporary working space.'
     ].join('\n');
 }
 
 function buildCloudHandoffHelperText(providerInfo) {
     if (providerInfo && providerInfo.displayName) {
-        return `DateBack copies into this ${providerInfo.displayName} folder. Your cloud app uploads from there.`;
+        return `Finished memories are copied into this ${providerInfo.displayName} folder. Your cloud app uploads them from there.`;
     }
-    return 'DateBack copies into this synced cloud folder. Your cloud app uploads from there.';
+    return 'Finished memories are copied into this synced cloud folder. Your cloud app uploads them from there.';
 }
 
 function updateCloudHandoffCopy() {
@@ -1242,6 +1283,7 @@ function updateCloudHandoffCopy() {
         handoffTooltip.title = tooltipText;
         handoffTooltip.setAttribute('aria-label', tooltipText);
     }
+    updateCloudModeEducation();
 }
 
 function validateCloudDestinationForCurrentMode() {
@@ -1309,7 +1351,7 @@ async function showDiskSpaceBlockingModal(title, text, subtext) {
         subtext,
         true,
         {
-            continueLabel: 'Choose staging folder…',
+            continueLabel: 'Choose temporary storage folder…',
             cancelLabel: 'Cancel'
         }
     );
@@ -2888,9 +2930,6 @@ function bindModeCardSelection(cardEl, checkboxEl, mode, ignoreSelector = null) 
             return;
         }
         if (ignoreSelector && e.target.closest(ignoreSelector)) {
-            return;
-        }
-        if (e.target.closest('.mode-card-label')) {
             return;
         }
         if (e.target.closest('input, button, select, textarea, a')) {
