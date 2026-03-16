@@ -15,7 +15,20 @@ function extractNamedFunctionSource(source, functionName) {
     }
     assert.ok(start >= 0, `Could not find ${functionName} in renderer.js`);
 
-    const bodyStart = source.indexOf('{', start);
+    const paramsStart = source.indexOf('(', start);
+    assert.ok(paramsStart >= 0, `Could not find parameter list for ${functionName}`);
+
+    let parenDepth = 0;
+    let bodyStart = -1;
+    for (let i = paramsStart; i < source.length; i++) {
+        const ch = source[i];
+        if (ch === '(') parenDepth += 1;
+        if (ch === ')') parenDepth -= 1;
+        if (parenDepth === 0) {
+            bodyStart = source.indexOf('{', i);
+            break;
+        }
+    }
     assert.ok(bodyStart >= 0, `Could not find opening brace for ${functionName}`);
 
     let depth = 0;
@@ -181,6 +194,9 @@ function buildStartRoutineContext({
         showDiskSpaceBlockingModal: async () => { },
         formatBytes: (bytes) => `${bytes}B`,
         showBatteryWarning: async () => true,
+        revealRecoveryUi: (hint = '') => {
+            progressEta.textContent = hint;
+        },
         updateAutoUploadUiState: () => { },
         updateStartButtonState: () => { },
         checkStorage: async () => { },
@@ -231,6 +247,7 @@ function buildStartRoutineContext({
 
     async function invoke() {
         const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+        const enterNeedsAttentionStateSource = extractNamedFunctionSource(rendererSource, 'enterNeedsAttentionState');
         const applyProcessingUiStateSource = extractNamedFunctionSource(rendererSource, 'applyProcessingUiState');
         const startProcessingRoutineSource = extractNamedFunctionSource(rendererSource, 'startProcessingRoutine');
         const vmContext = vm.createContext(context);
@@ -239,6 +256,7 @@ const resolveRunModeFlagsHelper = this.resolveRunModeFlagsHelper;
 const buildStartProcessingArgsHelper = this.buildStartProcessingArgsHelper;
 const computeProcessingUiStateHelper = this.computeProcessingUiStateHelper;
 const GIB = this.GIB;
+${enterNeedsAttentionStateSource}
 ${applyProcessingUiStateSource}
 ${startProcessingRoutineSource}
 this.__startProcessingRoutine = startProcessingRoutine;

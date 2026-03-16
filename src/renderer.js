@@ -748,6 +748,42 @@ function revealRecoveryUi(hint = '') {
     setLogToggleState({ attention: true });
 }
 
+function enterNeedsAttentionState({
+    message,
+    hint = 'Open the log for details. If this keeps happening, contact support.',
+    hideStart = false,
+    showResumeOptions = false,
+    emphasizeRecovery = true,
+    tintProgressBar = true
+} = {}) {
+    if (typeof setProgressPhase === 'function') {
+        setProgressPhase('Needs Attention', 'error');
+    }
+    if (typeof setProgressStatusVisibility === 'function') {
+        setProgressStatusVisibility(true);
+    }
+    if (message) {
+        progressTextContent.textContent = message;
+    }
+    if (tintProgressBar) {
+        progressFill.style.background = 'var(--accent-red)';
+    }
+    if (emphasizeRecovery) {
+        revealRecoveryUi(hint);
+    } else {
+        progressEta.textContent = hint || '';
+    }
+    if (hideStart) {
+        btnStart.classList.add('hidden');
+        if (typeof updateStartButtonHelper === 'function') {
+            updateStartButtonHelper();
+        }
+    }
+    if (showResumeOptions) {
+        resumeRestartContainer.classList.remove('hidden');
+    }
+}
+
 function computeAutoCacheValues(freeBytes) {
     const free = Number.isFinite(freeBytes) ? Math.max(0, freeBytes) : 0;
     const freeGiB = free / GIB;
@@ -2064,39 +2100,24 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                 return;
             } else {
                 // Error occurred - show Resume/Restart options (not Start)
-                progressTextContent.textContent = 'Processing needs attention.';
-                progressFill.style.background = 'var(--accent-red)';
-                progressEta.textContent = result.error || 'Open the log for details. Contact support if this keeps happening.';
-                if (typeof setProgressPhase === 'function') {
-                    setProgressPhase('Needs Attention', 'error');
-                }
-                if (typeof revealRecoveryUi === 'function') {
-                    revealRecoveryUi();
-                }
-                btnStart.classList.add('hidden');
-                if (typeof updateStartButtonHelper === 'function') {
-                    updateStartButtonHelper();
-                }
-                resumeRestartContainer.classList.remove('hidden');
+                enterNeedsAttentionState({
+                    message: 'Processing needs attention.',
+                    hint: result.error || 'Open the log for details. If this keeps happening, contact support.',
+                    hideStart: true,
+                    showResumeOptions: true
+                });
             }
         }
     } catch (error) {
         if (!stoppedByUser) {
             // Error in try/catch - show Resume/Restart options
-            progressTextContent.textContent = 'Processing stopped unexpectedly.';
-            progressEta.textContent = error.message || 'Open the log for details. Contact support if this keeps happening.';
-            if (typeof setProgressPhase === 'function') {
-                setProgressPhase('Needs Attention', 'error');
-            }
-            if (typeof revealRecoveryUi === 'function') {
-                revealRecoveryUi();
-            }
+            enterNeedsAttentionState({
+                message: 'Processing stopped unexpectedly.',
+                hint: error.message || 'Open the log for details. If this keeps happening, contact support.',
+                hideStart: true,
+                showResumeOptions: true
+            });
             console.error(error);
-            btnStart.classList.add('hidden');
-            if (typeof updateStartButtonHelper === 'function') {
-                updateStartButtonHelper();
-            }
-            resumeRestartContainer.classList.remove('hidden');
         }
     } finally {
         isProcessing = false;
@@ -2627,9 +2648,9 @@ btnContinueBatch.addEventListener('click', async () => {
                 result.error || 'DateBack could not continue to the next batch.',
                 'Please restart DateBack and try again.'
             );
-            setProgressPhase('Needs Attention', 'error');
-            progressTextContent.textContent = 'Could not continue this run.';
-            revealRecoveryUi('Open the log for details. If this keeps happening, contact support.');
+            enterNeedsAttentionState({
+                message: 'Could not continue this run.'
+            });
         } else {
             console.log('[Pause-After-Batch] Successfully resumed batch');
             // Progress will update automatically when Python sends next progress message
@@ -2641,9 +2662,9 @@ btnContinueBatch.addEventListener('click', async () => {
             err.message || 'DateBack hit an unexpected error while resuming.',
             'Please restart DateBack and try again.'
         );
-        setProgressPhase('Needs Attention', 'error');
-        progressTextContent.textContent = 'Could not continue this run.';
-        revealRecoveryUi('Open the log for details. If this keeps happening, contact support.');
+        enterNeedsAttentionState({
+            message: 'Could not continue this run.'
+        });
     }
 });
 
@@ -2717,9 +2738,9 @@ btnPauseAfterBatch.addEventListener('click', async () => {
     } catch (err) {
         console.error('Error pausing after batch:', err);
         stoppedByUser = false; // Reset on error
-        setProgressPhase('Needs Attention', 'error');
-        progressTextContent.textContent = 'Could not pause safely.';
-        revealRecoveryUi('Open the log for details. If this keeps happening, contact support.');
+        enterNeedsAttentionState({
+            message: 'Could not pause safely.'
+        });
 
         // Re-enable buttons on error
         btnResumeProc.disabled = false;
@@ -3180,10 +3201,10 @@ window.api.onProgressUpdate((data) => {
         progressEta.textContent = `Attempt ${attempt}: ${data.error || 'temporary upload issue'}`;
 
     } else if (data.type === 'upload_fatal') {
-        setProgressPhase('Needs Attention', 'error');
-        progressTextContent.textContent = 'Cloud delivery needs attention.';
-        progressFill.style.background = 'var(--accent-red)';
-        revealRecoveryUi(data.last_error || data.message || 'Open the log for details. If this keeps happening, contact support.');
+        enterNeedsAttentionState({
+            message: 'Cloud delivery needs attention.',
+            hint: data.last_error || data.message || 'Open the log for details. If this keeps happening, contact support.'
+        });
 
     } else if (data.type === 'complete') {
         setProgressPhase('Complete', 'complete');
@@ -3487,14 +3508,16 @@ btnRetryCorrupted.addEventListener('click', async () => {
                 showSuccessModal(result.stats);
             }
         } else {
-            setProgressPhase('Needs Attention', 'error');
-            progressTextContent.textContent = 'Retry could not finish.';
-            revealRecoveryUi(result.error || 'Open the log for details. If this keeps happening, contact support.');
+            enterNeedsAttentionState({
+                message: 'Retry could not finish.',
+                hint: result.error || 'Open the log for details. If this keeps happening, contact support.'
+            });
         }
     } catch (error) {
-        setProgressPhase('Needs Attention', 'error');
-        progressTextContent.textContent = 'Retry stopped unexpectedly.';
-        revealRecoveryUi(error.message || 'Open the log for details. If this keeps happening, contact support.');
+        enterNeedsAttentionState({
+            message: 'Retry stopped unexpectedly.',
+            hint: error.message || 'Open the log for details. If this keeps happening, contact support.'
+        });
     } finally {
         progressText.classList.remove('processing');
         if (!progressSection || !progressSection.classList.contains('needs-attention')) {
