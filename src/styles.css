@@ -790,20 +790,21 @@ textarea {
     max-height: 86px;
     opacity: 1;
     pointer-events: auto;
-    margin-top: 12px;
-    padding-top: 12px;
+    margin-top: 8px;
+    padding-top: 8px;
     border-top-color: rgba(136, 189, 242, 0.10);
 }
 
 .option-card .suboption-label {
     margin: 0;
-    padding: 0;
+    padding: 4px 0 2px;
     background: transparent;
     border: 0;
     border-radius: 0;
     box-shadow: none;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+    gap: 10px;
 }
 
 .option-card .suboption-label:hover {
@@ -814,9 +815,10 @@ textarea {
 }
 
 .option-card .suboption-label .checkbox-text {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
-    color: var(--text-secondary);
+    color: rgba(176, 196, 212, 0.76);
+    line-height: 1.35;
 }
 
 @media (max-width: 900px) {
@@ -1165,7 +1167,7 @@ textarea {
 .drop-zone {
     border: 2px dashed var(--glass-border);
     border-radius: 16px;
-    padding: 34px 20px;
+    padding: 12px 20px;
     text-align: center;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -1219,12 +1221,18 @@ textarea {
 
 .drop-zone-content {
     pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-height: 72px;
 }
 
 .drop-icon {
-    font-size: 48px;
+    font-size: 34px;
     display: block;
-    margin-bottom: 12px;
+    margin-bottom: 0;
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
     transition: transform 0.3s ease;
 }
@@ -1237,7 +1245,7 @@ textarea {
     font-size: 16px;
     font-weight: 600;
     color: var(--text-primary);
-    margin-bottom: 6px;
+    margin: 0;
     letter-spacing: -0.2px;
 }
 
@@ -1245,12 +1253,14 @@ textarea {
     font-size: 13px;
     color: var(--text-secondary);
     opacity: 0.72;
+    margin: 0;
 }
 
 #btn-find-zip,
 .btn-zip-auto-find {
     width: auto !important;
     align-self: flex-start;
+    margin-top: 8px;
     padding: 10px 15px;
     font-size: 12px;
     line-height: 1.1;
@@ -1273,6 +1283,10 @@ textarea {
     flex-direction: column;
     gap: 0;
     margin-top: 2px;
+}
+
+.zip-selected-stack:not(:has(.file-selected:not(.hidden), .zip-validation:not(.hidden))) {
+    display: none;
 }
 
 .zip-selected-stack .file-selected,

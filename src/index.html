@@ -58,10 +58,6 @@
                     </div>
                     <input type="text" id="zip-path" class="text-input hidden" readonly>
                 </div>
-                <!-- Auto-Search Button (Outside drop zone to prevent event bubbling) -->
-                <button id="btn-find-zip" class="btn btn-secondary btn-zip-auto-find">
-                    🔍 Find My Zip Automatically
-                </button>
                 <div class="zip-selected-stack">
                     <div id="file-selected" class="file-selected hidden">
                         <span class="file-icon">📦</span>
@@ -73,6 +69,10 @@
                         <button id="btn-validation-help" class="btn btn-small btn-warning hidden">What do I do?</button>
                     </div>
                 </div>
+                <!-- Auto-Search Button (Outside drop zone to prevent event bubbling) -->
+                <button id="btn-find-zip" class="btn btn-secondary btn-zip-auto-find">
+                    🔍 Find My Zip Automatically
+                </button>
             </section>
 
             <!-- Step 2: Processing Mode -->
@@ -101,7 +101,7 @@
                                 <label class="checkbox-label suboption-label">
                                     <input type="checkbox" id="pause-after-batch">
                                     <span class="checkbox-custom"></span>
-                                    <span class="checkbox-text">Pause after every batch (500 files)</span>
+                                    <span class="checkbox-text">Pause after each set of 500 files</span>
                                 </label>
                             </div>
                         </div>
