@@ -233,6 +233,7 @@ function buildStartRoutineContext({
         diskUsageManualRadio,
         resumeRestartContainer,
         btnOpenFolder,
+        currentOutputDir: '/tmp/output',
         isProcessing: false,
         stoppedByUser: false,
         etaTimestamps: [],
@@ -247,6 +248,7 @@ function buildStartRoutineContext({
 
     async function invoke() {
         const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+        const getEffectiveOutputDirSource = extractNamedFunctionSource(rendererSource, 'getEffectiveOutputDir');
         const enterNeedsAttentionStateSource = extractNamedFunctionSource(rendererSource, 'enterNeedsAttentionState');
         const applyProcessingUiStateSource = extractNamedFunctionSource(rendererSource, 'applyProcessingUiState');
         const startProcessingRoutineSource = extractNamedFunctionSource(rendererSource, 'startProcessingRoutine');
@@ -256,6 +258,7 @@ const resolveRunModeFlagsHelper = this.resolveRunModeFlagsHelper;
 const buildStartProcessingArgsHelper = this.buildStartProcessingArgsHelper;
 const computeProcessingUiStateHelper = this.computeProcessingUiStateHelper;
 const GIB = this.GIB;
+${getEffectiveOutputDirSource}
 ${enterNeedsAttentionStateSource}
 ${applyProcessingUiStateSource}
 ${startProcessingRoutineSource}

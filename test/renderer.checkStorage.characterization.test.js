@@ -131,6 +131,7 @@ function buildCheckStorageContext({
         stagingPathInput,
         cacheGbInput,
         btnBrowseOutput,
+        currentOutputDir: '/tmp/output',
         storageCheckRequestId: 0,
         isStorageCriticallyLow: false,
         lastStorageEstimate: null,
@@ -169,6 +170,7 @@ function buildCheckStorageContext({
 
     async function run() {
         const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+        const getEffectiveOutputDirSource = extractNamedFunctionSource(rendererSource, 'getEffectiveOutputDir');
         const checkStorageSource = extractNamedFunctionSource(rendererSource, 'checkStorage');
         const vmContext = vm.createContext(context);
         const script = new vm.Script(`
@@ -177,6 +179,7 @@ const AVG_FILE_BYTES = this.AVG_FILE_BYTES;
 const STORAGE_ESTIMATE_LOG_THROTTLE_MS = this.STORAGE_ESTIMATE_LOG_THROTTLE_MS;
 const computeStorageEstimatesHelper = this.computeStorageEstimatesHelper;
 const computeStorageWarningStateHelper = this.computeStorageWarningStateHelper;
+${getEffectiveOutputDirSource}
 ${checkStorageSource}
 this.__checkStorage = checkStorage;
 `);

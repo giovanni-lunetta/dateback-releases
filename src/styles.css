@@ -909,6 +909,55 @@ textarea {
     gap: 8px;
 }
 
+.advanced-settings-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.advanced-setting-block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.advanced-setting-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.advanced-setting-label {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: rgba(236, 244, 250, 0.96);
+}
+
+.advanced-setting-caption {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(176, 196, 212, 0.72);
+}
+
+.advanced-setting-input-row {
+    margin-bottom: 0;
+}
+
+.advanced-setting-choice-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .cloud-mode-flow-strip {
     display: flex;
     align-items: center;
@@ -964,11 +1013,10 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 18px 18px 16px;
-    border-radius: 14px;
-    border: 1px solid rgba(136, 189, 242, 0.18);
-    background: linear-gradient(180deg, rgba(33, 44, 61, 0.8), rgba(22, 31, 43, 0.72));
-    box-shadow: var(--shadow-2);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
 }
 
 .destination-primary-row {
@@ -1006,6 +1054,11 @@ textarea {
     min-width: 70px;
 }
 
+.advanced-disk-usage-row {
+    margin: 0;
+    gap: 16px;
+}
+
 .disk-usage-choice {
     display: inline-flex;
     align-items: center;
@@ -1036,6 +1089,14 @@ textarea {
     gap: 8px;
 }
 
+.advanced-manual-cache {
+    margin-top: 2px;
+}
+
+.advanced-manual-cache-grid {
+    margin-bottom: 10px;
+}
+
 .manual-cache-field {
     display: flex;
     flex-direction: column;
@@ -1050,15 +1111,21 @@ textarea {
 .auto-upload-advanced {
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 10px;
-    padding: 8px 10px 10px;
+    padding: 8px 10px 12px;
     background: rgba(255, 255, 255, 0.018);
 }
 
 .auto-upload-advanced summary {
     cursor: pointer;
     font-size: 13px;
-    color: rgba(176, 196, 212, 0.78);
+    font-weight: 600;
+    color: rgba(176, 196, 212, 0.82);
     user-select: none;
+}
+
+.advanced-setting-block .disk-usage-hint,
+.advanced-setting-block .disk-usage-warning {
+    margin-bottom: 0;
 }
 
 .storage-summary {
@@ -1096,6 +1163,11 @@ textarea {
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.06);
     background: rgba(255, 255, 255, 0.025);
+}
+
+#cloud-working-root-display,
+#btn-browse-cloud-working-root {
+    min-height: 46px;
 }
 
 .handoff-tooltip {

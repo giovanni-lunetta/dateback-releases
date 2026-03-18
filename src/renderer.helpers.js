@@ -15,7 +15,7 @@
             return 'Your processed memories will be saved here.';
         }
         if (mode === 'CLOUD') {
-            return 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.';
+            return 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Options if needed.';
         }
         return 'Choose a storage mode above to continue.';
     }
@@ -161,7 +161,7 @@
             warningHtml = showAbsoluteCritical
                 ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>CRITICAL:</strong> You need at least 5GB free to process files safely.'
                 : (isPauseAfterBatchMode
-                    ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after every batch is enabled. Upload and delete each batch before continuing.'
+                    ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after each batch is enabled. If space is tight, move or delete finished batch folders before continuing.'
                     : isAutoUploadMode
                         ? `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Store on Cloud needs temporary cache + buffer (${autoCacheText} + ${autoBufferText}). Keep destination available.`
                         : '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> You might run out of space. Choose a larger working drive or switch to Store on Cloud.');
@@ -482,6 +482,7 @@
             cloudEnabled,
             computerEnabled,
             workingFolderHelpText,
+            showWorkingFolderSection: computerEnabled,
             pauseAfterBatchDisabled: pauseAfterBatchState.pauseAfterBatchDisabled,
             shouldUncheckPauseAfterBatch: pauseAfterBatchState.shouldUncheckPauseAfterBatch,
             computerModeSettingsExpanded: computerEnabled,

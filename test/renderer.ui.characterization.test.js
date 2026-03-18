@@ -74,6 +74,7 @@ function buildUiStateContext({
     diskUsageMode = 'automatic'
 }) {
     const elements = {
+        workingFolderSection: createElement(),
         workingFolderHelp: createElement(),
         pauseAfterBatchCheckbox: createElement(),
         computerModeSettings: createElement(),
@@ -165,6 +166,7 @@ test('updateAutoUploadUiState glue: NONE mode stopped', () => {
     runUpdateAutoUploadUiState(context);
 
     assert.equal(elements.workingFolderHelp.textContent, 'Choose a storage mode above to continue.');
+    assert.equal(elements.workingFolderSection.classList.contains('hidden'), true);
     assert.equal(elements.cloudDestinationSection.classList.contains('hidden'), true);
     assert.equal(elements.computerModeCheckbox.disabled, false);
     assert.equal(elements.cloudModeCheckbox.disabled, false);
@@ -187,6 +189,7 @@ test('updateAutoUploadUiState glue: COMPUTER mode stopped', () => {
     assert.equal(elements.pauseAfterBatchCheckbox.disabled, false);
     assert.equal(elements.pauseAfterBatchCheckbox.checked, true);
     assert.equal(elements.workingFolderHelp.textContent, 'Your processed memories will be saved here.');
+    assert.equal(elements.workingFolderSection.classList.contains('hidden'), false);
     assert.equal(elements.cloudDestinationSection.classList.contains('hidden'), true);
     assert.equal(elements.computerModeCard.classList.contains('selected'), true);
 });
@@ -204,7 +207,8 @@ test('updateAutoUploadUiState glue: CLOUD mode running', () => {
     assert.equal(elements.cloudModeCheckbox.disabled, true);
     assert.equal(elements.pauseAfterBatchCheckbox.disabled, true);
     assert.equal(elements.pauseAfterBatchCheckbox.checked, false);
-    assert.equal(elements.workingFolderHelp.textContent, 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.');
+    assert.equal(elements.workingFolderHelp.textContent, 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Options if needed.');
+    assert.equal(elements.workingFolderSection.classList.contains('hidden'), true);
     assert.equal(elements.cloudDestinationSection.classList.contains('hidden'), false);
     assert.equal(calls.updateCloudHandoffCopy, 1);
     assert.equal(calls.updateSyncFolderWarning, 1);

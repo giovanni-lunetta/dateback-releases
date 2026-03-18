@@ -22,6 +22,7 @@ import hashlib
 import tempfile
 from urllib.parse import urlparse, parse_qs
 from collections import deque
+from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root
 
 # Global Abort Flag
 ABORT_PROCESSING = threading.Event()
@@ -1164,16 +1165,19 @@ def load_batch_manifest():
                 return None
     return None
 
-def save_batch_progress(batch_num, total_batches, total_files=None, processed_indices=None, zip_fingerprint=None, output_dir=None, icloud_mode=None, actual_file_count=None):
-    """Save the current batch progress to disk."""
+def save_batch_progress(batch_num, total_batches, total_files=None, processed_indices=None, zip_fingerprint=None, output_dir=None, icloud_mode=None, actual_file_count=None, batch_completed=True):
+    """Save batch progress to disk without treating partial batches as completed."""
     try:
         overall_start = time.perf_counter()
         progress_file = get_batch_progress_file()
+        last_completed_batch = compute_last_completed_batch(batch_num, batch_completed=batch_completed)
         data = {
-            "last_completed_batch": batch_num,
+            "last_completed_batch": last_completed_batch,
             "total_batches": total_batches,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
+        if not batch_completed:
+            data["active_partial_batch"] = batch_num
         if total_files is not None:
             data["total_files"] = total_files
         if processed_indices is not None:
@@ -1211,8 +1215,15 @@ def load_batch_progress():
         data = load_batch_manifest()
         if data:
             last_completed = data.get("last_completed_batch", -1)
-            print(f"Resuming: Last completed batch was {last_completed + 1}. Starting from batch {last_completed + 2}.", flush=True)
-            return last_completed + 1  # Start from next batch
+            if isinstance(last_completed, int) and last_completed >= 0:
+                print(f"Resuming: Last completed batch was {last_completed + 1}. Starting from batch {last_completed + 2}.", flush=True)
+            else:
+                active_partial_batch = data.get("active_partial_batch")
+                if isinstance(active_partial_batch, int) and active_partial_batch >= 0:
+                    print(f"Resuming: Found incomplete Batch_{active_partial_batch + 1:02d}. Returning to that batch.", flush=True)
+                else:
+                    print("Resuming: No completed batches recorded yet. Starting from batch 1.", flush=True)
+            return max(0, last_completed + 1)  # Start from next completed boundary
     except Exception as e:
         print(f"Warning: Could not load batch progress: {e}", flush=True)
     return 0  # Start from beginning
@@ -2402,41 +2413,31 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     # === DETECT INCOMPLETE BATCHES ===
     # When resuming, check if there's an incomplete batch that needs to be continued
+    batch_scan_root = AUTO_STAGING_DIR if auto_upload else OUTPUT_DIR
     existing_batch_files = 0
-    orphaned_root_files = 0  # Files in OUTPUT_DIR root (not in batch folders)
+    orphaned_root_files = 0  # Files in root scan dir (not in batch folders)
     last_incomplete_batch = None
     files_in_incomplete_batch = 0
-    
-    if os.path.exists(OUTPUT_DIR):
-        # First, count files in the OUTPUT_DIR ROOT (orphaned from interrupted processing)
-        # These are files that were downloaded but never moved into a batch folder
-        root_files = [f for f in os.listdir(OUTPUT_DIR) 
-                     if os.path.isfile(os.path.join(OUTPUT_DIR, f)) and not f.startswith('.')]
-        orphaned_root_files = len(root_files)
-        
+    batch_folders = []
+    next_available_batch = 0
+
+    if os.path.exists(batch_scan_root):
+        batch_scan = scan_existing_batch_root(batch_scan_root, batch_size)
+        orphaned_root_files = batch_scan["orphaned_root_files"]
+        existing_batch_files = batch_scan["existing_batch_files"]
+        last_incomplete_batch = batch_scan["last_incomplete_batch"]
+        files_in_incomplete_batch = batch_scan["files_in_incomplete_batch"]
+        batch_folders = batch_scan["batch_folders"]
+        next_available_batch = batch_scan["next_available_batch"]
+
         if orphaned_root_files > 0:
-            print(f"Found {orphaned_root_files} orphaned files in output root (will be organized into batch)")
-        
-        # Scan for existing Batch_XX folders
-        batch_folders = sorted([d for d in os.listdir(OUTPUT_DIR) 
-                               if d.startswith('Batch_') and os.path.isdir(os.path.join(OUTPUT_DIR, d))])
-        
+            root_label = "staging root" if auto_upload else "output root"
+            print(f"Found {orphaned_root_files} orphaned files in {root_label} (will be organized into batch)")
+
+        if last_incomplete_batch and files_in_incomplete_batch > 0:
+            print(f"Found incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will continue filling it.")
+
         if batch_folders:
-            # Count total files in all batches
-            for batch_folder in batch_folders:
-                batch_path = os.path.join(OUTPUT_DIR, batch_folder)
-                files_in_batch = len([f for f in os.listdir(batch_path) 
-                                     if os.path.isfile(os.path.join(batch_path, f)) and not f.startswith('.')])
-                existing_batch_files += files_in_batch
-                
-                # Check if this batch is incomplete (less than batch_size)
-                if files_in_batch < batch_size:
-                    last_incomplete_batch = batch_folder
-                    files_in_incomplete_batch = files_in_batch
-            
-            if last_incomplete_batch and files_in_incomplete_batch > 0:
-                print(f"Found incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will continue filling it.")
-            
             print(f"Found {existing_batch_files} existing files in {len(batch_folders)} batch folder(s).")
     
     # Total existing files = files in batches + orphaned root files
@@ -2457,52 +2458,36 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     # Adjust batch counting based on existing files / persisted progress
     # The 'total' now only contains NEW files to process (Fast Pass filtered out existing ones)
-    files_to_complete_batch = 0
-    start_batch = 0
-    
-    # PRIORITY 1: Use persisted batch progress if available
-    # This ensures that if we marked "Batch 3" as complete, we don't try to backfill it
-    # even if it has < 500 files (due to duplicates/skips)
-    if auto_upload:
-        # In Auto Upload mode, processed_indices in manifest is the source of truth.
-        # Start fresh on remaining items after filtering by processed_indices_set.
-        start_batch = 0
-        files_to_complete_batch = 0
+    batch_resume_state = resolve_resume_batch_state(
+        auto_upload=auto_upload,
+        persisted_start_batch=persisted_start_batch,
+        total_existing_files=total_existing_files,
+        last_incomplete_batch=last_incomplete_batch,
+        files_in_incomplete_batch=files_in_incomplete_batch,
+        batch_size=batch_size,
+        next_available_batch=next_available_batch,
+    )
+    files_to_complete_batch = batch_resume_state["files_to_complete_batch"]
+    start_batch = batch_resume_state["start_batch"]
+
+    if auto_upload and batch_resume_state["resume_incomplete_batch"] and last_incomplete_batch and files_in_incomplete_batch > 0:
+        print(f"Auto Upload mode resume state: using processed indices and continuing {last_incomplete_batch}.", flush=True)
+        print(f"Detected incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will add {files_to_complete_batch} files to complete it.", flush=True)
+    elif auto_upload and next_available_batch > 0:
+        print(f"Auto Upload mode resume state: using processed indices and continuing at Batch_{start_batch + 1:02d}.", flush=True)
+    elif auto_upload:
+        print("Auto Upload mode resume state: using processed indices from the beginning.", flush=True)
+    elif batch_resume_state["resume_incomplete_batch"] and last_incomplete_batch and files_in_incomplete_batch > 0:
+        if persisted_start_batch > 0:
+            print(f"Resuming from persisted state: Starting at Batch_{start_batch + 1:02d}", flush=True)
+            print(f"Detected incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will add {files_to_complete_batch} files to complete it.", flush=True)
+        else:
+            print(f"No persisted state found. Detected incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will add {files_to_complete_batch} files to complete it.", flush=True)
     elif persisted_start_batch > 0:
-        start_batch = persisted_start_batch
-        print(f"Resuming from persisted state: Starting at Batch_{start_batch + 1:02d}")
-
-        # CRITICAL: Even with persisted state, check if the current batch is incomplete
-        # This handles the case where processing was paused mid-batch
-        # Use the actual file count from last_incomplete_batch detection above
-        if last_incomplete_batch and files_in_incomplete_batch > 0:
-            # Extract batch number from folder name (e.g., "Batch_02" -> 1)
-            incomplete_batch_num = int(last_incomplete_batch.split('_')[1]) - 1
-
-            # If the incomplete batch matches where we're resuming
-            if incomplete_batch_num == start_batch:
-                files_to_complete_batch = batch_size - files_in_incomplete_batch
-                print(f"Detected incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will add {files_to_complete_batch} files to complete it.")
-            else:
-                print(f"Current batch is complete or we're starting a new batch.")
-        else:
-            print(f"Current batch is complete or we're starting a new batch.")
-    
-    # PRIORITY 2: Heuristic based on file counts (fallback if no persistence)
+        print(f"Resuming from persisted state: Starting at Batch_{start_batch + 1:02d}", flush=True)
+        print("Current batch is complete or we're starting a new batch.", flush=True)
     elif total_existing_files > 0:
-        # Use the actual incomplete batch detection from above
-        if last_incomplete_batch and files_in_incomplete_batch > 0:
-            # Extract batch number from folder name (e.g., "Batch_02" -> 1)
-            incomplete_batch_num = int(last_incomplete_batch.split('_')[1]) - 1
-            files_to_complete_batch = batch_size - files_in_incomplete_batch
-            start_batch = incomplete_batch_num  # Continue with the incomplete batch
-            print(f"No persisted state found. Detected incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will add {files_to_complete_batch} files to complete it.")
-        else:
-            # All batches are complete, start a new one
-            # Count how many complete batch folders exist
-            num_complete_batches = len(batch_folders) if 'batch_folders' in locals() else 0
-            start_batch = num_complete_batches
-            print(f"No persisted state found. All existing batches valid. Starting at Batch_{start_batch + 1:02d}")
+        print(f"No persisted state found. All existing batches valid. Starting at Batch_{start_batch + 1:02d}", flush=True)
     
     # Recalculate number of batches needed for remaining files
     # If we have files_to_complete_batch, the first "batch" of new processing is smaller
@@ -2696,7 +2681,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                     zip_fingerprint=zip_fingerprint,
                     output_dir=OUTPUT_DIR,
                     icloud_mode=pause_batches,
-                    actual_file_count=total_files_organized
+                    actual_file_count=total_files_organized,
+                    batch_completed=False
                 )
                 print(f"   ✓ Manifest saved: {total_files_organized} files processed.", flush=True)
                 

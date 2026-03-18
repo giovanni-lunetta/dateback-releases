@@ -12,8 +12,8 @@ const btnToggleLog = document.getElementById('btn-toggle-log');
 const btnViewSummary = document.getElementById('btn-view-summary');
 const btnOpenFolder = document.getElementById('btn-open-folder');
 const modeStepLabel = document.getElementById('mode-step-label');
+const workingFolderSection = document.getElementById('working-folder-section');
 const workingFolderLabel = document.getElementById('working-folder-label');
-const workingFolderCloudNote = document.getElementById('working-folder-cloud-note');
 const ctaHelper = document.getElementById('cta-helper');
 const progressSection = document.querySelector('.progress-section');
 const progressBar = document.getElementById('progress-fill').parentElement; // The progress-bar container
@@ -78,6 +78,8 @@ const cacheAutoHint = document.getElementById('cache-auto-hint');
 const autoCachePreview = document.getElementById('auto-cache-preview');
 const cacheLowSpaceWarning = document.getElementById('cache-low-space-warning');
 const manualCacheSettings = document.getElementById('manual-cache-settings');
+const cloudWorkingRootDisplay = document.getElementById('cloud-working-root-display');
+const btnBrowseCloudWorkingRoot = document.getElementById('btn-browse-cloud-working-root');
 const uploadModeSelect = document.getElementById('upload-mode');
 const stagingPathInput = document.getElementById('staging-path');
 const btnBrowseStaging = document.getElementById('btn-browse-staging');
@@ -134,6 +136,38 @@ let lastStorageEstimate = null;
 let lastStorageEstimateLogAt = 0;
 let lastStorageEstimateLogKind = null;
 let storageMode = 'NONE';
+
+function getEffectiveOutputDir() {
+    return (outputPathInput && outputPathInput.value.trim()) || currentOutputDir || '';
+}
+
+function syncWorkingRootDisplays() {
+    const effectiveOutputDir = getEffectiveOutputDir();
+    if (outputPathInput && effectiveOutputDir && outputPathInput.value.trim() !== effectiveOutputDir) {
+        outputPathInput.value = effectiveOutputDir;
+    }
+    if (cloudWorkingRootDisplay) {
+        cloudWorkingRootDisplay.value = effectiveOutputDir;
+    }
+}
+
+function setOutputDirState(pathValue) {
+    const nextPath = typeof pathValue === 'string' ? pathValue.trim() : '';
+    if (outputPathInput) {
+        outputPathInput.value = nextPath;
+    }
+    currentOutputDir = nextPath;
+    syncWorkingRootDisplays();
+}
+
+async function refreshOutputDirDependentUi() {
+    if (currentMemoryCount > 0) {
+        await checkStorage(currentMemoryCount);
+    }
+    updateAutoCachePreview();
+    updateStorageSummary();
+    updateStartButtonState();
+}
 
 const GIB = 1024 * 1024 * 1024;
 const AVG_FILE_BYTES = 8 * 1024 * 1024;
@@ -208,12 +242,13 @@ const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilitySt
     if (computerEnabled) {
         workingFolderHelpText = 'Your processed memories will be saved here.';
     } else if (cloudEnabled) {
-        workingFolderHelpText = 'This is temporary working space. Your memories will be saved to the Cloud Destination folder below.';
+        workingFolderHelpText = 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Options if needed.';
     }
     return {
         cloudEnabled,
         computerEnabled,
         workingFolderHelpText,
+        showWorkingFolderSection: computerEnabled,
         pauseAfterBatchDisabled: !computerEnabled || isProcessing,
         shouldUncheckPauseAfterBatch: !computerEnabled && !!pauseAfterBatchChecked,
         computerModeSettingsExpanded: computerEnabled,
@@ -301,13 +336,13 @@ const computeStorageWarningStateHelper = rendererHelpers.computeStorageWarningSt
     const showWarning = isLowSpace || isCriticallyLow;
 
     let warningHtml = '';
-    if (showWarning) {
-        const autoCacheText = Number.isFinite(autoCacheGb) ? `${roundOneDecimal(autoCacheGb)} GB` : 'configured cache';
-        const autoBufferText = Number.isFinite(autoSafetyBufferGb) ? `${roundOneDecimal(autoSafetyBufferGb)} GB` : 'safety buffer';
-        warningHtml = showAbsoluteCritical
-            ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>CRITICAL:</strong> You need at least 5GB free to process files safely.'
-            : (isPauseAfterBatchMode
-                ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after every batch is enabled. Upload and delete each batch before continuing.'
+        if (showWarning) {
+            const autoCacheText = Number.isFinite(autoCacheGb) ? `${roundOneDecimal(autoCacheGb)} GB` : 'configured cache';
+            const autoBufferText = Number.isFinite(autoSafetyBufferGb) ? `${roundOneDecimal(autoSafetyBufferGb)} GB` : 'safety buffer';
+            warningHtml = showAbsoluteCritical
+                ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>CRITICAL:</strong> You need at least 5GB free to process files safely.'
+                : (isPauseAfterBatchMode
+                ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Pause after each batch is enabled. If space is tight, move or delete finished batch folders before continuing.'
                 : isAutoUploadMode
                     ? `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> Store on Cloud needs temporary cache + buffer (${autoCacheText} + ${autoBufferText}). Keep destination available.`
                     : '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" style="display: inline-block; vertical-align: middle; margin-right: 6px;"><path d="M10 2L2 17h16L10 2z" fill="var(--accent-red)" stroke="var(--accent-red)" stroke-width="1.5"/><path d="M10 8v4M10 14h.01" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg><strong>Warning:</strong> You might run out of space. Choose a larger working drive or switch to Store on Cloud.');
@@ -580,21 +615,17 @@ function updateModeAwareCopy() {
     }
 
     if (workingFolderLabel) {
-        workingFolderLabel.textContent = mode === 'CLOUD'
-            ? '3. Select Your Working Folder'
-            : '3. Select Where You Want Your Memories Stored';
+        workingFolderLabel.textContent = '3. Select Where You Want Your Memories Stored';
     }
 
     if (cloudDestinationLabel) {
         cloudDestinationLabel.textContent = mode === 'CLOUD'
-            ? '4. Select Your Synced Cloud Folder'
+            ? '3. Select Your Synced Cloud Folder'
             : '5. Cloud Destination Folder';
     }
 
     if (storageCheckLabel) {
-        storageCheckLabel.textContent = mode === 'CLOUD'
-            ? '5. Review Storage Readiness'
-            : '4. Review Storage Readiness';
+        storageCheckLabel.textContent = '4. Review Storage Readiness';
     }
 
     if (btnOpenFolder) {
@@ -611,10 +642,6 @@ function updateCloudModeEducation() {
     const isCloudMode = mode === 'CLOUD';
     const providerInfo = detectCloudProvider(destinationPathInput.value.trim());
 
-    if (workingFolderCloudNote) {
-        workingFolderCloudNote.classList.toggle('hidden', !isCloudMode);
-    }
-
     if (cloudDestinationLead) {
         cloudDestinationLead.textContent = providerInfo && providerInfo.displayName
             ? `Choose the ${providerInfo.displayName} folder where finished memories should land.`
@@ -630,6 +657,8 @@ function updateCloudModeEducation() {
     if (storageRequiredNote) {
         storageRequiredNote.classList.toggle('hidden', !isCloudMode);
     }
+
+    syncWorkingRootDisplays();
 }
 
 function getStartButtonHelperText() {
@@ -640,7 +669,7 @@ function getStartButtonHelperText() {
     const mode = getStorageMode();
     const hasZipPath = !!zipPathInput.value.trim();
     const zipIsValid = zipValidation.classList.contains('valid');
-    const hasOutput = !!outputPathInput.value.trim();
+    const hasOutput = !!getEffectiveOutputDir();
     const cloudValidation = validateCloudDestinationForCurrentMode();
 
     if (!hasZipPath) {
@@ -653,7 +682,7 @@ function getStartButtonHelperText() {
 
     if (!hasOutput) {
         return mode === 'CLOUD'
-            ? 'Choose a working folder for temporary staging.'
+            ? 'DateBack could not load the default working folder. Choose one in Advanced Cloud Options.'
             : 'Choose where you want your memories stored.';
     }
 
@@ -694,7 +723,7 @@ function updateStartButtonState() {
 
     const mode = getStorageMode();
     const hasZip = !!zipPathInput.value && zipValidation.classList.contains('valid');
-    const hasOutput = !!outputPathInput.value.trim();
+    const hasOutput = !!getEffectiveOutputDir();
     const hasMode = mode === 'COMPUTER' || mode === 'CLOUD';
     const cloudValidation = validateCloudDestinationForCurrentMode();
     const hasDestination = mode !== 'CLOUD' || cloudValidation.valid;
@@ -954,7 +983,7 @@ async function checkStorage(count) {
     let autoUploadEstimate = null;
 
     if (isAutoUploadMode) {
-        const outputDir = outputPathInput.value.trim();
+        const outputDir = getEffectiveOutputDir();
         const stagingDir = stagingPathInput.value.trim();
         try {
             const preflightResult = await evaluateAutoUploadPreflight(outputDir, stagingDir);
@@ -1011,7 +1040,7 @@ async function checkStorage(count) {
 
     if (!Number.isFinite(availableBytes) && !isAutoUploadMode) {
         // For standard/manual modes, read output-volume free space.
-        let pathToCheck = outputPathInput.value;
+        let pathToCheck = getEffectiveOutputDir();
         if (!pathToCheck) {
             const defaults = await window.api.getDefaults();
             if (requestId !== storageCheckRequestId) return;
@@ -1157,7 +1186,7 @@ async function updateAutoCachePreview() {
         return;
     }
 
-    const outputDir = outputPathInput.value.trim();
+    const outputDir = getEffectiveOutputDir();
     if (!outputDir) {
         autoCachePreview.classList.add('hidden');
         return;
@@ -1190,7 +1219,7 @@ async function updateStorageSummary() {
         return;
     }
 
-    const outputDir = outputPathInput.value.trim();
+    const outputDir = getEffectiveOutputDir();
     const stagingDir = stagingPathInput.value.trim();
     if (!outputDir) {
         stagingFreeSpaceText.textContent = 'Free space in temporary working folder: --';
@@ -1305,10 +1334,10 @@ function isAllowedCloudFolder(pathValue) {
 
 function buildCloudHandoffTooltip(providerInfo) {
     return [
-        'Step 3 is temporary local working space for Cloud mode (inside a hidden .staging folder by default).',
-        'DateBack copies finished files into this synced destination folder in Step 4.',
+        'DateBack uses a local working folder behind the scenes for processing, manifests, and default staging.',
+        'Finished files are copied into this synced destination folder.',
         'Your cloud provider app uploads them from there.',
-        'Advanced options let you choose a different drive for temporary working space.'
+        'Advanced Cloud Options let you override the working folder or the custom staging folder.'
     ].join('\n');
 }
 
@@ -1414,7 +1443,7 @@ async function showDiskSpaceBlockingModal(title, text, subtext) {
         return false;
     }
 
-    const outputDir = outputPathInput.value.trim();
+    const outputDir = getEffectiveOutputDir();
     if (!outputDir || !isCloudModeSelected()) {
         return true;
     }
@@ -1531,8 +1560,9 @@ async function init() {
         await setFilePath(defaults.zipPath);
     }
     if (defaults.outputDir) {
-        outputPathInput.value = defaults.outputDir;
-        currentOutputDir = defaults.outputDir;
+        setOutputDirState(defaults.outputDir);
+    } else {
+        syncWorkingRootDisplays();
     }
 
     // Show instructions modal only on first launch
@@ -1640,18 +1670,20 @@ window.addEventListener('drop', (e) => e.preventDefault());
 btnBrowseOutput.addEventListener('click', async () => {
     const path = await window.api.selectFolder();
     if (path) {
-        outputPathInput.value = path;
-        currentOutputDir = path;
-
-        // Re-check storage if we have a count
-        if (currentMemoryCount > 0) {
-            await checkStorage(currentMemoryCount);
-        }
-        updateAutoCachePreview();
-        updateStorageSummary();
-        updateStartButtonState();
+        setOutputDirState(path);
+        await refreshOutputDirDependentUi();
     }
 });
+
+if (btnBrowseCloudWorkingRoot) {
+    btnBrowseCloudWorkingRoot.addEventListener('click', async () => {
+        const path = await window.api.selectFolder();
+        if (path) {
+            setOutputDirState(path);
+            await refreshOutputDirDependentUi();
+        }
+    });
+}
 
 btnBrowseDestination.addEventListener('click', async () => {
     const selected = await window.api.selectFolder();
@@ -1685,6 +1717,9 @@ let justPaused = false;
 
 function applyProcessingUiState(uiState) {
     btnBrowseOutput.disabled = uiState.btnBrowseOutputDisabled;
+    if (typeof btnBrowseCloudWorkingRoot !== 'undefined' && btnBrowseCloudWorkingRoot) {
+        btnBrowseCloudWorkingRoot.disabled = uiState.btnBrowseOutputDisabled;
+    }
     computerModeCheckbox.disabled = uiState.computerModeDisabled;
     cloudModeCheckbox.disabled = uiState.cloudModeDisabled;
     if (pauseAfterBatchCheckbox) pauseAfterBatchCheckbox.disabled = uiState.pauseAfterBatchDisabled;
@@ -1711,7 +1746,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     }
 
     const zipPath = zipPathInput.value;
-    const outputDir = outputPathInput.value;
+    const outputDir = getEffectiveOutputDir();
     console.log('[START] zipPath:', zipPath, 'outputDir:', outputDir);
 
     if (!zipPath) {
@@ -1767,6 +1802,19 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
             'Choose exactly one storage mode before starting.',
             'Select one mode and try again.',
             false
+        );
+        return;
+    }
+
+    if (!outputDir) {
+        showMessage(
+            'Working folder unavailable',
+            storageMode === 'CLOUD'
+                ? 'DateBack could not load the default local working folder for Cloud mode.'
+                : 'Choose where you want your memories stored before starting.',
+            storageMode === 'CLOUD'
+                ? 'Open Advanced Cloud Options and choose a working folder override, then try again.'
+                : ''
         );
         return;
     }
@@ -1891,7 +1939,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
             ? roundOneDecimal(estimate.autoSafetyBufferGb)
             : null;
         const warningMsg = storageMode === 'COMPUTER' && pauseBetweenBatches
-            ? "Pause-after-batch is enabled, but storage is still tight.\n\nUpload and delete each batch immediately after it completes."
+            ? "Pause-after-batch is enabled, but storage is still tight.\n\nMove or delete finished batch folders before continuing if space stays tight."
             : storageMode === 'CLOUD'
                 ? `Store on Cloud is enabled, but storage is still tight.\n\nThis mode requires temporary cache + safety buffer${estimatedRequiredGb !== null ? ` (~${estimatedRequiredGb} GB)` : ''}${estimatedCacheGb !== null && estimatedBufferGb !== null ? ` (${estimatedCacheGb} GB + ${estimatedBufferGb} GB)` : ''}.\nKeep your sync app running and ensure the destination remains available.`
                 : "Store on Computer is selected and storage is tight.\n\nChoose a larger working drive, or use Store on Cloud.";
@@ -2206,7 +2254,7 @@ function closeResumeModeModal() {
 
 // Start Processing (Initial)
 btnStart.addEventListener('click', async () => {
-    const outputDir = outputPathInput.value;
+    const outputDir = getEffectiveOutputDir();
     const zipPath = zipPathInput.value;
     if (outputDir) {
         try {
@@ -2235,7 +2283,7 @@ btnStart.addEventListener('click', async () => {
 
 // Resume Processing
 btnResumeProc.addEventListener('click', async () => {
-    const outputDir = outputPathInput.value;
+    const outputDir = getEffectiveOutputDir();
     const zipPath = zipPathInput.value;
     console.log('[Resume Processing] Output dir:', outputDir);
     console.log('[Resume Processing] ZIP path:', zipPath);
@@ -2287,7 +2335,7 @@ btnResumeVerify.addEventListener('click', async () => {
 btnResumeStartFresh.addEventListener('click', async () => {
     console.log('[Resume Modal] Start Fresh button clicked');
     closeResumeModeModal();
-    const outputDir = document.getElementById('output-path').value;
+    const outputDir = getEffectiveOutputDir();
     console.log('[Resume Modal] Clearing output folder:', outputDir);
     if (outputDir) {
         await window.api.clearOutputFolder({ outputDir });
@@ -2306,7 +2354,7 @@ btnContinueLater.addEventListener('click', async () => {
     justPaused = false;
 
     // Fetch manifest to get accurate processed count (same source as Resume modal)
-    const outputDir = outputPathInput.value;
+    const outputDir = getEffectiveOutputDir();
     const zipPath = zipPathInput.value;
     let displayCount = lastProcessedCount;
 
@@ -2635,7 +2683,7 @@ let lastTotalBatches = 0;
 function showBatchPauseModal(batchNum, totalBatches) {
     lastCompletedBatch = batchNum;
     lastTotalBatches = totalBatches;
-    batchPauseMessage.textContent = `Batch ${batchNum} of ${totalBatches} is ready. Let your cloud app finish syncing this batch, then continue when you're ready.`;
+    batchPauseMessage.textContent = `Batch ${batchNum} of ${totalBatches} is ready. Continue to the next batch or pause for now.`;
     batchPauseModal.classList.remove('hidden');
 }
 
@@ -2767,7 +2815,7 @@ btnPauseAfterBatch.addEventListener('click', async () => {
 btnOpenFolder.addEventListener('click', () => {
     const storageMode = getStorageMode();
     const cloudDestinationDir = destinationPathInput.value.trim();
-    const outputDir = outputPathInput.value.trim();
+    const outputDir = getEffectiveOutputDir();
     const folderToOpen = storageMode === 'CLOUD' && cloudDestinationDir ? cloudDestinationDir : outputDir;
     if (folderToOpen) {
         window.api.openFolder(folderToOpen);
@@ -2836,6 +2884,9 @@ function enforceStorageModeExclusivity(source) {
 }
 
 function applyVisibilityState(visibilityState) {
+    if (workingFolderSection) {
+        workingFolderSection.classList.toggle('hidden', !visibilityState.showWorkingFolderSection);
+    }
     if (workingFolderHelp) {
         workingFolderHelp.textContent = visibilityState.workingFolderHelpText;
     }
@@ -3094,7 +3145,7 @@ function formatTimeRemaining(seconds) {
 }
 
 // Progress callback from Python
-window.api.onProgressUpdate((data) => {
+function handleProgressUpdate(data) {
     if (data.type === 'progress') {
         const { count, total } = data;
 
@@ -3121,6 +3172,7 @@ window.api.onProgressUpdate((data) => {
             setProgressStatusVisibility(true);
         }
         progressTextContent.textContent = `Organizing memories: ${count.toLocaleString()} / ${total.toLocaleString()}`;
+        progressEta.textContent = '';
 
         // Calculate ETA using rolling window (last 100 items)
         const now = Date.now();
@@ -3159,12 +3211,12 @@ window.api.onProgressUpdate((data) => {
         lastProgressTime = now;
 
     } else if (data.type === 'batch_pause') {
-        // Python is requesting a pause for cloud sync
+        // Python is requesting a pause after a completed batch
         setProgressPhase('Paused', 'paused');
         if (typeof setProgressStatusVisibility === 'function') {
             setProgressStatusVisibility(true);
         }
-        progressTextContent.textContent = `Batch ${data.batch} is ready for cloud sync.`;
+        progressTextContent.textContent = `Batch ${data.batch} is ready.`;
         progressEta.textContent = '';
         // Note: signal file path is now handled by main process, not renderer
         showBatchPauseModal(data.batch, data.totalBatches);
@@ -3231,7 +3283,9 @@ window.api.onProgressUpdate((data) => {
         lastProgressTime = 0;
         showSuccessModal(data.stats);
     }
-});
+}
+
+window.api.onProgressUpdate(handleProgressUpdate);
 
 // Log messages from Python
 let expiredLinkAlertShown = false;
@@ -3462,7 +3516,7 @@ btnRetryCorrupted.addEventListener('click', async () => {
     progressEta.textContent = 'DateBack is reprocessing the files that failed last time.';
 
     try {
-        const outputDir = outputPathInput.value.trim() || currentOutputDir;
+        const outputDir = getEffectiveOutputDir();
         const storageMode = getStorageMode();
         const autoUpload = storageMode === 'CLOUD';
         const destinationDir = destinationPathInput.value.trim();
@@ -3475,11 +3529,11 @@ btnRetryCorrupted.addEventListener('click', async () => {
             if (!destinationDir) {
                 setProgressPhase('Needs Attention', 'error');
                 progressTextContent.textContent = 'Retry needs a cloud destination folder.';
-                progressEta.textContent = 'Choose your cloud destination in Step 4, then try Retry Corrupted Files again.';
+                progressEta.textContent = 'Choose your cloud destination in Step 3, then try Retry Corrupted Files again.';
                 showMessage(
                     'Choose a cloud destination first',
                     'Retrying failed files in Cloud mode requires a cloud destination folder.',
-                    'Choose a destination in Step 4, then try Retry Corrupted Files again.'
+                    'Choose a destination in Step 3, then try Retry Corrupted Files again.'
                 );
                 return;
             }
@@ -3585,8 +3639,9 @@ const linkFolderIcloud = document.getElementById('link-folder-icloud');
 
 function openProcessedFolder(e) {
     e.preventDefault();
-    if (currentOutputDir) {
-        window.api.openFolder(currentOutputDir);
+    const outputDir = getEffectiveOutputDir();
+    if (outputDir) {
+        window.api.openFolder(outputDir);
     }
 }
 
@@ -3614,8 +3669,9 @@ const btnOpenFolderTip = document.getElementById('btn-open-folder-tip');
 if (btnOpenFolderTip) {
     btnOpenFolderTip.addEventListener('click', (e) => {
         e.preventDefault();
-        if (currentOutputDir) {
-            window.api.openFolder(currentOutputDir);
+        const outputDir = getEffectiveOutputDir();
+        if (outputDir) {
+            window.api.openFolder(outputDir);
         }
     });
 }

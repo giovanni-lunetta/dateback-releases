@@ -169,6 +169,32 @@ test('storage warning: cloud low-space generates cloud warning html', () => {
     assert.ok(warning.warningHtml.includes('Store on Cloud needs temporary cache + buffer'));
 });
 
+test('storage warning: pause-after-batch low-space stays local and does not assume uploads', () => {
+    const gib = 1024 * 1024 * 1024;
+    const warning = helpers.computeStorageWarningState({
+        isAutoUploadMode: false,
+        isPauseAfterBatchMode: true,
+        requiredBytes: 12 * gib,
+        availableBytes: 8 * gib,
+        autoCacheGb: null,
+        autoSafetyBufferGb: null,
+        roundOneDecimal: (value) => Math.round(value * 10) / 10,
+        gib
+    });
+    assert.equal(warning.showWarning, true);
+    assert.ok(warning.warningHtml.includes('move or delete finished batch folders before continuing'));
+    assert.equal(warning.warningHtml.includes('Upload and delete each batch'), false);
+});
+
+test('batch-related copy avoids exact 500-file guarantees and cloud-sync pause wording', () => {
+    const indexSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'index.html'), 'utf8');
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    assert.equal(indexSource.includes('500 files each'), false);
+    assert.equal(indexSource.includes('for Cloud Sync'), false);
+    assert.equal(rendererSource.includes('ready for cloud sync'), false);
+    assert.equal(rendererSource.includes('Upload and delete each batch immediately after it completes.'), false);
+});
+
 test('success modal copy: cloud mode with delivery stats sets cloud headline/subtext', () => {
     const summary = helpers.buildSuccessModalCopy({
         auto_upload: true,
