@@ -10,7 +10,9 @@ function bootstrapMainForTests() {
     const mainPath = path.resolve(__dirname, '..', 'main.js');
     const handlers = new Map();
     let latestWebContents = null;
+    let latestMenuTemplate = null;
     let dialogOpenResult = { filePaths: [] };
+    const messageBoxCalls = [];
     let axiosPostImpl = async () => {
         throw new Error('Forced axios failure');
     };
@@ -64,7 +66,10 @@ function bootstrapMainForTests() {
         },
         dialog: {
             showOpenDialog: async () => dialogOpenResult,
-            showMessageBox: async () => ({ response: 1 })
+            showMessageBox: async (...args) => {
+                messageBoxCalls.push(args);
+                return { response: 1 };
+            }
         },
         shell: {
             openPath: (targetPath) => {
@@ -79,7 +84,10 @@ function bootstrapMainForTests() {
             }
         },
         Menu: {
-            buildFromTemplate: () => ({}),
+            buildFromTemplate: (template) => {
+                latestMenuTemplate = template;
+                return {};
+            },
             setApplicationMenu: () => { }
         }
     };
@@ -153,6 +161,11 @@ function bootstrapMainForTests() {
         },
         setAxiosPostImpl: (impl) => {
             axiosPostImpl = impl;
+        },
+        getLatestMenuTemplate: () => latestMenuTemplate,
+        getMessageBoxCalls: () => messageBoxCalls.map((args) => [...args]),
+        resetMessageBoxCalls: () => {
+            messageBoxCalls.length = 0;
         },
         getShellCalls: () => ({
             openPath: [...shellCalls.openPath],
@@ -269,7 +282,13 @@ async function expectUnauthorized(handlerName, payload, expected) {
     assert.deepEqual(result, expected);
 }
 
-const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, getShellCalls, resetShellCalls, restoreEnv } = bootstrapMainForTests();
+async function approveFolderSelection(targetPath) {
+    setDialogOpenResult({ canceled: false, filePaths: [targetPath] });
+    const selected = await callHandler('select-folder', createAuthorizedEvent());
+    assert.equal(selected, targetPath);
+}
+
+const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, restoreEnv } = bootstrapMainForTests();
 
 function killLeakedCaffeinateProcesses() {
     const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles() : [];
@@ -296,6 +315,7 @@ test.afterEach(() => {
     setAxiosPostImpl(async () => {
         throw new Error('Forced axios failure');
     });
+    resetMessageBoxCalls();
     resetShellCalls();
     killLeakedCaffeinateProcesses();
 });
@@ -303,6 +323,25 @@ test.afterEach(() => {
 test.after(() => {
     restoreEnv();
     killLeakedCaffeinateProcesses();
+});
+
+test('About DateBack dialog uses the current app version', async () => {
+    const template = getLatestMenuTemplate();
+    assert.ok(Array.isArray(template), 'expected menu template to be captured');
+
+    const appMenu = template.find((item) => item && item.label === 'DateBack');
+    assert.ok(appMenu, 'expected app menu entry');
+
+    const aboutItem = appMenu.submenu.find((item) => item && item.label === 'About DateBack');
+    assert.ok(aboutItem && typeof aboutItem.click === 'function', 'expected About DateBack menu action');
+
+    await aboutItem.click();
+
+    const calls = getMessageBoxCalls();
+    assert.equal(calls.length, 1);
+    const [, options] = calls[0];
+    assert.match(options.detail, /Version: 0\.0\.0-test/);
+    assert.doesNotMatch(options.detail, /Version: 1\.0\.6/);
 });
 
 test('start-processing rejects unauthorized sender', async () => {
@@ -783,6 +822,54 @@ test('get-resume-manifest returns null manifest when no files exist', async () =
     assert.deepEqual(result, { success: true, manifest: null });
 });
 
+test('get-resume-manifest ignores parent fallback manifest owned by a different output root', async () => {
+    const parentDir = mkTmpDirReal('dateback-parent-manifest-mismatch-');
+    const outputDir = path.join(parentDir, 'owned-output');
+    const siblingOutputDir = path.join(parentDir, 'sibling-output');
+    fs.mkdirSync(outputDir);
+    fs.mkdirSync(siblingOutputDir);
+    fs.writeFileSync(
+        path.join(parentDir, '.batch_progress.json'),
+        JSON.stringify({ output_dir: siblingOutputDir, processed_count: 9 }),
+        'utf8'
+    );
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir });
+        assert.deepEqual(result, { success: true, manifest: null });
+    } finally {
+        cleanupTmp([parentDir]);
+    }
+});
+
+test('get-resume-manifest accepts parent fallback manifest only when it is owned by the selected output root', async () => {
+    const parentDir = mkTmpDirReal('dateback-parent-manifest-owned-');
+    const outputDir = path.join(parentDir, 'owned-output');
+    fs.mkdirSync(outputDir);
+    const parentManifest = {
+        output_dir: outputDir,
+        processed_count: 12,
+        processed_indices: [0, 1, 2]
+    };
+    fs.writeFileSync(
+        path.join(parentDir, '.batch_progress.json'),
+        JSON.stringify(parentManifest),
+        'utf8'
+    );
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir });
+        assert.equal(result.success, true);
+        assert.deepEqual(result.manifest, parentManifest);
+        assert.equal(result.legacy, false);
+        assert.equal(result.zipMatch, undefined);
+    } finally {
+        cleanupTmp([parentDir]);
+    }
+});
+
 test('clear-output-folder rejects unauthorized sender', async () => {
     await expectUnauthorized('clear-output-folder', { outputDir: '/tmp/out' }, { success: false, error: 'Unauthorized sender' });
 });
@@ -803,6 +890,252 @@ test('clear-output-folder rejects unapproved directory and logs security prefix'
         );
     } finally {
         console.error = originalConsoleError;
+    }
+});
+
+test('clear-output-folder removes cloud runtime state and keeps unowned parent manifests', async () => {
+    const parentDir = mkTmpDirReal('dateback-clear-output-');
+    const outputDir = path.join(parentDir, 'owned-output');
+    const otherOutputDir = path.join(parentDir, 'other-output');
+    fs.mkdirSync(outputDir);
+    fs.mkdirSync(otherOutputDir);
+
+    const processedDir = path.join(outputDir, 'Processed_Memories_2026-03-18');
+    const stagingDir = path.join(outputDir, '.staging');
+    fs.mkdirSync(path.join(processedDir, 'Batch_01'), { recursive: true });
+    fs.mkdirSync(path.join(stagingDir, 'Batch_01'), { recursive: true });
+    fs.writeFileSync(path.join(processedDir, 'Batch_01', 'a.jpg'), 'x');
+    fs.writeFileSync(path.join(stagingDir, 'Batch_01', 'queued.jpg'), 'x');
+    fs.writeFileSync(path.join(outputDir, '.upload_ledger.jsonl'), '{"line":1}\n');
+    fs.writeFileSync(path.join(outputDir, '.batch_progress.json'), JSON.stringify({ processed_count: 3 }), 'utf8');
+    fs.writeFileSync(
+        path.join(parentDir, '.batch_progress'),
+        JSON.stringify({ output_dir: outputDir, processed_count: 3 }),
+        'utf8'
+    );
+    fs.writeFileSync(
+        path.join(parentDir, '.batch_progress.json'),
+        JSON.stringify({ output_dir: otherOutputDir, processed_count: 4 }),
+        'utf8'
+    );
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('clear-output-folder', createAuthorizedEvent(), { outputDir });
+        assert.deepEqual(result, { success: true });
+        assert.equal(fs.existsSync(processedDir), false);
+        assert.equal(fs.existsSync(stagingDir), false);
+        assert.equal(fs.existsSync(path.join(outputDir, '.upload_ledger.jsonl')), false);
+        assert.equal(fs.existsSync(path.join(outputDir, '.batch_progress.json')), false);
+        assert.equal(fs.existsSync(path.join(parentDir, '.batch_progress')), false);
+        assert.equal(fs.existsSync(path.join(parentDir, '.batch_progress.json')), true);
+    } finally {
+        cleanupTmp([parentDir]);
+    }
+});
+
+test('clear-output-folder returns explicit nested symlink error without unlinking the directory', async (t) => {
+    const outputDir = mkTmpDirReal('dateback-clear-output-symlink-');
+    const processedDir = path.join(outputDir, 'Processed_Memories_2026-03-18');
+    const nestedDir = path.join(processedDir, 'Batch_01');
+    const outsideTarget = mkTmpDirReal('dateback-clear-output-symlink-target-');
+    const symlinkPath = path.join(nestedDir, 'linked-dir');
+
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    try {
+        const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
+        fs.symlinkSync(outsideTarget, symlinkPath, symlinkType);
+    } catch (error) {
+        cleanupTmp([outputDir, outsideTarget]);
+        t.skip(`symlink creation not permitted in this environment: ${error.message}`);
+        return;
+    }
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('clear-output-folder', createAuthorizedEvent(), { outputDir });
+        assert.equal(result.success, false);
+        assert.match(result.error, /symbolic link/);
+        assert.ok(result.error.includes(symlinkPath), `expected error to mention symlink path, saw ${result.error}`);
+        assert.equal(fs.existsSync(processedDir), true);
+    } finally {
+        cleanupTmp([outputDir, outsideTarget]);
+    }
+});
+
+test('start-processing cleanup only targets the tracked worker pid from the worker state file', async () => {
+    const tmpZipPath = mkTmpFile('tracked-worker.zip', 'zip');
+    const tmpOutDir = mkTmpDirReal('dateback-tracked-worker-out-');
+    const tmpUserDataDir = mkTmpDirReal('dateback-tracked-worker-userdata-');
+    const workerStatePath = path.join(tmpUserDataDir, 'organizer-worker-state.json');
+    const trackedCliPath = '/Users/test/DateBack_App_Source/python/cli.py';
+    const spawnSyncCalls = [];
+    const processKillCalls = [];
+    const spawnCalls = [];
+
+    fs.writeFileSync(workerStatePath, JSON.stringify({
+        pid: 4242,
+        verificationTokens: [trackedCliPath]
+    }), 'utf8');
+
+    withOverrides({
+        validateSender: () => true,
+        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
+        resolveAndValidateAutoUploadOptions: async () => ({
+            success: true,
+            options: {
+                autoUploadEnabled: false,
+                normalizedUploadMode: 'copy',
+                resolvedCacheGb: 5,
+                resolvedCacheLowGb: 3,
+                resolvedMaxUploadRetries: 20,
+                providedStagingDir: false,
+                canonicalDestinationDir: null,
+                canonicalStagingDir: null
+            }
+        }),
+        buildOrganizerArgsForStart: () => ['--tracked-worker'],
+        resolveOrganizerCommand: () => ({
+            command: 'python3',
+            args: [trackedCliPath, '--tracked-worker'],
+            ffmpegPath: '/ffmpeg'
+        }),
+        getWorkerStateFilePath: () => workerStatePath,
+        spawnSync: (command, args) => {
+            spawnSyncCalls.push({ command, args });
+            if (command === 'ps') {
+                return {
+                    status: 0,
+                    stdout: `python3 ${trackedCliPath} --zip old.zip\n`,
+                    stderr: '',
+                    error: null
+                };
+            }
+            if (command === 'pkill') {
+                assert.deepEqual(args, ['-TERM', '-P', '4242']);
+                return { status: 0, stdout: '', stderr: '', error: null };
+            }
+            assert.fail(`Unexpected spawnSync call: ${command} ${JSON.stringify(args)}`);
+        },
+        processKill: (pid, signal) => {
+            processKillCalls.push({ pid, signal });
+        },
+        spawn: (command, args, options) => {
+            const proc = fakeSpawnProc();
+            proc.pid = command === 'caffeinate' ? 7001 : 5252;
+            spawnCalls.push({ command, args, options, proc });
+            return proc;
+        }
+    });
+
+    try {
+        const promise = callHandler('start-processing', {}, {
+            zipPath: tmpZipPath,
+            outputDir: tmpOutDir,
+            pauseBetweenBatches: false,
+            resumeMode: 'skip',
+            autoUpload: false
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const organizerCall = spawnCalls.find((call) => call.command === 'python3');
+        assert.ok(organizerCall, `expected organizer spawn call, saw ${JSON.stringify(spawnCalls.map(({ command, args }) => ({ command, args })))}`);
+        organizerCall.proc.emit('close', 0);
+
+        const result = await promise;
+        assert.deepEqual(result, { success: true });
+        assert.deepEqual(processKillCalls, [{ pid: 4242, signal: 'SIGTERM' }]);
+        assert.ok(!spawnSyncCalls.some((call) => call.command === 'pkill' && call.args[0] === '-x'));
+        assert.ok(!spawnSyncCalls.some((call) => call.command === 'taskkill'));
+        assert.equal(fs.existsSync(workerStatePath), false);
+    } finally {
+        cleanupTmp([tmpZipPath, tmpOutDir, tmpUserDataDir]);
+    }
+});
+
+test('start-processing cleanup ignores tracked worker state when only a generic interpreter command matches', async () => {
+    const tmpZipPath = mkTmpFile('tracked-worker-generic.zip', 'zip');
+    const tmpOutDir = mkTmpDirReal('dateback-tracked-worker-generic-out-');
+    const tmpUserDataDir = mkTmpDirReal('dateback-tracked-worker-generic-userdata-');
+    const workerStatePath = path.join(tmpUserDataDir, 'organizer-worker-state.json');
+    const trackedCliPath = '/Users/test/DateBack_App_Source/python/cli.py';
+    const spawnSyncCalls = [];
+    const processKillCalls = [];
+    const spawnCalls = [];
+
+    fs.writeFileSync(workerStatePath, JSON.stringify({
+        pid: 4343,
+        verificationTokens: ['python3', trackedCliPath]
+    }), 'utf8');
+
+    withOverrides({
+        validateSender: () => true,
+        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
+        resolveAndValidateAutoUploadOptions: async () => ({
+            success: true,
+            options: {
+                autoUploadEnabled: false,
+                normalizedUploadMode: 'copy',
+                resolvedCacheGb: 5,
+                resolvedCacheLowGb: 3,
+                resolvedMaxUploadRetries: 20,
+                providedStagingDir: false,
+                canonicalDestinationDir: null,
+                canonicalStagingDir: null
+            }
+        }),
+        buildOrganizerArgsForStart: () => ['--tracked-worker-generic'],
+        resolveOrganizerCommand: () => ({
+            command: 'python3',
+            args: [trackedCliPath, '--tracked-worker-generic'],
+            ffmpegPath: '/ffmpeg'
+        }),
+        getWorkerStateFilePath: () => workerStatePath,
+        spawnSync: (command, args) => {
+            spawnSyncCalls.push({ command, args });
+            if (command === 'ps') {
+                return {
+                    status: 0,
+                    stdout: 'python3 /tmp/unrelated.py\n',
+                    stderr: '',
+                    error: null
+                };
+            }
+            assert.fail(`Unexpected spawnSync call: ${command} ${JSON.stringify(args)}`);
+        },
+        processKill: (pid, signal) => {
+            processKillCalls.push({ pid, signal });
+        },
+        spawn: (command, args, options) => {
+            const proc = fakeSpawnProc();
+            proc.pid = command === 'caffeinate' ? 7002 : 5353;
+            spawnCalls.push({ command, args, options, proc });
+            return proc;
+        }
+    });
+
+    try {
+        const promise = callHandler('start-processing', {}, {
+            zipPath: tmpZipPath,
+            outputDir: tmpOutDir,
+            pauseBetweenBatches: false,
+            resumeMode: 'skip',
+            autoUpload: false
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const organizerCall = spawnCalls.find((call) => call.command === 'python3');
+        assert.ok(organizerCall, `expected organizer spawn call, saw ${JSON.stringify(spawnCalls.map(({ command, args }) => ({ command, args })))}`);
+        organizerCall.proc.emit('close', 0);
+
+        const result = await promise;
+        assert.deepEqual(result, { success: true });
+        assert.deepEqual(processKillCalls, []);
+        assert.ok(!spawnSyncCalls.some((call) => call.command === 'pkill'));
+        assert.equal(fs.existsSync(workerStatePath), false);
+    } finally {
+        cleanupTmp([tmpZipPath, tmpOutDir, tmpUserDataDir]);
     }
 });
 

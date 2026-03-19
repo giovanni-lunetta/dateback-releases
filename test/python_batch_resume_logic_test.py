@@ -8,7 +8,7 @@ PYTHON_DIR = Path(__file__).resolve().parents[1] / "python"
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
-from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root
+from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root, scan_existing_batch_roots
 
 
 class BatchResumeLogicTests(unittest.TestCase):
@@ -158,6 +158,66 @@ class BatchResumeLogicTests(unittest.TestCase):
             self.assertEqual(scan["batch_folders"], ["Batch_01", "Batch_02", "Batch_03"])
             self.assertEqual(scan["highest_existing_batch_num"], 2)
             self.assertEqual(scan["next_available_batch"], 3)
+
+    def test_scan_existing_batch_roots_merges_staging_and_destination_batch_counts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_root = Path(temp_dir) / "staging"
+            destination_root = Path(temp_dir) / "destination"
+            (staging_root / "Batch_02").mkdir(parents=True)
+            (destination_root / "Batch_01").mkdir(parents=True)
+            (destination_root / "Batch_02").mkdir(parents=True)
+
+            for name in ("a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"):
+                (destination_root / "Batch_01" / name).write_text("x")
+            for name in ("f.jpg", "g.jpg"):
+                (destination_root / "Batch_02" / name).write_text("x")
+            (staging_root / "Batch_02" / "h.jpg").write_text("x")
+
+            scan = scan_existing_batch_roots(str(staging_root), str(destination_root), batch_size=5)
+
+            self.assertEqual(scan["existing_batch_files"], 8)
+            self.assertEqual(scan["last_incomplete_batch"], "Batch_02")
+            self.assertEqual(scan["files_in_incomplete_batch"], 3)
+            self.assertEqual(scan["batch_folders"], ["Batch_01", "Batch_02"])
+            self.assertEqual(scan["highest_existing_batch_num"], 1)
+            self.assertEqual(scan["next_available_batch"], 2)
+
+    def test_scan_existing_batch_roots_counts_same_visible_name_as_distinct_without_ledger_mapping(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_root = Path(temp_dir) / "staging"
+            destination_root = Path(temp_dir) / "destination"
+            (staging_root / "Batch_02").mkdir(parents=True)
+            (destination_root / "Batch_02").mkdir(parents=True)
+
+            (destination_root / "Batch_02" / "same.jpg").write_text("x")
+            (staging_root / "Batch_02" / "same.jpg").write_text("x")
+
+            scan = scan_existing_batch_roots(str(staging_root), str(destination_root), batch_size=5)
+
+            self.assertEqual(scan["existing_batch_files"], 2)
+            self.assertEqual(scan["files_in_incomplete_batch"], 2)
+
+    def test_scan_existing_batch_roots_deduplicates_only_ledger_linked_staged_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_root = Path(temp_dir) / "staging"
+            destination_root = Path(temp_dir) / "destination"
+            staged_file = staging_root / "Batch_02" / "same.jpg"
+            delivered_file = destination_root / "Batch_02" / "same.jpg"
+            staged_file.parent.mkdir(parents=True)
+            delivered_file.parent.mkdir(parents=True)
+
+            delivered_file.write_text("x")
+            staged_file.write_text("x")
+
+            scan = scan_existing_batch_roots(
+                str(staging_root),
+                str(destination_root),
+                batch_size=5,
+                completed_staged_to_dest={str(staged_file): str(delivered_file)},
+            )
+
+            self.assertEqual(scan["existing_batch_files"], 1)
+            self.assertEqual(scan["files_in_incomplete_batch"], 1)
 
 
 if __name__ == "__main__":

@@ -1335,7 +1335,7 @@ function isAllowedCloudFolder(pathValue) {
 function buildCloudHandoffTooltip(providerInfo) {
     return [
         'DateBack uses a local working folder behind the scenes for processing, manifests, and default staging.',
-        'Finished files are copied into this synced destination folder.',
+        'Finished files are copied into Batch folders inside this synced destination folder.',
         'Your cloud provider app uploads them from there.',
         'Advanced Cloud Options let you override the working folder or the custom staging folder.'
     ].join('\n');
@@ -1343,9 +1343,9 @@ function buildCloudHandoffTooltip(providerInfo) {
 
 function buildCloudHandoffHelperText(providerInfo) {
     if (providerInfo && providerInfo.displayName) {
-        return `DateBack copies finished memories into this ${providerInfo.displayName} folder. Your cloud app uploads them from there.`;
+        return `DateBack copies finished memories into Batch folders inside this ${providerInfo.displayName} folder. Your cloud app uploads them from there.`;
     }
-    return 'DateBack copies finished memories into this synced cloud folder. Your cloud app uploads them from there.';
+    return 'DateBack copies finished memories into Batch folders inside this synced cloud folder. Your cloud app uploads them from there.';
 }
 
 function updateCloudHandoffCopy() {
@@ -3916,10 +3916,3 @@ logsExportModal.addEventListener('click', (e) => {
         closeLogsExportModal();
     }
 });
-
-// Listen for logs export success from main process
-window.api.onLogsExported = (callback) => {
-    window.addEventListener('logs-exported', (event) => {
-        callback(event.detail);
-    });
-};

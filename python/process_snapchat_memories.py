@@ -22,7 +22,7 @@ import hashlib
 import tempfile
 from urllib.parse import urlparse, parse_qs
 from collections import deque
-from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root
+from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root, scan_existing_batch_roots
 
 # Global Abort Flag
 ABORT_PROCESSING = threading.Event()
@@ -90,6 +90,11 @@ zip_metrics = {
     "bytes_read": 0,
     "members": 0
 }
+
+
+class ExpiredDownloadLinkError(Exception):
+    """Raised when Snapchat media download links have expired."""
+    pass
 
 
 def verify_perf_log(message):
@@ -603,27 +608,39 @@ class DestinationAdapter:
 class FolderDestinationAdapter(DestinationAdapter):
     """Folder-based destination adapter (Drive/iCloud/Dropbox/etc)."""
 
-    def __init__(self, destination_dir, upload_mode='copy'):
+    def __init__(self, destination_dir, upload_mode='copy', staging_dir=None):
         self.destination_dir = os.path.abspath(destination_dir)
         self.upload_mode = upload_mode
+        self.staging_dir = canonical_dir(staging_dir) if staging_dir else None
         self._expected_sizes = {}
 
     def prepare(self):
         os.makedirs(self.destination_dir, exist_ok=True)
 
-    def _unique_dest_path(self, source_name):
+    def _resolve_destination_parent(self, local_path):
+        if self.staging_dir and local_path and is_path_inside(local_path, self.staging_dir):
+            canonical_local_path = os.path.realpath(local_path)
+            relative_path = os.path.relpath(canonical_local_path, self.staging_dir)
+            relative_parent = os.path.dirname(relative_path)
+            if relative_parent and relative_parent != '.':
+                return os.path.join(self.destination_dir, relative_parent)
+        return self.destination_dir
+
+    def _unique_dest_path(self, dest_parent, source_name):
         base, ext = os.path.splitext(source_name)
-        candidate = os.path.join(self.destination_dir, source_name)
+        candidate = os.path.join(dest_parent, source_name)
         counter = 1
         while os.path.exists(candidate):
-            candidate = os.path.join(self.destination_dir, f"{base}_{counter}{ext}")
+            candidate = os.path.join(dest_parent, f"{base}_{counter}{ext}")
             counter += 1
         return candidate
 
     def put(self, local_path):
         source_name = os.path.basename(local_path)
         src_size = os.path.getsize(local_path)
-        dest_path = self._unique_dest_path(source_name)
+        dest_parent = self._resolve_destination_parent(local_path)
+        os.makedirs(dest_parent, exist_ok=True)
+        dest_path = self._unique_dest_path(dest_parent, source_name)
         temp_dest = f"{dest_path}.tmp.{secrets.token_hex(4)}"
 
         # Keep source file intact until caller verifies destination.
@@ -706,6 +723,14 @@ class UploadLedger:
 
     def get_done_record_for_staged_path(self, staged_path):
         return self._done_by_staged_path.get(os.path.abspath(staged_path))
+
+    def get_done_destinations_by_staged_path(self):
+        with self._lock:
+            return {
+                staged_path: record.get("dest_path")
+                for staged_path, record in self._done_by_staged_path.items()
+                if record.get("dest_path")
+            }
 
     def get_valid_dest_for_staged_id(self, staged_id, size_bytes, staged_path=None):
         if not staged_id:
@@ -1127,6 +1152,35 @@ def atomic_write_stream_to_file(write_func, dst_path):
                 pass
 
 
+def stream_download_to_path(download_url, temp_path, timeout=60):
+    """Stream a Snapchat media download to disk with redirect and size validation."""
+    session = get_requests_session()
+    with session.get(download_url, timeout=timeout, stream=True, allow_redirects=True) as response:
+        validate_download_redirect_chain(response)
+        if response.status_code in (403, 410):
+            raise ExpiredDownloadLinkError(f"Download link expired (HTTP {response.status_code})")
+
+        response.raise_for_status()
+
+        downloaded_bytes = 0
+        content_type = (response.headers.get('Content-Type') or '').lower()
+        with open(temp_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                downloaded_bytes += len(chunk)
+                if downloaded_bytes > MAX_DOWNLOAD_BYTES:
+                    raise ValueError(f"Download exceeded max size limit: {MAX_DOWNLOAD_BYTES / (1024**3):.2f}GB")
+                f.write(chunk)
+
+        if downloaded_bytes <= 0:
+            raise ValueError("Downloaded file is empty")
+        if 'text/html' in content_type:
+            raise ValueError(f"Unexpected content type for media download: {content_type}")
+
+        return downloaded_bytes
+
+
 def atomic_write_text(path_value, content):
     """Atomically write text content to a file in the same directory."""
     temp_path = f"{path_value}.tmp.{secrets.token_hex(4)}"
@@ -1164,6 +1218,80 @@ def load_batch_manifest():
             except Exception:
                 return None
     return None
+
+
+def reload_manifest_processed_count(current_value=None):
+    """Refresh processed_count from the canonical manifest if it exists."""
+    manifest = load_batch_manifest()
+    if manifest:
+        processed_count = manifest.get("processed_count")
+        if isinstance(processed_count, int) and processed_count >= 0:
+            return processed_count
+    return current_value
+
+
+def resolve_final_auto_upload_success_count(manifest_processed_count, total_files_organized):
+    """Prefer persisted manifest count for final auto-upload totals."""
+    if isinstance(manifest_processed_count, int) and manifest_processed_count >= 0:
+        return manifest_processed_count
+    return total_files_organized
+
+
+def resolve_files_in_batch_for_accounting(batch_success_count):
+    """Count only files created in the current run when updating batch totals."""
+    if isinstance(batch_success_count, int) and batch_success_count >= 0:
+        return batch_success_count
+    return 0
+
+
+def resolve_retry_display_name(entry, fallback_index):
+    """Best-effort display label for retry logs when report file names are missing."""
+    if isinstance(entry, dict):
+        for key in ('file', 'output_file', 'original_file'):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        date_value = entry.get('date')
+        if isinstance(date_value, str) and date_value.strip():
+            return date_value.strip()
+
+        download_url = entry.get('download_url')
+        if isinstance(download_url, str) and download_url.strip():
+            base_name = os.path.basename(download_url.split('?', 1)[0].rstrip('/'))
+            if base_name:
+                return base_name
+
+    return f"memory_{fallback_index + 1}"
+
+
+def resolve_total_accounted_for_verification(logical_processed_before_run, current_results_count):
+    """Combine skipped logical progress with this run's report entries."""
+    prior_count = logical_processed_before_run if isinstance(logical_processed_before_run, int) and logical_processed_before_run >= 0 else 0
+    current_count = current_results_count if isinstance(current_results_count, int) and current_results_count >= 0 else 0
+    return prior_count + current_count
+
+
+def resolve_auto_upload_retry_batch_dir(staging_dir, destination_dir, upload_ledger, batch_size=500):
+    """Choose the next Cloud retry batch using both staging and delivered batches."""
+    delivered_pairs = upload_ledger.get_done_destinations_by_staged_path() if upload_ledger else None
+    batch_scan = scan_existing_batch_roots(
+        staging_dir,
+        destination_dir,
+        batch_size,
+        completed_staged_to_dest=delivered_pairs,
+    )
+    last_incomplete_batch = batch_scan["last_incomplete_batch"]
+    files_in_incomplete_batch = batch_scan["files_in_incomplete_batch"]
+
+    if last_incomplete_batch and files_in_incomplete_batch < batch_size:
+        output_dir = os.path.join(staging_dir, last_incomplete_batch)
+    else:
+        next_batch_num = batch_scan["next_available_batch"] + 1
+        output_dir = os.path.join(staging_dir, f"Batch_{next_batch_num:02d}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    return output_dir
 
 def save_batch_progress(batch_num, total_batches, total_files=None, processed_indices=None, zip_fingerprint=None, output_dir=None, icloud_mode=None, actual_file_count=None, batch_completed=True):
     """Save batch progress to disk without treating partial batches as completed."""
@@ -2276,6 +2404,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 print(f"Fast Pass Optimization: Skipping {original_count - len(memories_with_index)} existing files. Processing {len(memories_with_index)} new/missing files.", flush=True)
                 # CRITICAL: Save original count for progress denominator
                 ORIGINAL_TOTAL_MEMORIES = original_count
+
+    logical_processed_before_run = len(processed_indices_set)
     
     # Build File Index
     if zip_file:
@@ -2335,7 +2465,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     if AUTO_UPLOAD_ENABLED:
         os.makedirs(AUTO_STAGING_DIR, exist_ok=True)
         ledger = UploadLedger(os.path.join(PROCESSING_ROOT, UPLOAD_LEDGER_FILE))
-        adapter = FolderDestinationAdapter(AUTO_DESTINATION_DIR, AUTO_UPLOAD_MODE)
+        adapter = FolderDestinationAdapter(AUTO_DESTINATION_DIR, AUTO_UPLOAD_MODE, staging_dir=AUTO_STAGING_DIR)
         upload_manager = AutoUploadManager(
             staging_dir=AUTO_STAGING_DIR,
             adapter=adapter,
@@ -2422,8 +2552,19 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     next_available_batch = 0
 
     if os.path.exists(batch_scan_root):
-        batch_scan = scan_existing_batch_root(batch_scan_root, batch_size)
-        orphaned_root_files = batch_scan["orphaned_root_files"]
+        if auto_upload:
+            staging_scan = scan_existing_batch_root(batch_scan_root, batch_size)
+            delivered_pairs = ledger.get_done_destinations_by_staged_path() if ledger else None
+            batch_scan = scan_existing_batch_roots(
+                AUTO_STAGING_DIR,
+                AUTO_DESTINATION_DIR,
+                batch_size,
+                completed_staged_to_dest=delivered_pairs,
+            )
+            orphaned_root_files = staging_scan["orphaned_root_files"]
+        else:
+            batch_scan = scan_existing_batch_root(batch_scan_root, batch_size)
+            orphaned_root_files = batch_scan["orphaned_root_files"]
         existing_batch_files = batch_scan["existing_batch_files"]
         last_incomplete_batch = batch_scan["last_incomplete_batch"]
         files_in_incomplete_batch = batch_scan["files_in_incomplete_batch"]
@@ -2663,12 +2804,9 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 # Update manifest with ONLY the indices that actually completed
                 processed_indices_set.update(processed_orig_indices)
                 
-                # Count files in batch folder
-                if auto_upload:
-                    files_in_batch = batch_success_count
-                else:
-                    files_in_batch = len([f for f in os.listdir(batch_dir)
-                                         if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')])
+                # Count only files added during this run. Resumed incomplete batches may
+                # already contain files that are included in total_files_organized.
+                files_in_batch = resolve_files_in_batch_for_accounting(batch_success_count)
                 total_files_organized += files_in_batch
                 emit_zip_batch_metrics(batch_name, files_in_batch, batch_started_at)
                 
@@ -2712,12 +2850,9 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         elif ABORT_PROCESSING.is_set():
             processed_indices_set.update(processed_orig_indices)
 
-        # Count files in batch folder (files are already written directly to batch_dir)
-        if auto_upload:
-            files_in_batch = batch_success_count
-        else:
-            files_in_batch = len([f for f in os.listdir(batch_dir)
-                                 if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')])
+        # Count only files added during this run. Resumed incomplete batches may
+        # already contain files from previous runs that were counted at startup.
+        files_in_batch = resolve_files_in_batch_for_accounting(batch_success_count)
 
         print(f"  {batch_name} complete: {files_in_batch} files processed.", flush=True)
         emit_zip_batch_metrics(batch_name, files_in_batch, batch_started_at)
@@ -2862,6 +2997,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     # Generate Stats - Count ALL files across ALL batches (not just current run)
     # This gives the user the complete picture after multiple resume sessions
+    manifest_processed_count = reload_manifest_processed_count(manifest_processed_count)
     success_count = 0
     missing_count = 0
     skipped_count = 0
@@ -2894,10 +3030,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     # Count TOTAL files for summary.
     if auto_upload:
-        if isinstance(manifest_processed_count, int) and manifest_processed_count >= 0:
-            success_count = manifest_processed_count
-        else:
-            success_count = total_files_organized
+        success_count = resolve_final_auto_upload_success_count(manifest_processed_count, total_files_organized)
         images_count = current_run_images
         videos_count = current_run_videos
     else:
@@ -2919,17 +3052,6 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                     pass
     
     print(f"Total files in all batches: {success_count} ({images_count} images, {videos_count} videos)")
-
-    # Refresh manifest_processed_count from canonical manifest path when needed.
-    if manifest_processed_count is None:
-        manifest_path = get_batch_progress_file()
-        if os.path.exists(manifest_path):
-            try:
-                with open(manifest_path, 'r') as f:
-                    manifest_data = json.load(f)
-                    manifest_processed_count = manifest_data.get('processed_count')
-            except Exception as e:
-                print(f"Warning: Could not read manifest processed_count: {e}", flush=True)
 
     # Count actual files on disk for verification
     actual_files_on_disk = 0
@@ -2987,10 +3109,10 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
 
     # Count entries in detailed report for comparison
     report_success_entries = sum(1 for r in results if r.get('status') == 'Success')
-    total_processed = success_count + duplicate_count + missing_count + skipped_count + error_count
+    total_accounted = resolve_total_accounted_for_verification(logical_processed_before_run, len(results))
 
     print(f"   Total memories from export: {manifest_total_files}", flush=True)
-    print(f"   Total accounted for: {len(results)} (Success={success_count}, Duplicates={duplicate_count}, Errors={error_count})", flush=True)
+    print(f"   Total accounted for: {total_accounted} (Success={success_count}, Duplicates={duplicate_count}, Errors={error_count})", flush=True)
 
     # Check for timestamp collisions (same filename from different memories)
     if report_success_entries > success_count:
@@ -2998,12 +3120,12 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         print(f"   Note: {collisions} memories share identical timestamps (created at exact same second)", flush=True)
         print(f"         The later file overwrote the earlier one. Both are in the report.", flush=True)
 
-    if len(results) == manifest_total_files:
+    if total_accounted == manifest_total_files:
         print(f"   ✅ All {manifest_total_files} memories accounted for!", flush=True)
     else:
-        diff = manifest_total_files - len(results)
+        diff = manifest_total_files - total_accounted
         if diff > 0:
-            print(f"   ⚠️  {diff} memories missing from report (likely had no date in export)", flush=True)
+            print(f"   ⚠️  {diff} memories missing from verification summary accounting", flush=True)
         else:
             print(f"   ⚠️  Report has {-diff} more entries than expected", flush=True)
     
@@ -3175,7 +3297,7 @@ def retry_failed_entries(
         preflight_writable_dir(resolved_destination_dir)
 
         upload_ledger = UploadLedger(os.path.join(processing_root, UPLOAD_LEDGER_FILE))
-        adapter = FolderDestinationAdapter(resolved_destination_dir, upload_mode)
+        adapter = FolderDestinationAdapter(resolved_destination_dir, upload_mode, staging_dir=resolved_staging_dir)
         upload_manager = AutoUploadManager(
             staging_dir=resolved_staging_dir,
             adapter=adapter,
@@ -3221,7 +3343,7 @@ def retry_failed_entries(
                 download_url = entry.get('download_url')
                 date_str = entry.get('date')
                 media_type = entry.get('media_type', 'Image')
-                original_file = entry.get('file', f"memory_{idx}")
+                original_file = resolve_retry_display_name(entry, idx)
 
                 if not download_url:
                     print(f"  ⚠️ No download URL for {original_file} - Cannot retry", flush=True)
@@ -3247,37 +3369,6 @@ def retry_failed_entries(
                     results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Blocked: Invalid download URL'})
                     continue
 
-                try:
-                    response = requests.get(download_url, timeout=60, stream=True)
-                    if response.status_code in (403, 410):
-                        print(f"  ❌ Download link expired (HTTP {response.status_code})", flush=True)
-                        stats['errors'] += 1
-                        results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Download link expired'})
-                        continue
-                    if response.status_code != 200:
-                        print(f"  ❌ Download failed: HTTP {response.status_code}", flush=True)
-                        stats['errors'] += 1
-                        results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'HTTP {response.status_code}'})
-                        continue
-
-                    file_content = b""
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if not chunk:
-                            continue
-                        file_content += chunk
-                        if len(file_content) > MAX_DOWNLOAD_BYTES:
-                            raise ValueError(f"Download exceeded max size limit: {MAX_DOWNLOAD_BYTES / (1024**3):.2f}GB")
-                except ValueError as e:
-                    print(f"  ❌ Download aborted: {e}", flush=True)
-                    stats['errors'] += 1
-                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': str(e)})
-                    continue
-                except Exception as e:
-                    print(f"  ❌ Download failed: {e}", flush=True)
-                    stats['errors'] += 1
-                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'Download error: {e}'})
-                    continue
-
                 if media_type == 'Video':
                     ext = '.mp4'
                     stats['videos'] += 1
@@ -3285,29 +3376,33 @@ def retry_failed_entries(
                     ext = '.jpg'
                     stats['images'] += 1
 
-                batch_folders = sorted([
-                    d for d in os.listdir(output_base_dir)
-                    if d.startswith('Batch_') and os.path.isdir(os.path.join(output_base_dir, d))
-                ])
-
-                if batch_folders:
-                    last_batch = batch_folders[-1]
-                    last_batch_dir = os.path.join(output_base_dir, last_batch)
-                    files_in_last_batch = len([
-                        f for f in os.listdir(last_batch_dir)
-                        if os.path.isfile(os.path.join(last_batch_dir, f))
-                    ])
-                    if files_in_last_batch >= 500:
-                        batch_num = int(last_batch.split('_')[1])
-                        new_batch_name = f"Batch_{batch_num + 1:02d}"
-                        output_dir = os.path.join(output_base_dir, new_batch_name)
-                        os.makedirs(output_dir, exist_ok=True)
-                    else:
-                        output_dir = last_batch_dir
+                if auto_upload_enabled:
+                    output_dir = resolve_auto_upload_retry_batch_dir(
+                        resolved_staging_dir,
+                        resolved_destination_dir,
+                        upload_ledger,
+                        batch_size=500,
+                    )
                 else:
-                    if auto_upload_enabled:
-                        output_dir = os.path.join(output_base_dir, "Batch_01")
-                        os.makedirs(output_dir, exist_ok=True)
+                    batch_folders = sorted([
+                        d for d in os.listdir(output_base_dir)
+                        if d.startswith('Batch_') and os.path.isdir(os.path.join(output_base_dir, d))
+                    ])
+
+                    if batch_folders:
+                        last_batch = batch_folders[-1]
+                        last_batch_dir = os.path.join(output_base_dir, last_batch)
+                        files_in_last_batch = len([
+                            f for f in os.listdir(last_batch_dir)
+                            if os.path.isfile(os.path.join(last_batch_dir, f))
+                        ])
+                        if files_in_last_batch >= 500:
+                            batch_num = int(last_batch.split('_')[1])
+                            new_batch_name = f"Batch_{batch_num + 1:02d}"
+                            output_dir = os.path.join(output_base_dir, new_batch_name)
+                            os.makedirs(output_dir, exist_ok=True)
+                        else:
+                            output_dir = last_batch_dir
                     else:
                         output_dir = output_base_dir
 
@@ -3320,11 +3415,37 @@ def retry_failed_entries(
                     output_path = os.path.join(output_dir, base_name)
                     counter += 1
 
-                def write_retry_file(temp_path):
-                    with open(temp_path, 'wb') as f:
-                        f.write(file_content)
-
-                atomic_write_stream_to_file(write_retry_file, output_path)
+                try:
+                    atomic_write_stream_to_file(
+                        lambda temp_path: stream_download_to_path(download_url, temp_path, timeout=60),
+                        output_path
+                    )
+                except ExpiredDownloadLinkError as e:
+                    print(f"  ❌ {e}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': 'Download link expired'})
+                    continue
+                except requests.exceptions.HTTPError as e:
+                    status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+                    if status_code is not None:
+                        print(f"  ❌ Download failed: HTTP {status_code}", flush=True)
+                        stats['errors'] += 1
+                        results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'HTTP {status_code}'})
+                        continue
+                    print(f"  ❌ Download failed: {e}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'Download error: {e}'})
+                    continue
+                except ValueError as e:
+                    print(f"  ❌ Download aborted: {e}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': str(e)})
+                    continue
+                except Exception as e:
+                    print(f"  ❌ Download failed: {e}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'Download error: {e}'})
+                    continue
 
                 if upload_manager:
                     upload_manager.enqueue(output_path)

@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { spawn, execSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { fileURLToPath } = require('url');
 const AdmZip = require('adm-zip');
 const checkDiskSpace = require('check-disk-space').default;
@@ -28,6 +28,7 @@ autoUpdater.allowPrerelease = false; // Only stable releases
 
 let mainWindow;
 let pythonProcess = null;
+let organizerProcess = null;
 let caffeinateProcess = null; // Sleep prevention process
 let intentionalStop = false; // Track if user intentionally stopped processing
 let currentValidatedOutputDir = null; // Store validated output dir for secure resume
@@ -44,6 +45,7 @@ const RATE_LIMIT_MAX = 5; // 5 attempts per minute
 const POLAR_PROD_BASE_URL = 'https://api.polar.sh';
 const POLAR_SANDBOX_BASE_URL = 'https://sandbox-api.polar.sh';
 const POLAR_FALLBACK_PROD_ORG_ID = '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
+const ORGANIZER_WORKER_STATE_FILE = 'organizer-worker-state.json';
 
 function checkRateLimit(identifier) {
     const now = Date.now();
@@ -106,6 +108,16 @@ function clearPythonProcess() {
     pythonProcess = null;
 }
 
+function setOrganizerProcess(proc) {
+    organizerProcess = proc;
+}
+
+function clearOrganizerProcess(proc = null) {
+    if (!proc || organizerProcess === proc) {
+        organizerProcess = null;
+    }
+}
+
 function setSessionOutputDir(dirPath) {
     currentValidatedOutputDir = dirPath;
 }
@@ -146,6 +158,300 @@ function startCaffeinateSafely() {
     } catch (e) {
         console.warn('Caffeinate not available:', e.message);
     }
+}
+
+function getAppPath(name) {
+    const appGetPath = getMainDep('appGetPath', app.getPath.bind(app));
+    return appGetPath(name);
+}
+
+function getWorkerStateFilePath() {
+    const getWorkerStateFilePathFn = getMainDep(
+        'getWorkerStateFilePath',
+        () => path.join(getAppPath('userData'), ORGANIZER_WORKER_STATE_FILE)
+    );
+    return getWorkerStateFilePathFn();
+}
+
+function normalizeWorkerMatchToken(value) {
+    if (typeof value !== 'string') {
+        return '';
+    }
+    let normalized = value.trim();
+    if (!normalized) {
+        return '';
+    }
+    if (path.isAbsolute(normalized)) {
+        normalized = getCanonicalPath(normalized);
+    }
+    normalized = path.normalize(normalized);
+    if (process.platform === 'win32') {
+        normalized = normalized.toLowerCase();
+    }
+    return normalized;
+}
+
+function buildOrganizerVerificationTokens(organizer) {
+    if (!organizer || typeof organizer !== 'object') {
+        return [];
+    }
+
+    const tokens = [];
+    const seen = new Set();
+    const addToken = (candidate) => {
+        const normalized = normalizeWorkerMatchToken(candidate);
+        if (!normalized || seen.has(normalized)) {
+            return;
+        }
+        seen.add(normalized);
+        tokens.push(normalized);
+    };
+
+    if (typeof organizer.command === 'string' && organizer.command.trim()) {
+        addToken(organizer.command);
+        addToken(path.basename(organizer.command.trim()));
+    }
+
+    if (Array.isArray(organizer.args)) {
+        for (const arg of organizer.args) {
+            if (typeof arg !== 'string' || !arg.trim()) {
+                continue;
+            }
+            if (path.isAbsolute(arg.trim())) {
+                addToken(arg.trim());
+                break;
+            }
+        }
+    }
+
+    return tokens;
+}
+
+function buildTrackedWorkerState(proc, organizer, extra = {}) {
+    const pid = Number(proc?.pid);
+    if (!Number.isInteger(pid) || pid <= 0) {
+        return null;
+    }
+    const verificationTokens = buildOrganizerVerificationTokens(organizer);
+    if (verificationTokens.length === 0) {
+        return null;
+    }
+    return {
+        pid,
+        command: typeof organizer?.command === 'string' ? organizer.command : null,
+        args: Array.isArray(organizer?.args) ? organizer.args : [],
+        verificationTokens,
+        updatedAt: new Date().toISOString(),
+        ...extra
+    };
+}
+
+function loadTrackedWorkerStateRecord() {
+    const filePath = getWorkerStateFilePath();
+    if (!filePath || typeof filePath !== 'string') {
+        return { filePath, state: null, parseError: false };
+    }
+
+    try {
+        if (!fs.existsSync(filePath)) {
+            return { filePath, state: null, parseError: false };
+        }
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const state = JSON.parse(raw);
+        if (!state || typeof state !== 'object') {
+            throw new Error('Worker state file does not contain a JSON object');
+        }
+        return { filePath, state, parseError: false };
+    } catch (error) {
+        console.warn('[Cleanup] Could not read worker state file:', error.message);
+        return { filePath, state: null, parseError: true };
+    }
+}
+
+function writeTrackedWorkerState(state) {
+    if (!state || typeof state !== 'object') {
+        return;
+    }
+
+    const filePath = getWorkerStateFilePath();
+    if (!filePath || typeof filePath !== 'string') {
+        return;
+    }
+
+    try {
+        fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(filePath, JSON.stringify({
+            ...state,
+            updatedAt: new Date().toISOString()
+        }), 'utf8');
+    } catch (error) {
+        console.warn('[Cleanup] Could not persist worker state:', error.message);
+    }
+}
+
+function clearTrackedWorkerState(expectedPid = null) {
+    const { filePath, state, parseError } = loadTrackedWorkerStateRecord();
+    if (!filePath || typeof filePath !== 'string') {
+        return;
+    }
+    if (!fs.existsSync(filePath)) {
+        return;
+    }
+    if (!parseError && expectedPid !== null && Number(state?.pid) !== Number(expectedPid)) {
+        return;
+    }
+
+    try {
+        fs.unlinkSync(filePath);
+    } catch (error) {
+        console.warn('[Cleanup] Could not clear worker state file:', error.message);
+    }
+}
+
+function updateTrackedWorkerState(expectedPid, patch) {
+    const { state } = loadTrackedWorkerStateRecord();
+    if (!state || Number(state.pid) !== Number(expectedPid)) {
+        return;
+    }
+    writeTrackedWorkerState({
+        ...state,
+        ...patch
+    });
+}
+
+function getTrackedWorkerCommandText(pid) {
+    const getTrackedWorkerCommandTextFn = getMainDep('getTrackedWorkerCommandText', (targetPid) => {
+        const parsedPid = Number(targetPid);
+        if (!Number.isInteger(parsedPid) || parsedPid <= 0) {
+            return '';
+        }
+        const spawnSyncFn = getMainDep('spawnSync', spawnSync);
+
+        if (process.platform === 'win32') {
+            const result = spawnSyncFn(
+                'powershell.exe',
+                [
+                    '-NoProfile',
+                    '-Command',
+                    `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${parsedPid}" | Select-Object -First 1; ` +
+                    `if ($null -ne $p) { if ($p.CommandLine) { $p.CommandLine }; if ($p.ExecutablePath) { $p.ExecutablePath } }`
+                ],
+                { shell: false, encoding: 'utf8' }
+            );
+            if (result.error || result.status !== 0) {
+                return '';
+            }
+            return (result.stdout || '').trim();
+        }
+
+        const result = spawnSyncFn('ps', ['-p', String(parsedPid), '-o', 'command='], {
+            shell: false,
+            encoding: 'utf8'
+        });
+        if (result.error || result.status !== 0) {
+            return '';
+        }
+        return (result.stdout || '').trim();
+    });
+
+    return getTrackedWorkerCommandTextFn(pid);
+}
+
+function trackedWorkerStateMatchesCommand(state, commandText) {
+    if (!state || !Array.isArray(state.verificationTokens)) {
+        return false;
+    }
+    if (typeof commandText !== 'string' || !commandText.trim()) {
+        return false;
+    }
+
+    const haystack = process.platform === 'win32'
+        ? commandText.toLowerCase()
+        : commandText;
+    const absoluteTokens = state.verificationTokens.filter((token) => path.isAbsolute(token));
+    if (absoluteTokens.length > 0) {
+        return absoluteTokens.some((token) => haystack.includes(token));
+    }
+    return state.verificationTokens.every((token) => haystack.includes(token));
+}
+
+function terminateTrackedWorkerProcessTree(pid) {
+    const terminateTrackedWorkerProcessTreeFn = getMainDep('terminateTrackedWorkerProcessTree', (targetPid) => {
+        const parsedPid = Number(targetPid);
+        if (!Number.isInteger(parsedPid) || parsedPid <= 0) {
+            return false;
+        }
+        const spawnSyncFn = getMainDep('spawnSync', spawnSync);
+
+        if (process.platform === 'win32') {
+            const result = spawnSyncFn('taskkill', ['/F', '/PID', String(parsedPid), '/T'], {
+                shell: false,
+                encoding: 'utf8'
+            });
+            if (result.error) {
+                throw result.error;
+            }
+            return result.status === 0;
+        }
+
+        const processKill = getMainDep('processKill', process.kill.bind(process));
+        try {
+            spawnSyncFn('pkill', ['-TERM', '-P', String(parsedPid)], {
+                shell: false,
+                encoding: 'utf8'
+            });
+            processKill(parsedPid, 'SIGTERM');
+            return true;
+        } catch (error) {
+            if (error && error.code === 'ESRCH') {
+                return false;
+            }
+            throw error;
+        }
+    });
+
+    return terminateTrackedWorkerProcessTreeFn(pid);
+}
+
+function persistTrackedWorkerForProcess(proc, organizer, extra = {}) {
+    const state = buildTrackedWorkerState(proc, organizer, extra);
+    if (state) {
+        writeTrackedWorkerState(state);
+    }
+}
+
+function requestOrganizerShutdown(reason) {
+    const activeProc = organizerProcess;
+    if (!activeProc) {
+        return;
+    }
+
+    const pid = Number(activeProc.pid);
+    if (Number.isInteger(pid) && pid > 0) {
+        updateTrackedWorkerState(pid, {
+            shutdownRequested: true,
+            shutdownReason: reason,
+            shutdownRequestedAt: new Date().toISOString()
+        });
+        try {
+            terminateTrackedWorkerProcessTree(pid);
+        } catch (error) {
+            console.warn('[Cleanup] Failed to terminate active organizer during shutdown:', error.message);
+            try {
+                activeProc.kill('SIGTERM');
+            } catch {
+                // Best-effort fallback when pid tree termination fails.
+            }
+        }
+    } else if (typeof activeProc.kill === 'function') {
+        try {
+            activeProc.kill('SIGTERM');
+        } catch {
+            // Best-effort cleanup.
+        }
+    }
+
+    clearOrganizerProcess(activeProc);
 }
 
 // Security: Normalize renderer document URLs for strict trust checks across dev + packaged builds.
@@ -487,6 +793,126 @@ function authorizeCanonicalOutputDir(canonicalOutputDir, options) {
         return { success: false, response: outputAuthorization.response };
     }
     return { success: true };
+}
+
+function parseJsonFile(filePath) {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function canonicalizeManifestOutputDir(outputDirValue) {
+    if (typeof outputDirValue !== 'string' || !outputDirValue.trim()) {
+        return null;
+    }
+    try {
+        return getCanonicalPath(outputDirValue.trim());
+    } catch {
+        return null;
+    }
+}
+
+function loadParentOwnedManifest(parentManifestPath, canonicalOutputDir) {
+    if (!fs.existsSync(parentManifestPath)) {
+        return { owned: false, legacy: false, manifest: null, error: null };
+    }
+
+    try {
+        const manifest = parseJsonFile(parentManifestPath);
+        const manifestOutputDir = canonicalizeManifestOutputDir(manifest?.output_dir);
+        if (!manifestOutputDir || manifestOutputDir !== canonicalOutputDir) {
+            return { owned: false, legacy: path.basename(parentManifestPath) === '.batch_progress', manifest: null, error: null };
+        }
+        return {
+            owned: true,
+            legacy: path.basename(parentManifestPath) === '.batch_progress',
+            manifest,
+            error: null
+        };
+    } catch (error) {
+        return { owned: false, legacy: path.basename(parentManifestPath) === '.batch_progress', manifest: null, error };
+    }
+}
+
+function resolveResumeManifestForOutputDir(canonicalOutputDir) {
+    const manifestInOutput = path.join(canonicalOutputDir, '.batch_progress.json');
+    const legacyInOutput = path.join(canonicalOutputDir, '.batch_progress');
+    const parentDir = path.dirname(canonicalOutputDir);
+    const manifestInParent = path.join(parentDir, '.batch_progress.json');
+    const legacyInParent = path.join(parentDir, '.batch_progress');
+
+    for (const candidate of [manifestInOutput, legacyInOutput]) {
+        if (!fs.existsSync(candidate)) {
+            continue;
+        }
+        return {
+            pathToUse: candidate,
+            legacy: candidate === legacyInOutput,
+            ownedFallback: false
+        };
+    }
+
+    for (const candidate of [manifestInParent, legacyInParent]) {
+        const parentManifest = loadParentOwnedManifest(candidate, canonicalOutputDir);
+        if (parentManifest.error) {
+            continue;
+        }
+        if (!parentManifest.owned) {
+            continue;
+        }
+        return {
+            pathToUse: candidate,
+            legacy: parentManifest.legacy,
+            ownedFallback: true
+        };
+    }
+
+    return {
+        pathToUse: null,
+        legacy: false,
+        ownedFallback: false
+    };
+}
+
+function getStartOverTargets(canonicalOutputDir) {
+    const targets = [];
+    if (!fs.existsSync(canonicalOutputDir)) {
+        return targets;
+    }
+
+    const items = fs.readdirSync(canonicalOutputDir);
+    for (const item of items) {
+        if (
+            item.startsWith('Processed_Memories') ||
+            item.startsWith('Corrupted_Memories') ||
+            item.startsWith('temp_processing') ||
+            item === '.staging' ||
+            item === 'detailed_report.json' ||
+            item === '.upload_ledger.jsonl' ||
+            item === '.batch_progress.json' ||
+            item === '.batch_progress' ||
+            item.startsWith('.dateback')
+        ) {
+            targets.push({
+                name: item,
+                itemPath: path.join(canonicalOutputDir, item)
+            });
+        }
+    }
+
+    return targets;
+}
+
+function validateStartOverDirectoryTree(dirPath) {
+    const items = fs.readdirSync(dirPath);
+    for (const subItem of items) {
+        const subPath = path.join(dirPath, subItem);
+        const subStat = fs.lstatSync(subPath);
+        if (subStat.isSymbolicLink()) {
+            throw new Error(`Cannot clear output folder because it contains a symbolic link: ${subPath}`);
+        }
+        if (subStat.isDirectory()) {
+            validateStartOverDirectoryTree(subPath);
+        }
+    }
 }
 
 function enforceAuthorizedSender(event, unauthorizedResponse) {
@@ -1077,7 +1503,7 @@ function createMenu() {
                             type: 'info',
                             title: 'About DateBack',
                             message: 'DateBack',
-                            detail: `Version: 1.0.6
+                            detail: `Version: ${getAppVersionString()}
 
 Archive Memories the Right Way
 
@@ -1225,39 +1651,62 @@ bundled with this application.`;
     Menu.setApplicationMenu(menu);
 }
 
+function getAppVersionString() {
+    try {
+        const version = typeof app.getVersion === 'function' ? app.getVersion() : '';
+        if (typeof version === 'string' && version.trim()) {
+            return version.trim();
+        }
+    } catch (_error) {
+        // Fall back to a stable placeholder if Electron cannot provide a version.
+    }
+    return 'Unknown';
+}
+
 // Helper to kill orphaned Python processes from previous runs
 function cleanupOrphanedProcesses() {
-    console.log('[Cleanup] Checking for orphaned Python processes...');
+    console.log('[Cleanup] Checking for tracked organizer worker...');
     try {
-        if (process.platform === 'darwin' || process.platform === 'linux') {
-            // Kill any running instances of our script/binary
-            // Dev mode: process_snapchat_memories.py (use full path for safety)
-            try {
-                const scriptPath = path.join(__dirname, 'python', 'process_snapchat_memories.py');
-                // Use spawn to prevent command injection
-                const { spawnSync } = require('child_process');
-                spawnSync('pkill', ['-f', scriptPath], { shell: false });
-                console.log('✓ Killed orphaned process_snapchat_memories.py');
-            } catch (e) { /* No process found */ }
-            try {
-                const cliPath = path.join(__dirname, 'python', 'cli.py');
-                const { spawnSync } = require('child_process');
-                spawnSync('pkill', ['-f', cliPath], { shell: false });
-                console.log('✓ Killed orphaned cli.py');
-            } catch (e) { /* No process found */ }
-
-            // Prod mode: memory-organizer binary
-            try {
-                const { spawnSync } = require('child_process');
-                spawnSync('pkill', ['-x', 'memory-organizer'], { shell: false });
-                console.log('✓ Killed orphaned memory-organizer binary');
-            } catch (e) { /* No process found */ }
-        } else if (process.platform === 'win32') {
-            try {
-                const { spawnSync } = require('child_process');
-                spawnSync('taskkill', ['/F', '/IM', 'memory-organizer.exe', '/T'], { shell: false });
-            } catch (e) { }
+        const { state, parseError } = loadTrackedWorkerStateRecord();
+        if (!state) {
+            if (parseError) {
+                clearTrackedWorkerState();
+            }
+            return;
         }
+
+        const trackedPid = Number(state.pid);
+        if (!Number.isInteger(trackedPid) || trackedPid <= 0 || !Array.isArray(state.verificationTokens) || state.verificationTokens.length === 0) {
+            clearTrackedWorkerState();
+            return;
+        }
+
+        const commandText = getTrackedWorkerCommandText(trackedPid);
+        if (!commandText) {
+            clearTrackedWorkerState(trackedPid);
+            console.log(`[Cleanup] Removed stale worker state for pid=${trackedPid}`);
+            return;
+        }
+
+        if (!trackedWorkerStateMatchesCommand(state, commandText)) {
+            clearTrackedWorkerState(trackedPid);
+            console.log(`[Cleanup] Worker state pid=${trackedPid} did not match a DateBack organizer command; skipping termination.`);
+            return;
+        }
+
+        writeTrackedWorkerState({
+            ...state,
+            cleanupRequestedAt: new Date().toISOString()
+        });
+
+        const terminated = terminateTrackedWorkerProcessTree(trackedPid);
+        if (terminated === false) {
+            clearTrackedWorkerState(trackedPid);
+            console.log(`[Cleanup] Tracked worker pid=${trackedPid} was already gone.`);
+            return;
+        }
+
+        console.log(`✓ Terminated tracked organizer worker pid=${trackedPid}`);
     } catch (e) {
         console.warn('[Cleanup] Error during process cleanup:', e.message);
     }
@@ -1311,19 +1760,32 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                 if (logger) {
                     logger.error('Python process spawn threw synchronously', { error: err.message, stack: err.stack });
                 }
+                clearTrackedWorkerState();
                 settle({ success: false, error: `Failed to start processing: ${err.message}` });
                 return;
             }
             setPythonProcess(proc);
+            setOrganizerProcess(proc);
             if (typeof sessionOutputDir === 'string' && sessionOutputDir.trim().length > 0) {
                 setSessionOutputDir(sessionOutputDir);
             }
         } else {
-            proc = spawnProcess(organizer.command, organizer.args, {
-                env,
-                shell: false
-            });
+            try {
+                proc = spawnProcess(organizer.command, organizer.args, {
+                    env,
+                    shell: false
+                });
+            } catch (err) {
+                clearTrackedWorkerState();
+                settle({ success: false, error: err.message });
+                return;
+            }
+            setOrganizerProcess(proc);
         }
+
+        persistTrackedWorkerForProcess(proc, organizer, {
+            mode
+        });
 
         let output = '';
         let stats = null;
@@ -1413,6 +1875,8 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                 // Kill caffeinate when processing ends
                 stopCaffeinateSafely();
                 clearPythonProcess();
+                clearOrganizerProcess(proc);
+                clearTrackedWorkerState(proc.pid);
                 clearSessionOutputDir();
 
                 // Check if this was an intentional stop (user clicked Stop/Cancel/Pause)
@@ -1426,6 +1890,8 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                 return;
             }
 
+            clearOrganizerProcess(proc);
+            clearTrackedWorkerState(proc.pid);
             if (code === 0) {
                 settle({ success: true, message: output, stats });
             } else {
@@ -1446,11 +1912,15 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                     mainWindow.webContents.send('log-message', `❌ Fatal Error: ${err.message}`);
                 }
                 clearPythonProcess();
+                clearOrganizerProcess(proc);
+                clearTrackedWorkerState(proc?.pid ?? null);
                 restoreSessionOutputDir(previousValidatedOutputDir);
                 settle({ success: false, error: `Failed to start processing: ${err.message}` });
                 return;
             }
 
+            clearOrganizerProcess(proc);
+            clearTrackedWorkerState(proc?.pid ?? null);
             settle({ success: false, error: err.message });
         });
     });
@@ -1637,6 +2107,9 @@ app.on('before-quit', (e) => {
 
     (async () => {
         try {
+            requestOrganizerShutdown('app_before_quit');
+            clearPythonProcess();
+            stopCaffeinateSafely();
             if (logger) {
                 logger.info('App shutting down');
 
@@ -1663,10 +2136,9 @@ app.on('before-quit', (e) => {
 });
 
 app.on('window-all-closed', () => {
-    if (pythonProcess) {
-        pythonProcess.kill();
-        clearPythonProcess();
-    }
+    requestOrganizerShutdown('window_all_closed');
+    clearPythonProcess();
+    stopCaffeinateSafely();
     if (process.platform !== 'darwin') {
         app.quit();
     }
@@ -1894,38 +2366,14 @@ ipcMain.handle('get-resume-manifest', async (event, payload = {}) => {
         return outputAuthorization.response;
     }
 
-    // Manifest is stored in PARENT directory (matches Python logic)
-    // NEW: Python now creates Processed_Memories_YYYY-MM-DD inside outputDir,
-    // so manifest is in outputDir itself. But OLD runs had different structure.
-    // Check BOTH locations for backwards compatibility.
-
-    // Location 1: In the selected output directory itself (NEW behavior)
-    const manifestInOutput = path.join(canonicalOutputDir, '.batch_progress.json');
-    const legacyInOutput = path.join(canonicalOutputDir, '.batch_progress');
-
-    // Location 2: In parent of output directory (OLD behavior)
-    const parentDir = path.dirname(canonicalOutputDir);
-    const manifestInParent = path.join(parentDir, '.batch_progress.json');
-    const legacyInParent = path.join(parentDir, '.batch_progress');
-
-    // Prefer newer location (in output dir) over old location (in parent)
-    let pathToUse = null;
-    if (fs.existsSync(manifestInOutput)) {
-        pathToUse = manifestInOutput;
-    } else if (fs.existsSync(legacyInOutput)) {
-        pathToUse = legacyInOutput;
-    } else if (fs.existsSync(manifestInParent)) {
-        pathToUse = manifestInParent;
-    } else if (fs.existsSync(legacyInParent)) {
-        pathToUse = legacyInParent;
-    }
+    const { pathToUse, legacy } = resolveResumeManifestForOutputDir(canonicalOutputDir);
 
     if (!pathToUse) {
         return { success: true, manifest: null };
     }
 
     try {
-        const data = JSON.parse(fs.readFileSync(pathToUse, 'utf8'));
+        const data = parseJsonFile(pathToUse);
         let zipMatch;
         if (zipPath && data && data.zip_fingerprint) {
             try {
@@ -1936,7 +2384,7 @@ ipcMain.handle('get-resume-manifest', async (event, payload = {}) => {
                 zipMatch = undefined;
             }
         }
-        return { success: true, manifest: data, legacy: pathToUse === legacyInOutput || pathToUse === legacyInParent, zipMatch };
+        return { success: true, manifest: data, legacy, zipMatch };
     } catch (error) {
         return { success: false, error: 'Manifest corrupted or unreadable' };
     }
@@ -1974,7 +2422,21 @@ ipcMain.handle('stop-processing', async (event) => {
 
     if (pythonProcess) {
         markIntentionalStop(); // Flag to prevent error message on process exit
-        pythonProcess.kill('SIGTERM');
+        const activePid = Number(pythonProcess.pid);
+        if (Number.isInteger(activePid) && activePid > 0) {
+            updateTrackedWorkerState(activePid, {
+                stopRequested: true,
+                stopReason: 'manual_stop',
+                stopRequestedAt: new Date().toISOString()
+            });
+            try {
+                terminateTrackedWorkerProcessTree(activePid);
+            } catch (error) {
+                pythonProcess.kill('SIGTERM');
+            }
+        } else {
+            pythonProcess.kill('SIGTERM');
+        }
         clearPythonProcess();
         return { success: true };
     }
@@ -2006,83 +2468,45 @@ ipcMain.handle('clear-output-folder', async (event, payload = {}) => {
     }
 
     try {
-        // Find and delete Processed_Memories_* folders within the output directory
-        if (fs.existsSync(canonicalOutputDir)) {
-            const items = fs.readdirSync(canonicalOutputDir);
-            for (const item of items) {
-                const itemPath = path.join(canonicalOutputDir, item);
-                // Delete Processed_Memories folders (with Batch_* inside), Corrupted_Memories, temp, and report files
-                if (item.startsWith('Processed_Memories') ||
-                    item.startsWith('Corrupted_Memories') ||
-                    item.startsWith('temp_processing') ||
-                    item === 'detailed_report.json' ||
-                    item.startsWith('.dateback')) {
+        const startOverTargets = getStartOverTargets(canonicalOutputDir);
 
-                    // SECURITY: Use lstat to check for symlinks and NOT follow them
-                    const stat = fs.lstatSync(itemPath);
-                    if (stat.isSymbolicLink()) {
-                        // Unlink the symlink itself, do NOT delete target
-                        fs.unlinkSync(itemPath);
-                        console.log(`[START OVER] Unlinked symlink: ${item}`);
-                    } else if (stat.isDirectory()) {
-                        // SECURITY: Validate directory tree has no symlinks before recursive delete
-                        const walkAndValidate = (dir) => {
-                            const items = fs.readdirSync(dir);
-                            for (const subItem of items) {
-                                const subPath = path.join(dir, subItem);
-                                const subStat = fs.lstatSync(subPath);  // Use lstat to detect symlinks
-
-                                if (subStat.isSymbolicLink()) {
-                                    throw new Error(`Found symlink inside directory: ${subPath}`);
-                                }
-
-                                if (subStat.isDirectory()) {
-                                    walkAndValidate(subPath);  // Recurse into subdirectories
-                                }
-                            }
-                        };
-
-                        try {
-                            walkAndValidate(itemPath);
-                            fs.rmSync(itemPath, { recursive: true, force: true });
-                            console.log(`[START OVER] Deleted directory: ${item}`);
-                        } catch (e) {
-                            console.error(`[SECURITY] ${e.message}`);
-                            if (logger) {
-                                logger.warn('Blocked recursive delete due to symlink', { path: itemPath });
-                            }
-                            // Just unlink the top-level directory entry (don't recurse)
-                            fs.unlinkSync(itemPath);
-                        }
-                    } else {
-                        fs.unlinkSync(itemPath);
-                        console.log(`[START OVER] Deleted file: ${item}`);
-                    }
-                }
+        for (const { itemPath } of startOverTargets) {
+            const stat = fs.lstatSync(itemPath);
+            if (stat.isDirectory() && !stat.isSymbolicLink()) {
+                validateStartOverDirectoryTree(itemPath);
             }
         }
 
-        // ALSO delete manifest files from BOTH locations (backwards compatibility)
-        // Location 1: In output directory itself (NEW behavior)
-        const manifestInOutput = path.join(canonicalOutputDir, '.batch_progress.json');
-        const legacyInOutput = path.join(canonicalOutputDir, '.batch_progress');
-
-        // Location 2: In parent directory (OLD behavior)
-        const parentDir = path.dirname(canonicalOutputDir);
-        const manifestInParent = path.join(parentDir, '.batch_progress.json');
-        const legacyInParent = path.join(parentDir, '.batch_progress');
-
-        // Delete from all possible locations
-        [manifestInOutput, legacyInOutput, manifestInParent, legacyInParent].forEach(filePath => {
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-                console.log(`[START OVER] Deleted manifest: ${path.basename(filePath)}`);
+        for (const { name, itemPath } of startOverTargets) {
+            const stat = fs.lstatSync(itemPath);
+            if (stat.isSymbolicLink()) {
+                fs.unlinkSync(itemPath);
+                console.log(`[START OVER] Unlinked symlink: ${name}`);
+            } else if (stat.isDirectory()) {
+                fs.rmSync(itemPath, { recursive: true, force: true });
+                console.log(`[START OVER] Deleted directory: ${name}`);
+            } else {
+                fs.unlinkSync(itemPath);
+                console.log(`[START OVER] Deleted file: ${name}`);
             }
-        });
+        }
+
+        const parentDir = path.dirname(canonicalOutputDir);
+        for (const filePath of [path.join(parentDir, '.batch_progress.json'), path.join(parentDir, '.batch_progress')]) {
+            const parentManifest = loadParentOwnedManifest(filePath, canonicalOutputDir);
+            if (!parentManifest.owned || parentManifest.error || !fs.existsSync(filePath)) {
+                continue;
+            }
+            fs.unlinkSync(filePath);
+            console.log(`[START OVER] Deleted manifest: ${path.basename(filePath)}`);
+        }
 
         console.log(`[START OVER] Cleared output folder: ${canonicalOutputDir}`);
         return { success: true };
     } catch (error) {
+        if (logger && error && typeof error.message === 'string' && error.message.includes('symbolic link')) {
+            logger.warn('Blocked recursive delete due to nested symlink', { path: canonicalOutputDir, error: error.message });
+        }
         console.error(`[START OVER] Failed to clear output folder: ${error.message}`);
         return { success: false, error: error.message };
     }
