@@ -12,7 +12,7 @@ These agents are meant to support the current DateBack app as it exists today, n
 
 ## Shared Source of Truth
 The shared source of truth for all agents is:
-- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
+- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
 
 That document defines:
 - the current product model
@@ -32,6 +32,7 @@ Agents should start there before acting. If an older audit note conflicts with t
 - `RELEASE_AGENT_CHARTER.md`: owns packaging/readiness review, ship-risk assessment, and release validation.
 - `SECURITY_AGENT_CHARTER.md`: owns trust-boundary, IPC, path-validation, logging/privacy, and bundled-binary security review.
 - `QA_AGENT_CHARTER.md`: owns regression coverage, repro steps, and workflow validation across high-risk user flows.
+- `CLEANUP_WORKSPACE_AGENT_CHARTER.md`: owns workspace hygiene, documentation placement, duplicate-doc cleanup, and conservative archival guidance.
 
 ## When to Use Which Agent
 Use the Coding Agent when the task changes real app behavior or test coverage.
@@ -47,6 +48,8 @@ Use the Release Agent when the task is about packaging, ship readiness, release 
 Use the Security Agent when the task touches renderer/main trust boundaries, preload exposure, IPC, filesystem/path controls, logging privacy, or bundled binary trust.
 
 Use the QA Agent when the task is about validating behavior, reproducing bugs, building regression matrices, or confirming edge-case workflow coverage.
+
+Use the Cleanup Workspace Agent when the task is about documentation placement, stale workspace artifacts, duplicate docs, or conservative repo-structure cleanup that does not change app behavior.
 
 ## Hand-off Rules
 Hand off from Coding Agent to UI App Agent when the underlying behavior is correct and the remaining issue is presentation, copy, or flow clarity.

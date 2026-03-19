@@ -11,7 +11,7 @@ The product solves three practical problems:
 
 The app currently has two major product modes:
 - **Computer mode**: DateBack writes processed files into batch folders under the user’s working/output location.
-- **Cloud mode**: DateBack still uses a local processing root and a local staging area, then copies staged results into a user-selected synced cloud folder.
+- **Cloud mode**: DateBack still uses a local processing root and a local staging area, then copies staged results into `Batch_*` folders inside a user-selected synced cloud folder.
 
 At a high level, the desktop app is a layered Electron application with a Python worker:
 - The **Electron main process** owns security, path validation, subprocess launching, IPC, license validation, updater hooks, and privileged OS access.
@@ -21,7 +21,7 @@ At a high level, the desktop app is a layered Electron application with a Python
 
 This document is meant to describe **what the app does today**, based on the current codebase in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source`.
 
-Historical audit/planning notes now live outside the app repo in `/Users/giovanni-lunetta/DateBack_Business/docs/coding_agent_audit`. Those docs are context, not the source of truth. The source of truth is the current code.
+Historical audit/planning notes now live outside the app repo in `/Users/giovanni-lunetta/DateBack_Business/docs/archive/coding_agent_audit_march_2026`. Those docs are context, not the source of truth. The source of truth is the current code.
 
 ## 2. Tech stack and runtime architecture
 
@@ -291,7 +291,7 @@ The following terms are easy to confuse. The distinction matters.
 | **Staging folder / custom staging folder / `staging-path`** | Optional override for Cloud staging. If unset, Cloud mode stages into `.staging` under the processing root. | This is distinct from `outputDir`. Do not collapse them. |
 | **Synced cloud folder / `destinationDir`** | A folder inside iCloud Drive, Dropbox, Google Drive, OneDrive, Box, or a similar sync client where finished files are copied for cloud sync. | This is the final delivery handoff, not the processing root and not the staging root. |
 | **Computer mode** | Files are processed into batch folders in the output location. No auto-upload pipeline is used. | Pause-after-batch here is for local storage management, not cloud sync automation. |
-| **Cloud mode** | Files are processed locally, staged locally, then copied into a synced destination folder. The user-visible main flow asks for destination, not working root. | Cloud mode is not “no local working root.” It still depends on a concrete processing root and staging path. |
+| **Cloud mode** | Files are processed locally, staged locally, then copied into `Batch_*` folders inside a synced destination folder. The user-visible main flow asks for destination, not working root. | Cloud mode is not “no local working root.” It still depends on a concrete processing root and staging path. |
 | **Batch** | A processing group organized around a target size of 500 memories/files. | A completed batch folder may contain fewer than 500 actual files because duplicates/errors/skips are allowed. The app does not guarantee exactly 500 physical files per completed batch. |
 | **Manifest / batch progress** | The persisted resume state in `.batch_progress.json` or legacy `.batch_progress`, stored alongside the processing root. | It is not just a progress bar artifact. It is critical to trust resume and Cloud resume state. |
 | **Processed indices** | A set/list of original memory indices that were already processed. Used as a source of truth for trust-manifest resume and Cloud resume filtering. | This tracks logical memories, not simply files on disk. |
@@ -570,7 +570,7 @@ Cloud mode processing uses:
 
 The delivery model today is:
 1. Python writes staged batch output into the staging root.
-2. AutoUploadManager copies staged files into the synced destination folder.
+2. AutoUploadManager copies staged files into matching `Batch_*` folders inside the synced destination folder.
 3. The user’s cloud sync client uploads from that destination folder.
 
 ### 7.5 How processed indices are used in Cloud mode
@@ -601,9 +601,9 @@ This is important because Cloud resume is two-layered:
 This is the current implemented contract after the recent fix:
 - Cloud mode still filters remaining work using `processed_indices`
 - Cloud mode still calls `recover_pending()`
-- Cloud mode now scans the **actual staging root** rather than reusing the Computer-mode output-root scan
-- if a partial staged batch already exists, Cloud resume continues into that batch
-- if no partial staged batch exists but completed staged batches already exist, Cloud resume continues numbering from the next batch after the highest existing staging batch
+- Cloud mode now considers both the **actual staging batch root** and the already-delivered `Batch_*` folders in the synced destination, rather than reusing the Computer-mode output-root scan
+- if a partial staged/delivered batch already exists, Cloud resume continues into that batch
+- if no partial staged/delivered batch exists but completed batch folders already exist, Cloud resume continues numbering from the next batch after the highest existing batch
 - Cloud mode only restarts at `Batch_01` if there are truly no prior staged batches to continue
 
 This is the recent bug that was fixed:
@@ -616,6 +616,7 @@ Preserved:
 - staged delivery recovery via `recover_pending()`
 - local processing root semantics via `outputDir`
 - batch continuity in staging after resume
+- user-visible `Batch_*` folder continuity in the synced destination
 
 Not preserved as a product promise:
 - exact 500-file physical batch folders

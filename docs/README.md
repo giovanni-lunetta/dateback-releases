@@ -1,6 +1,8 @@
 # Documentation Index
 
 ## Core Docs
+- [Architecture and Workflow](./agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md)
+- [Agent System](./agents/README.md)
 - [Workstream Summary](./WORKSTREAM_SUMMARY.md)
 - [Testing Guide](./TESTING.md)
 - [Build Notes](./BUILD.md)

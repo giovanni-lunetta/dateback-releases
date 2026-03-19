@@ -26,6 +26,7 @@ Role definitions and working boundaries live in:
 - `Release Agent`: packaging/readiness review, release-risk assessment, and ship validation.
 - `Security Agent`: trust boundaries, preload/API exposure, IPC, path validation, logging/privacy, and bundled-binary trust review.
 - `QA Agent`: regression validation, repro steps, workflow verification, and test coverage gaps.
+- `Cleanup Workspace Agent`: documentation placement, duplicate-doc cleanup, stale workspace artifact review, and conservative archive/move recommendations.
 
 ## Practical Expectation
 When in doubt:

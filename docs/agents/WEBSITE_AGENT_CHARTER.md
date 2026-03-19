@@ -16,10 +16,10 @@ Keep DateBack's public website and support-facing web content aligned with the r
 - Marketing positioning that intentionally goes beyond factual product explanation
 
 ## Inputs It Should Read First
-- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
+- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
 - Any current website/docs content being edited
 - Relevant app workflow references in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/index.html` when in-app wording matters
-- Historical audit docs in `/Users/giovanni-lunetta/DateBack_Business/docs/coding_agent_audit` only as secondary context
+- Historical audit docs in `/Users/giovanni-lunetta/DateBack_Business/docs/archive/coding_agent_audit_march_2026` only as secondary context
 
 ## Typical Tasks
 - Update feature descriptions so they match the current Computer and Cloud workflows

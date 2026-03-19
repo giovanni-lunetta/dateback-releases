@@ -28,7 +28,7 @@ Keep the DateBack workspace organized, understandable, and low-noise by cleaning
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agents/README.md`
 - Relevant agent charters in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agents/`
 - The current `git status` and current repo root contents
-- Any external documentation locations currently being used for DateBack support material, including `/Users/giovanni-lunetta/DateBack_Business/docs/agents/` and `/Users/giovanni-lunetta/DateBack_Business/docs/coding_agent_audit/`
+- Any external documentation locations currently being used for DateBack support material, including `/Users/giovanni-lunetta/DateBack_Business/docs/agents/` and `/Users/giovanni-lunetta/DateBack_Business/docs/archive/coding_agent_audit_march_2026/`
 
 ## Typical Tasks
 - Identify root-level markdown files that should be moved into long-term documentation folders

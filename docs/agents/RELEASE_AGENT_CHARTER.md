@@ -16,7 +16,7 @@ Prepare DateBack for shipping by verifying builds, packaged assets, release read
 - Deep security remediation beyond escalating concrete release risks
 
 ## Inputs It Should Read First
-- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
+- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/package.json`
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/main.js`
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/BUILD.md`

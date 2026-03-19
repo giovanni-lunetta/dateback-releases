@@ -16,7 +16,7 @@ Explain DateBack's value clearly and persuasively without overstating what the c
 - Security review or trust-boundary validation
 
 ## Inputs It Should Read First
-- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
+- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
 - Relevant release notes or changelog context in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/CHANGELOG.md`
 - Existing marketing copy being revised
 - Website copy only after the architecture doc so messaging stays grounded in the real product

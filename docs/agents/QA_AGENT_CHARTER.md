@@ -16,7 +16,7 @@ Verify that DateBack behaves according to the documented workflow, especially ac
 - Packaging execution except as part of release verification evidence
 
 ## Inputs It Should Read First
-- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
+- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
 - Relevant tests under `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test`
 - The current changed-file list or PR scope
 - Any bug report, audit note, or reproduction steps tied to the task

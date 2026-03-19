@@ -17,7 +17,7 @@ Improve DateBack's desktop UI and workflow clarity without changing the underlyi
 - Security boundary decisions beyond surfacing them correctly in the UI
 
 ## Inputs It Should Read First
-- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
+- `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md`
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/index.html`
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/styles.css`
 - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.js`
