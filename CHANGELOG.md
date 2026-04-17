@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-03-19
+### Added
+- Organizer worker state tracking via persistent state file — enables reliable cleanup and prevents orphaned processes on quit or restart
+- Cloud resume now considers both staged batches and already-delivered `Batch_*` folders in the synced destination; batch numbering continues correctly instead of restarting at `Batch_01`
+- IPC lifecycle guards and security checks around process cleanup events
+
+### Fixed
+- Cloud resume could incorrectly restart at `Batch_01` when completed batches had already been delivered to the destination folder
+
+### Changed
+- Cloud mode tooltip and helper text updated to accurately describe `Batch_*` folder delivery
+- `onLogsExported` IPC pattern simplified
+
+## [1.1.4] - 2026-03-12
+### Changed
+- Improved layout, visual hierarchy, and overall flow of the main interface
+- No changes to business logic, IPC, or main process behavior
+
+## [1.1.3] - 2026-03-11
+### Fixed
+- Replaced directory-glob `extraResources` with explicit per-file mappings for `memory-organizer` and `ffmpeg` — eliminates silent binary drop in QA config override builds
+- Corrected Polar sandbox API host from `sandbox.polar.sh` to `sandbox-api.polar.sh` (QA/internal only; no production impact)
+
+## [1.1.2] - 2026-02-21
+### Added
+- Polar sandbox validation mode for internal QA, double-guarded by `DATEBACK_POLAR_ENV=sandbox` AND `DATEBACK_ALLOW_SANDBOX=1`
+- Three new tests for Polar endpoint config (production default, sandbox guard, sandbox enabled)
+
+## [1.1.1] - 2026-02-20
+### Fixed
+- Packaged app startup crash when `.env` file is absent — dotenv loading now guarded to development only
+- Removed last remaining `MemSavr` references from Python CLI module docstring and argparse description
+
+## [1.1.0] - 2026-02-18
+### Added
+- Cloud Mode: fully automated staging → delivery pipeline for synced cloud folders (iCloud, Dropbox, Google Drive, etc.)
+- Cache threshold management: processing pauses when staging cache reaches limit and resumes when it drops below threshold
+- Cloud-specific success modal copy with delivery stats (uploaded count, upload errors)
+- Cloud storage warning when local disk is low during a cloud run
+- Security: renderer document trust verification — IPC calls rejected if renderer document is not trusted
+
 ## [1.0.9] - 2026-02-13
 ### Changed
 - **Major Rebrand:** Application renamed from "MemSavr" to "DateBack"
