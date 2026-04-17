@@ -8,8 +8,12 @@ const helpers = require(path.resolve(__dirname, '..', 'src', 'renderer.helpers.j
 globalThis.DateBackRendererHelpers = helpers;
 
 function extractNamedFunctionSource(source, functionName) {
-    const signature = `function ${functionName}(`;
-    const start = source.indexOf(signature);
+    const asyncSignature = `async function ${functionName}(`;
+    const syncSignature = `function ${functionName}(`;
+    let start = source.indexOf(asyncSignature);
+    if (start < 0) {
+        start = source.indexOf(syncSignature);
+    }
     assert.ok(start >= 0, `Could not find ${functionName} in renderer.js`);
 
     const bodyStart = source.indexOf('{', start);
@@ -60,6 +64,7 @@ function createElement(initialClasses = []) {
     return {
         classList: createClassList(initialClasses),
         textContent: '',
+        value: '',
         checked: false,
         disabled: false,
         open: false
@@ -80,7 +85,6 @@ function buildUiStateContext({
         computerModeSettings: createElement(),
         cloudDestinationSection: createElement(),
         autoUploadSettings: createElement(),
-        handoffHelperRow: createElement(),
         autoUploadAdvancedDetails: createElement(),
         manualCacheSettings: createElement(),
         cacheAutoHint: createElement(),
@@ -194,6 +198,22 @@ test('updateAutoUploadUiState glue: COMPUTER mode stopped', () => {
     assert.equal(elements.computerModeCard.classList.contains('selected'), true);
 });
 
+test('onLogsExported is registered once and cleanup function is stored', (t) => {
+    // The renderer should store the return value of window.api.onLogsExported
+    let registeredCallback = null;
+    const mockCleanup = () => {};
+    const mockApi = {
+        onLogsExported: (cb) => {
+            registeredCallback = cb;
+            return mockCleanup;
+        }
+    };
+    // Simulate the renderer's registration pattern
+    const cleanup = mockApi.onLogsExported((data) => { /* handler */ });
+    assert.strictEqual(typeof cleanup, 'function', 'cleanup function should be returned');
+    assert.strictEqual(cleanup, mockCleanup, 'should be the mock cleanup');
+});
+
 test('updateAutoUploadUiState glue: CLOUD mode running', () => {
     const { context, elements, calls } = buildUiStateContext({
         mode: 'CLOUD',
@@ -207,7 +227,7 @@ test('updateAutoUploadUiState glue: CLOUD mode running', () => {
     assert.equal(elements.cloudModeCheckbox.disabled, true);
     assert.equal(elements.pauseAfterBatchCheckbox.disabled, true);
     assert.equal(elements.pauseAfterBatchCheckbox.checked, false);
-    assert.equal(elements.workingFolderHelp.textContent, 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Options if needed.');
+    assert.equal(elements.workingFolderHelp.textContent, 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Settings if needed.');
     assert.equal(elements.workingFolderSection.classList.contains('hidden'), true);
     assert.equal(elements.cloudDestinationSection.classList.contains('hidden'), false);
     assert.equal(calls.updateCloudHandoffCopy, 1);

@@ -35,7 +35,6 @@ const storageCheckLabel = document.getElementById('storage-check-label');
 const storageAvailable = document.getElementById('storage-available');
 const storageRequired = document.getElementById('storage-required');
 const storageRequiredTitle = document.getElementById('storage-required-title');
-const storageRequiredNote = document.getElementById('storage-required-note');
 const storageWarning = document.getElementById('storage-warning');
 const storageCount = document.getElementById('storage-count');
 
@@ -66,16 +65,12 @@ const btnBrowseDestination = document.getElementById('btn-browse-destination');
 const syncFolderWarning = document.getElementById('sync-folder-warning');
 const cloudDestinationError = document.getElementById('cloud-destination-error');
 const workingFolderHelp = document.getElementById('working-folder-help');
-const storageSummary = document.getElementById('storage-summary');
-const stagingFreeSpaceText = document.getElementById('staging-free-space');
-const stagingCacheUsageText = document.getElementById('staging-cache-usage');
 const cacheGbInput = document.getElementById('cache-gb');
 const cacheLowGbInput = document.getElementById('cache-low-gb');
 const diskUsageAutoRadio = document.getElementById('disk-usage-auto');
 const diskUsageManualRadio = document.getElementById('disk-usage-manual');
 const autoUploadAdvancedDetails = document.getElementById('auto-upload-advanced');
-const cacheAutoHint = document.getElementById('cache-auto-hint');
-const autoCachePreview = document.getElementById('auto-cache-preview');
+const temporaryStorageHelp = document.getElementById('temporary-storage-help');
 const cacheLowSpaceWarning = document.getElementById('cache-low-space-warning');
 const manualCacheSettings = document.getElementById('manual-cache-settings');
 const cloudWorkingRootDisplay = document.getElementById('cloud-working-root-display');
@@ -83,9 +78,6 @@ const btnBrowseCloudWorkingRoot = document.getElementById('btn-browse-cloud-work
 const uploadModeSelect = document.getElementById('upload-mode');
 const stagingPathInput = document.getElementById('staging-path');
 const btnBrowseStaging = document.getElementById('btn-browse-staging');
-const handoffHelperRow = document.querySelector('#auto-upload-settings .handoff-helper-row');
-const handoffHelperText = document.getElementById('handoff-helper-text');
-const handoffTooltip = document.getElementById('handoff-tooltip');
 const computerModeDescription = document.getElementById('computer-mode-description');
 const computerModeDisabledHint = document.getElementById('computer-mode-disabled-hint');
 const cloudModeDescription = document.getElementById('cloud-mode-description');
@@ -99,6 +91,16 @@ const guideTabs = document.querySelectorAll('.guide-tabs .tab');
 const tabGoogle = document.getElementById('tab-google');
 const tabIcloud = document.getElementById('tab-icloud');
 const linkGooglePhotos = document.getElementById('link-google-photos');
+const nextStepsIntro = document.getElementById('next-steps-intro');
+const guideLocalStorage = document.getElementById('guide-local-storage');
+const guideManualCloudUpload = document.getElementById('guide-manual-cloud-upload');
+const guideCloudDelivered = document.getElementById('guide-cloud-delivered');
+const cloudDeliveredCopy = document.getElementById('cloud-delivered-copy');
+const cloudDeliveredFollowup = document.getElementById('cloud-delivered-followup');
+const btnOpenCloudFolderGuide = document.getElementById('btn-open-cloud-folder-guide');
+const storageTipTitle = document.getElementById('storage-tip-title');
+const storageTipBody = document.getElementById('storage-tip-body');
+const btnOpenFolderTip = document.getElementById('btn-open-folder-tip');
 
 // License Modal elements
 const licenseModal = document.getElementById('license-modal');
@@ -128,6 +130,7 @@ let isLicensed = false;
 let hadPartialRun = false;  // Track if user stopped mid-processing
 let lastProcessedCount = 0; // Track how many files were processed before stopping
 let lastUploadUiUpdateAt = 0;
+let runtimeDiskFullState = null;
 let isStorageCriticallyLow = false;
 let autoCachePreviewRequestId = 0;
 let storageSummaryRequestId = 0;
@@ -242,7 +245,7 @@ const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilitySt
     if (computerEnabled) {
         workingFolderHelpText = 'Your processed memories will be saved here.';
     } else if (cloudEnabled) {
-        workingFolderHelpText = 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Options if needed.';
+        workingFolderHelpText = 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Settings if needed.';
     }
     return {
         cloudEnabled,
@@ -270,6 +273,44 @@ const computeModeVisibilityStateHelper = rendererHelpers.computeModeVisibilitySt
         shouldHideCloudDestinationError: !cloudEnabled,
         shouldHideSyncFolderWarning: !cloudEnabled,
         shouldRefreshCloudHelpers: cloudEnabled
+    };
+});
+const buildNextStepsGuideStateHelper = rendererHelpers.buildNextStepsGuideState || ((stats = {}) => {
+    const isCloudMode = !!stats.auto_upload;
+    const hasErrors = Number(stats.errors || 0) > 0;
+
+    if (isCloudMode) {
+        return {
+            isCloudMode,
+            intro: hasErrors
+                ? 'DateBack copied finished memories into your synced cloud folder, but this run finished with some errors.'
+                : 'DateBack already copied finished memories into your synced cloud folder.',
+            showLocalStorageSection: false,
+            showManualCloudUploadSection: false,
+            showCloudDeliveredSection: true,
+            cloudDeliveredCopy: hasErrors
+                ? 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running, then retry any corrupted files before cleaning up local space.'
+                : 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running until it finishes syncing everything upstream.',
+            cloudDeliveredFollowup: 'Keep the local working and staging folders until your cloud provider finishes. After that, you can remove local leftovers to reclaim disk space.',
+            cloudFolderButtonLabel: 'Open Cloud Folder',
+            storageTipTitle: 'Clean Up Local Space',
+            storageTipText: 'After your cloud provider finishes uploading, you can delete DateBack\'s local working folder and any custom staging folder to reclaim disk space.',
+            storageTipButtonLabel: 'Open Working Folder'
+        };
+    }
+
+    return {
+        isCloudMode,
+        intro: 'Your memories are organized locally. You can leave them on your computer, back them up, or upload them elsewhere later.',
+        showLocalStorageSection: true,
+        showManualCloudUploadSection: true,
+        showCloudDeliveredSection: false,
+        cloudDeliveredCopy: '',
+        cloudDeliveredFollowup: '',
+        cloudFolderButtonLabel: 'Open Cloud Folder',
+        storageTipTitle: 'Pro Tip: Free Up Space',
+        storageTipText: 'Once your memories are safely backed up somewhere else, delete the local folder to reclaim disk space.',
+        storageTipButtonLabel: 'Open Output Folder'
     };
 });
 const computeStorageEstimatesHelper = rendererHelpers.computeStorageEstimates || (({
@@ -654,11 +695,42 @@ function updateCloudModeEducation() {
             : 'Est. Required';
     }
 
-    if (storageRequiredNote) {
-        storageRequiredNote.classList.toggle('hidden', !isCloudMode);
-    }
-
     syncWorkingRootDisplays();
+}
+
+function configureNextStepsGuide(stats = {}) {
+    const guideState = buildNextStepsGuideStateHelper(stats || {});
+
+    if (nextStepsIntro) {
+        nextStepsIntro.textContent = guideState.intro;
+    }
+    if (guideLocalStorage) {
+        guideLocalStorage.classList.toggle('hidden', !guideState.showLocalStorageSection);
+    }
+    if (guideManualCloudUpload) {
+        guideManualCloudUpload.classList.toggle('hidden', !guideState.showManualCloudUploadSection);
+    }
+    if (guideCloudDelivered) {
+        guideCloudDelivered.classList.toggle('hidden', !guideState.showCloudDeliveredSection);
+    }
+    if (cloudDeliveredCopy) {
+        cloudDeliveredCopy.textContent = guideState.cloudDeliveredCopy;
+    }
+    if (cloudDeliveredFollowup) {
+        cloudDeliveredFollowup.textContent = guideState.cloudDeliveredFollowup;
+    }
+    if (btnOpenCloudFolderGuide) {
+        btnOpenCloudFolderGuide.textContent = guideState.cloudFolderButtonLabel;
+    }
+    if (storageTipTitle) {
+        storageTipTitle.textContent = guideState.storageTipTitle;
+    }
+    if (storageTipBody) {
+        storageTipBody.textContent = guideState.storageTipText;
+    }
+    if (btnOpenFolderTip) {
+        btnOpenFolderTip.textContent = guideState.storageTipButtonLabel;
+    }
 }
 
 function getStartButtonHelperText() {
@@ -682,7 +754,7 @@ function getStartButtonHelperText() {
 
     if (!hasOutput) {
         return mode === 'CLOUD'
-            ? 'DateBack could not load the default working folder. Choose one in Advanced Cloud Options.'
+            ? 'DateBack could not load the default working folder. Choose one in Advanced Cloud Settings.'
             : 'Choose where you want your memories stored.';
     }
 
@@ -821,6 +893,32 @@ function enterNeedsAttentionState({
     if (showResumeOptions) {
         resumeRestartContainer.classList.remove('hidden');
     }
+}
+
+function buildRuntimeDiskFullHint(details = {}) {
+    const scope = typeof details.scope === 'string' ? details.scope : 'processing';
+    const pathHint = typeof details.path === 'string' && details.path.trim()
+        ? `\n\nAffected location: ${details.path}`
+        : '';
+
+    if (scope === 'staging') {
+        return `Free up space on the local staging drive, or choose a larger staging folder, then resume or restart this run.${pathHint}`;
+    }
+    if (scope === 'destination') {
+        return `Free up space in the selected cloud destination, then resume or restart this run.${pathHint}`;
+    }
+    return `Free up space on the working drive, then resume or restart this run.${pathHint}`;
+}
+
+function enterRuntimeDiskFullState(details = {}) {
+    runtimeDiskFullState = details || {};
+    enterNeedsAttentionState({
+        message: details.message || 'DateBack stopped because the drive ran out of space.',
+        hint: buildRuntimeDiskFullHint(details),
+        hideStart: true,
+        showResumeOptions: true
+    });
+    setProgressPhase('Out of Space', 'error');
 }
 
 function computeAutoCacheValues(freeBytes) {
@@ -1175,20 +1273,27 @@ async function resolveAutoCacheForStart(outputDir, stagingDir) {
 }
 
 async function updateAutoCachePreview() {
-    if (!autoCachePreview) {
+    if (!temporaryStorageHelp && !cacheLowSpaceWarning) {
         return;
     }
     const autoEnabled = isCloudModeSelected();
     const advancedOpen = !!(autoUploadAdvancedDetails && autoUploadAdvancedDetails.open);
     const automaticMode = getDiskUsageMode() === 'automatic';
+    const baseTooltip = temporaryStorageHelp ? (temporaryStorageHelp.dataset.baseTooltip || temporaryStorageHelp.dataset.tooltip || temporaryStorageHelp.getAttribute('aria-label') || '') : '';
     if (!autoEnabled || !advancedOpen || !automaticMode) {
-        autoCachePreview.classList.add('hidden');
+        if (temporaryStorageHelp && baseTooltip) {
+            temporaryStorageHelp.dataset.tooltip = baseTooltip;
+            temporaryStorageHelp.setAttribute('aria-label', baseTooltip);
+        }
         return;
     }
 
     const outputDir = getEffectiveOutputDir();
     if (!outputDir) {
-        autoCachePreview.classList.add('hidden');
+        if (temporaryStorageHelp && baseTooltip) {
+            temporaryStorageHelp.dataset.tooltip = baseTooltip;
+            temporaryStorageHelp.setAttribute('aria-label', baseTooltip);
+        }
         return;
     }
 
@@ -1199,49 +1304,23 @@ async function updateAutoCachePreview() {
         if (requestId !== autoCachePreviewRequestId) {
             return;
         }
-        autoCachePreview.textContent = `Automatic may use up to ${autoCache.cacheGb} GB of temporary staging space.`;
-        autoCachePreview.classList.remove('hidden');
+        if (temporaryStorageHelp && baseTooltip) {
+            const tooltipText = `${baseTooltip} Current automatic limit: up to ${autoCache.cacheGb} GB.`;
+            temporaryStorageHelp.dataset.tooltip = tooltipText;
+            temporaryStorageHelp.setAttribute('aria-label', tooltipText);
+        }
         if (cacheLowSpaceWarning) {
             cacheLowSpaceWarning.classList.toggle('hidden', !autoCache.lowSpaceWarning);
         }
     } catch (error) {
-        autoCachePreview.classList.add('hidden');
+        if (temporaryStorageHelp && baseTooltip) {
+            temporaryStorageHelp.dataset.tooltip = baseTooltip;
+            temporaryStorageHelp.setAttribute('aria-label', baseTooltip);
+        }
     }
 }
 
 async function updateStorageSummary() {
-    if (!storageSummary || !stagingFreeSpaceText || !stagingCacheUsageText) {
-        return;
-    }
-    const autoEnabled = isCloudModeSelected();
-    storageSummary.classList.toggle('hidden', !autoEnabled);
-    if (!autoEnabled) {
-        return;
-    }
-
-    const outputDir = getEffectiveOutputDir();
-    const stagingDir = stagingPathInput.value.trim();
-    if (!outputDir) {
-        stagingFreeSpaceText.textContent = 'Free space in temporary working folder: --';
-        stagingCacheUsageText.textContent = 'DateBack may use up to: -- temporary staging space';
-        return;
-    }
-
-    const requestId = ++storageSummaryRequestId;
-    try {
-        const preflight = await evaluateAutoUploadPreflight(outputDir, stagingDir);
-        if (requestId !== storageSummaryRequestId) {
-            return;
-        }
-        stagingFreeSpaceText.textContent = `Free space in temporary working folder: ${roundOneDecimal(preflight.preflight.freeGb)} GB`;
-        stagingCacheUsageText.textContent = `DateBack may use up to: ${roundOneDecimal(preflight.cacheGb)} GB temporary staging space`;
-    } catch (error) {
-        if (requestId !== storageSummaryRequestId) {
-            return;
-        }
-        stagingFreeSpaceText.textContent = 'Free space in temporary working folder: --';
-        stagingCacheUsageText.textContent = 'DateBack may use up to: -- temporary staging space';
-    }
 }
 
 function normalizeCloudPath(pathValue) {
@@ -1332,36 +1411,7 @@ function isAllowedCloudFolder(pathValue) {
     return isKnownSyncFolderPath(pathValue);
 }
 
-function buildCloudHandoffTooltip(providerInfo) {
-    return [
-        'DateBack uses a local working folder behind the scenes for processing, manifests, and default staging.',
-        'Finished files are copied into Batch folders inside this synced destination folder.',
-        'Your cloud provider app uploads them from there.',
-        'Advanced Cloud Options let you override the working folder or the custom staging folder.'
-    ].join('\n');
-}
-
-function buildCloudHandoffHelperText(providerInfo) {
-    if (providerInfo && providerInfo.displayName) {
-        return `DateBack copies finished memories into Batch folders inside this ${providerInfo.displayName} folder. Your cloud app uploads them from there.`;
-    }
-    return 'DateBack copies finished memories into Batch folders inside this synced cloud folder. Your cloud app uploads them from there.';
-}
-
 function updateCloudHandoffCopy() {
-    const destinationValue = destinationPathInput.value.trim();
-    const providerInfo = detectCloudProvider(destinationPathInput.value.trim());
-    if (handoffHelperText) {
-        handoffHelperText.textContent = buildCloudHandoffHelperText(providerInfo);
-    }
-    if (handoffHelperRow) {
-        handoffHelperRow.classList.toggle('hidden', !isCloudModeSelected() || !destinationValue);
-    }
-    if (handoffTooltip) {
-        const tooltipText = buildCloudHandoffTooltip(providerInfo);
-        handoffTooltip.title = tooltipText;
-        handoffTooltip.setAttribute('aria-label', tooltipText);
-    }
     updateCloudModeEducation();
 }
 
@@ -1813,7 +1863,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                 ? 'DateBack could not load the default local working folder for Cloud mode.'
                 : 'Choose where you want your memories stored before starting.',
             storageMode === 'CLOUD'
-                ? 'Open Advanced Cloud Options and choose a working folder override, then try again.'
+                ? 'Open Advanced Cloud Settings and choose a local working folder, then try again.'
                 : ''
         );
         return;
@@ -2054,6 +2104,8 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
         }
     }
 
+    runtimeDiskFullState = null;
+
     try {
         const { args } = buildStartProcessingArgsHelper({
             storageMode,
@@ -2150,6 +2202,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                     'Free up space or choose an external staging folder.'
                 );
                 failStartValidation('', false);
+                return;
+            } else if (result.errorType === 'DISK_FULL') {
+                enterRuntimeDiskFullState(result.details || { message: result.message });
                 return;
             } else if (result.errorType === 'PATH_VALIDATION') {
                 await showStorageWarningModal(
@@ -2905,18 +2960,8 @@ function applyVisibilityState(visibilityState) {
         cloudDestinationSection.classList.toggle('hidden', !visibilityState.showCloudDestinationSection);
     }
     autoUploadSettings.classList.toggle('hidden', !visibilityState.showAutoUploadSettings);
-    if (handoffHelperRow) {
-        handoffHelperRow.classList.toggle('hidden', !visibilityState.showHandoffHelperRow);
-    }
-
     if (manualCacheSettings) {
         manualCacheSettings.classList.toggle('hidden', !visibilityState.showManualCacheSettings);
-    }
-    if (cacheAutoHint) {
-        cacheAutoHint.classList.toggle('hidden', !visibilityState.showCacheAutoHint);
-    }
-    if (autoCachePreview) {
-        autoCachePreview.classList.toggle('hidden', !visibilityState.showAutoCachePreview);
     }
     if (visibilityState.shouldHideCacheLowSpaceWarning && cacheLowSpaceWarning) {
         cacheLowSpaceWarning.classList.add('hidden');
@@ -3240,12 +3285,12 @@ function handleProgressUpdate(data) {
     } else if (data.type === 'auto_pause') {
         const stagingGb = Number.isFinite(data.staging_gb) ? data.staging_gb : 0;
         const cacheGb = Number.isFinite(data.cache_gb) ? data.cache_gb : 0;
-        setProgressPhase('Paused', 'paused');
+        setProgressPhase('Waiting for Space', 'paused');
         if (typeof setProgressStatusVisibility === 'function') {
             setProgressStatusVisibility(true);
         }
-        progressTextContent.textContent = 'Cloud delivery paused to protect free space.';
-        progressEta.textContent = `Temporary storage is full (${stagingGb} GB of ${cacheGb} GB). Upload or wait for sync to continue.`;
+        progressTextContent.textContent = 'Cloud sync needs to catch up before DateBack can continue.';
+        progressEta.textContent = `Temporary staging reached ${stagingGb} GB of ${cacheGb} GB. Keep your cloud app running, or free space, and DateBack will resume automatically.`;
 
     } else if (data.type === 'auto_resume') {
         const stagingGb = Number.isFinite(data.staging_gb) ? data.staging_gb : 0;
@@ -3254,8 +3299,8 @@ function handleProgressUpdate(data) {
         if (typeof setProgressStatusVisibility === 'function') {
             setProgressStatusVisibility(true);
         }
-        progressTextContent.textContent = 'Cloud delivery resumed.';
-        progressEta.textContent = `Temporary storage dropped to ${stagingGb} GB, below your ${lowGb} GB resume threshold.`;
+        progressTextContent.textContent = 'Cloud delivery resumed after space recovered.';
+        progressEta.textContent = `Temporary staging dropped to ${stagingGb} GB, below the ${lowGb} GB resume threshold.`;
 
     } else if (data.type === 'upload_error') {
         const attempt = Number.isFinite(data.attempt) ? data.attempt : 0;
@@ -3271,6 +3316,9 @@ function handleProgressUpdate(data) {
             message: 'Cloud delivery needs attention.',
             hint: data.last_error || data.message || 'Open the log for details. If this keeps happening, contact support.'
         });
+
+    } else if (data.type === 'disk_full') {
+        enterRuntimeDiskFullState(data);
 
     } else if (data.type === 'complete') {
         setProgressPhase('Complete', 'complete');
@@ -3316,7 +3364,7 @@ window.api.onLogMessage((message) => {
 });
 
 // Listen for logs export success
-window.api.onLogsExported((data) => {
+const _logsExportedCleanup = window.api.onLogsExported((data) => {
     openLogsExportModal(data.filename);
 });
 
@@ -3363,6 +3411,12 @@ function showSuccessModal(stats) {
         subtextEl.style.display = subtext ? 'block' : 'none';
     }
 
+    const thanksEl = successModal.querySelector('.thanks');
+    if (thanksEl) {
+        thanksEl.textContent = 'Thanks for using DateBack!';
+        thanksEl.style.display = 'block';
+    }
+
     // ELEC-004: Safe DOM manipulation instead of innerHTML
     // Clear existing content
     statsContainer.textContent = '';
@@ -3403,9 +3457,13 @@ function showSuccessModal(stats) {
         }
     }
 
+    configureNextStepsGuide(stats);
     successModal.classList.remove('hidden');
     btnOpenFolder.disabled = false;
     btnViewSummary.classList.remove('hidden'); // Show View Summary button
+    if (btnNextStepsGuide) {
+        btnNextStepsGuide.classList.remove('hidden');
+    }
 
     if (btnOpenStagingFolder) {
         btnOpenStagingFolder.classList.add('hidden');
@@ -3429,13 +3487,24 @@ function showPartialSummaryModal(processedCount, totalCount) {
 
     // Update modal headline
     const modalTitle = successModal.querySelector('h2');
-    if (modalTitle) modalTitle.textContent = 'Previous Run Summary';
+    if (modalTitle) modalTitle.textContent = 'Progress Saved';
+
+    const subtitleEl = successModal.querySelector('.success-subtitle');
+    if (subtitleEl) {
+        subtitleEl.textContent = 'This run is paused, not complete.';
+        subtitleEl.style.display = 'block';
+    }
 
     // Update subtext
     const subtextEl = successModal.querySelector('.modal-subtext');
     if (subtextEl) {
-        subtextEl.textContent = 'Your progress is saved! You can continue anytime.';
+        subtextEl.textContent = 'Resume anytime to continue with the remaining memories.';
         subtextEl.style.display = 'block';
+    }
+
+    const thanksEl = successModal.querySelector('.thanks');
+    if (thanksEl) {
+        thanksEl.style.display = 'none';
     }
 
     // Clear and populate stats container
@@ -3655,6 +3724,16 @@ if (linkFolderIcloud) {
     linkFolderIcloud.addEventListener('click', openProcessedFolder);
 }
 
+if (btnOpenCloudFolderGuide) {
+    btnOpenCloudFolderGuide.addEventListener('click', (e) => {
+        e.preventDefault();
+        const destinationDir = destinationPathInput.value.trim();
+        if (destinationDir) {
+            window.api.openFolder(destinationDir);
+        }
+    });
+}
+
 // Walkthrough link - open website export guide section
 const linkWalkthrough = document.getElementById('link-walkthrough');
 if (linkWalkthrough) {
@@ -3664,14 +3743,13 @@ if (linkWalkthrough) {
     });
 }
 
-// Pro Tip folder button - open Output Folder
-const btnOpenFolderTip = document.getElementById('btn-open-folder-tip');
+// Pro Tip folder button - open working/output folder
 if (btnOpenFolderTip) {
     btnOpenFolderTip.addEventListener('click', (e) => {
         e.preventDefault();
-        const outputDir = getEffectiveOutputDir();
-        if (outputDir) {
-            window.api.openFolder(outputDir);
+        const localWorkingDir = getEffectiveOutputDir();
+        if (localWorkingDir) {
+            window.api.openFolder(localWorkingDir);
         }
     });
 }
