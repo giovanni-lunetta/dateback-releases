@@ -50,10 +50,7 @@ Recommended for QA builds (so QA can coexist with prod on one machine):
 
 ## Spec Files Present
 
-- Root: `memory-organizer.spec`
-- Python folder: `python/memory-organizer.spec`
-
-At this time, this repo does not contain a direct invocation that proves which one is the canonical spec.
+- Root: `memory-organizer.spec` (canonical)
 
 ## What We Searched
 
@@ -71,25 +68,21 @@ Results found only:
 - Historical release-note mentions of PyInstaller.
 - No executable build command using either spec.
 
-## Current Safe Assumption
+## Canonical Build Command
 
-The binary is produced outside this repository (manual local step, external CI, or another private/internal build pipeline), then copied into `assets/bin/`.
+Run from the repo root:
 
-## Manual Build Checklist (if rebuilding locally)
+```bash
+pip3 install -r python/requirements.txt
+pyinstaller memory-organizer.spec
+```
 
-If you need to rebuild and replace `assets/bin/memory-organizer`, verify these before changing anything:
+Output: `dist/memory-organizer`
 
-1. Confirm Python version and dependency lock source (`python/requirements.txt`).
-2. Confirm which spec file the release process currently uses (root vs `python/`).
-3. Build with PyInstaller using the confirmed spec.
-4. Replace `assets/bin/memory-organizer` with the rebuilt binary.
-5. Run:
-   - `npm run check`
-   - `npm test`
-6. Verify app startup and worker spawn path in `main.js`.
+After verifying the binary works, copy it to `assets/bin/`:
 
-## Consolidation Recommendation
+```bash
+cp dist/memory-organizer assets/bin/memory-organizer
+```
 
-Do not delete either spec file yet.
-
-Consolidate to a single canonical spec only after you confirm the actual build invocation source (documented command, CI job, or release script) and validate that rebuilding still produces a compatible `assets/bin/memory-organizer`.
+The root `memory-organizer.spec` is the canonical spec. The `python/memory-organizer.spec` file has been removed.
