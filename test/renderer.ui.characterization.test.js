@@ -198,20 +198,14 @@ test('updateAutoUploadUiState glue: COMPUTER mode stopped', () => {
     assert.equal(elements.computerModeCard.classList.contains('selected'), true);
 });
 
-test('onLogsExported is registered once and cleanup function is stored', (t) => {
-    // The renderer should store the return value of window.api.onLogsExported
-    let registeredCallback = null;
-    const mockCleanup = () => {};
-    const mockApi = {
-        onLogsExported: (cb) => {
-            registeredCallback = cb;
-            return mockCleanup;
-        }
-    };
-    // Simulate the renderer's registration pattern
-    const cleanup = mockApi.onLogsExported((data) => { /* handler */ });
-    assert.strictEqual(typeof cleanup, 'function', 'cleanup function should be returned');
-    assert.strictEqual(cleanup, mockCleanup, 'should be the mock cleanup');
+test('renderer.js stores the onLogsExported cleanup function', () => {
+    const rendererSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8'
+    );
+    assert.ok(
+        rendererSrc.includes('const _logsExportedCleanup = window.api.onLogsExported('),
+        'renderer.js must store the return value of window.api.onLogsExported to prevent listener leak'
+    );
 });
 
 test('updateAutoUploadUiState glue: CLOUD mode running', () => {
