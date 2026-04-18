@@ -29,6 +29,8 @@ ABORT_PROCESSING = threading.Event()
 
 # Graceful Pause Flag - stops new work but lets in-flight complete
 PAUSE_REQUESTED = threading.Event()
+runtime_disk_full_lock = threading.Lock()
+runtime_disk_full_context = None
 
 # Disk Space Thresholds (in GB)
 MIN_FREE_GB = 2.0      # Pause processing when free space drops below this
@@ -97,9 +99,92 @@ class ExpiredDownloadLinkError(Exception):
     pass
 
 
+class RuntimeDiskFullError(RuntimeError):
+    """Raised when processing stops because local disk space was exhausted."""
+
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
+
 def verify_perf_log(message):
     if VERIFY_PERF_DEBUG_ENABLED:
         print(f"[VERIFY_PERF] {message}", flush=True)
+
+
+def reset_runtime_disk_full_state():
+    global runtime_disk_full_context
+    with runtime_disk_full_lock:
+        runtime_disk_full_context = None
+
+
+def get_runtime_disk_full_context():
+    with runtime_disk_full_lock:
+        if not runtime_disk_full_context:
+            return None
+        return dict(runtime_disk_full_context)
+
+
+def is_disk_full_error(error):
+    if isinstance(error, OSError) and getattr(error, "errno", None) == errno.ENOSPC:
+        return True
+    message = str(error or "")
+    return "No space left on device" in message or "DISK_FULL" in message or "errno 28" in message
+
+
+def classify_runtime_disk_full_scope(path_value=None, explicit_scope=None):
+    if explicit_scope:
+        return explicit_scope
+    if isinstance(path_value, str) and path_value:
+        try:
+            if AUTO_STAGING_DIR and is_path_inside(path_value, AUTO_STAGING_DIR):
+                return "staging"
+            if AUTO_DESTINATION_DIR and is_path_inside(path_value, AUTO_DESTINATION_DIR):
+                return "destination"
+            if OUTPUT_DIR and is_path_inside(path_value, OUTPUT_DIR):
+                return "output"
+            if TEMP_DIR and is_path_inside(path_value, TEMP_DIR):
+                return "temporary"
+        except Exception:
+            pass
+    return "processing"
+
+
+def default_runtime_disk_full_message(scope):
+    if scope == "staging":
+        return "DateBack stopped because the local staging drive ran out of space."
+    if scope == "destination":
+        return "DateBack stopped because the selected cloud destination ran out of space."
+    return "DateBack stopped because the working drive ran out of space."
+
+
+def emit_runtime_disk_full(progress_callback=None, *, path_value=None, scope=None, message=None, error=None):
+    global runtime_disk_full_context
+    resolved_scope = classify_runtime_disk_full_scope(path_value=path_value, explicit_scope=scope)
+    payload = {
+        "type": "disk_full",
+        "scope": resolved_scope,
+        "path": path_value,
+        "message": message or default_runtime_disk_full_message(resolved_scope)
+    }
+    if error:
+        payload["error"] = str(error)
+
+    should_emit = False
+    with runtime_disk_full_lock:
+        if runtime_disk_full_context is None:
+            runtime_disk_full_context = dict(payload)
+            should_emit = True
+
+    ABORT_PROCESSING.set()
+
+    if should_emit and progress_callback:
+        try:
+            progress_callback(dict(payload))
+        except Exception:
+            pass
+
+    return get_runtime_disk_full_context() or payload
 
 def get_requests_session():
     session = getattr(_session_local, "session", None)
@@ -971,17 +1056,18 @@ class AutoUploadManager:
                 staged_id=staged_id
             )
 
-    def _set_fatal(self, message, last_error=None, last_file=None):
+    def _set_fatal(self, message, last_error=None, last_file=None, emit_event=True):
         if self._fatal_error:
             return
         self._fatal_error = message
-        self.emit(
-            "upload_fatal",
-            force=True,
-            last_file=last_file,
-            message=message,
-            last_error=last_error
-        )
+        if emit_event:
+            self.emit(
+                "upload_fatal",
+                force=True,
+                last_file=last_file,
+                message=message,
+                last_error=last_error
+            )
         self._stop_event.set()
         self._queue.put(None)
 
@@ -1060,6 +1146,20 @@ class AutoUploadManager:
                         uploaded = True
                     break
                 except Exception as e:
+                    if is_disk_full_error(e):
+                        disk_full_details = emit_runtime_disk_full(
+                            self.progress_callback,
+                            path_value=self.adapter.destination_dir,
+                            scope="destination",
+                            message="DateBack stopped because the destination drive ran out of space during cloud delivery.",
+                            error=e
+                        )
+                        self._set_fatal(
+                            disk_full_details.get("message", "DateBack stopped because the destination drive ran out of space during cloud delivery."),
+                            last_error=str(e),
+                            last_file=os.path.basename(staged_path),
+                            emit_event=False
+                        )
                     self.error_count += 1
                     self.ledger.append(
                         staged_path,
@@ -1069,6 +1169,16 @@ class AutoUploadManager:
                         error=str(e),
                         staged_id=staged_id
                     )
+                    if is_disk_full_error(e):
+                        self.ledger.append(
+                            staged_path,
+                            dest_path,
+                            "FAILED",
+                            size_bytes=size_bytes,
+                            error=str(e),
+                            staged_id=staged_id
+                        )
+                        break
                     retry_markers = {1, 3, 5, 10, self.max_upload_retries}
                     last_emitted = self._last_error_emit_attempt.get(staged_path, 0)
                     if attempt in retry_markers and attempt > last_emitted:
@@ -1910,7 +2020,12 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
     
     # Check for global abort
     if ABORT_PROCESSING.is_set():
-        return {"id": mem_id, "status": "Error", "reason": "DISK_FULL: Processing aborted due to full disk.", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
+        disk_full_details = get_runtime_disk_full_context()
+        if disk_full_details:
+            reason = "DISK_FULL: Processing aborted because the drive filled up."
+        else:
+            reason = "Processing aborted."
+        return {"id": mem_id, "status": "Error", "reason": reason, "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
 
     if not date_str or not download_url:
         return {"id": mem_id, "status": "Skipped", "reason": "Missing Metadata", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
@@ -2027,7 +2142,12 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
             return {"id": mem_id, "status": "Error", "reason": msg, "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
         except OSError as e:
             if e.errno == errno.ENOSPC:
-                ABORT_PROCESSING.set()
+                emit_runtime_disk_full(
+                    progress_callback,
+                    path_value=dl_path,
+                    message="DateBack stopped because the working drive ran out of space while downloading a memory.",
+                    error=e
+                )
                 return {"id": mem_id, "status": "Error", "reason": "DISK_FULL: No space left on device", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
             save_error_report(mem_id, date_str, download_url, str(e))
             return {"id": mem_id, "status": "Error", "reason": f"System Error: {str(e)}", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
@@ -2178,6 +2298,12 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
             "output_path": output_path
         }
     except Exception as e:
+        if is_disk_full_error(e):
+            emit_runtime_disk_full(
+                progress_callback,
+                path_value=output_path or local_path,
+                error=e
+            )
         try:
             if local_path and os.path.exists(local_path):
                 target_corrupt = os.path.join(CORRUPTED_DIR, local_filename)
@@ -2942,6 +3068,9 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         if upload_manager.has_fatal():
             fatal_message = upload_manager.fatal_message() or "Auto upload fatal error"
             upload_manager.mark_remaining_failed(fatal_message)
+            disk_full_details = get_runtime_disk_full_context()
+            if disk_full_details:
+                raise RuntimeDiskFullError(disk_full_details.get("message", fatal_message), details=disk_full_details)
             raise RuntimeError(fatal_message)
 
         remaining_staged_paths = list_staged_media_files(AUTO_STAGING_DIR)
@@ -3128,7 +3257,14 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             print(f"   ⚠️  {diff} memories missing from verification summary accounting", flush=True)
         else:
             print(f"   ⚠️  Report has {-diff} more entries than expected", flush=True)
-    
+
+    disk_full_details = get_runtime_disk_full_context()
+    if disk_full_details:
+        raise RuntimeDiskFullError(
+            disk_full_details.get("message", "DateBack stopped because the drive ran out of space."),
+            details=disk_full_details
+        )
+
     return stats
 
 def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=None, pause_batches=False,
@@ -3154,6 +3290,8 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
 
     if not output_root:
         output_root = os.path.dirname(os.path.abspath(zip_path))
+
+    reset_runtime_disk_full_state()
         
     try:
         if progress_callback: progress_callback(0.05) # Fake small progress
@@ -3251,6 +3389,7 @@ def retry_failed_entries(
     Retry processing only the failed entries from a previous run.
     In auto-upload mode, retried files go through staging -> upload -> delete.
     """
+    reset_runtime_disk_full_state()
     results = []
     stats = {'success': 0, 'errors': 0, 'duplicates': 0, 'images': 0, 'videos': 0, 'auto_upload': bool(auto_upload)}
 

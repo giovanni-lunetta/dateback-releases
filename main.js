@@ -1789,6 +1789,7 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
 
         let output = '';
         let stats = null;
+        let runtimeDiskFull = null;
 
         proc.stdout.on('data', (data) => {
             if (mode === 'start') {
@@ -1805,6 +1806,20 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                     if (mainWindow && !mainWindow.isDestroyed()) {
                         try {
                             const msg = JSON.parse(line);
+                            if (msg.type === 'disk_full') {
+                                runtimeDiskFull = { ...msg };
+                                mainWindow.webContents.send('progress-update', msg);
+                                continue;
+                            }
+                            if (msg.type === 'error' && msg.errorType === 'DISK_FULL') {
+                                runtimeDiskFull = {
+                                    type: 'disk_full',
+                                    ...(msg.details || {}),
+                                    message: msg.message || msg.details?.message || 'DateBack stopped because the drive ran out of space.'
+                                };
+                                mainWindow.webContents.send('progress-update', runtimeDiskFull);
+                                continue;
+                            }
                             mainWindow.webContents.send('progress-update', msg);
                         } catch (e) {
                             // Regular log line
@@ -1882,6 +1897,13 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                 // Check if this was an intentional stop (user clicked Stop/Cancel/Pause)
                 if (consumeIntentionalStop()) {
                     settle({ success: true, stopped: true });
+                } else if (runtimeDiskFull) {
+                    settle({
+                        success: false,
+                        errorType: 'DISK_FULL',
+                        message: runtimeDiskFull.message || 'DateBack stopped because the drive ran out of space.',
+                        details: runtimeDiskFull
+                    });
                 } else if (code === 0) {
                     settle({ success: true });
                 } else {

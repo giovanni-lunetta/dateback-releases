@@ -55,6 +55,10 @@ class FakeSession:
 
 
 class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
+    def tearDown(self):
+        psm.reset_runtime_disk_full_state()
+        psm.ABORT_PROCESSING.clear()
+
     def test_reload_manifest_processed_count_updates_final_auto_upload_success_total(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             processing_root = Path(temp_dir)
@@ -118,6 +122,52 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(total_accounted, 3911)
+
+    def test_emit_runtime_disk_full_emits_structured_event_once(self):
+        events = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "Processed_Memories_2026-03-19"
+            output_dir.mkdir()
+            target_path = output_dir / "Batch_01" / "example.jpg"
+
+            with mock.patch.object(psm, "OUTPUT_DIR", str(output_dir)):
+                first = psm.emit_runtime_disk_full(
+                    events.append,
+                    path_value=str(target_path),
+                    error=OSError(psm.errno.ENOSPC, "No space left on device"),
+                )
+                second = psm.emit_runtime_disk_full(
+                    events.append,
+                    path_value=str(target_path),
+                    error=OSError(psm.errno.ENOSPC, "No space left on device"),
+                )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(first["type"], "disk_full")
+        self.assertEqual(first["scope"], "output")
+        self.assertEqual(first["path"], str(target_path))
+        self.assertEqual(second, first)
+        self.assertTrue(psm.ABORT_PROCESSING.is_set())
+
+    def test_emit_runtime_disk_full_classifies_staging_scope(self):
+        events = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_dir = Path(temp_dir) / ".staging"
+            staging_dir.mkdir()
+            target_path = staging_dir / "Batch_01" / "example.jpg"
+
+            with mock.patch.object(psm, "AUTO_STAGING_DIR", str(staging_dir)):
+                payload = psm.emit_runtime_disk_full(
+                    events.append,
+                    path_value=str(target_path),
+                    message="DateBack stopped because the local staging drive ran out of space.",
+                    error=OSError(psm.errno.ENOSPC, "No space left on device"),
+                )
+
+        self.assertEqual(payload["scope"], "staging")
+        self.assertEqual(events[0]["scope"], "staging")
 
     def test_resolve_auto_upload_retry_batch_dir_continues_after_delivered_batches(self):
         with tempfile.TemporaryDirectory() as temp_dir:

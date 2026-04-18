@@ -11,6 +11,7 @@ function bootstrapMainForTests() {
     const handlers = new Map();
     let latestWebContents = null;
     let latestMenuTemplate = null;
+    const sentIpcMessages = [];
     let dialogOpenResult = { filePaths: [] };
     const messageBoxCalls = [];
     let axiosPostImpl = async () => {
@@ -39,7 +40,9 @@ function bootstrapMainForTests() {
     class BrowserWindowStub {
         constructor() {
             this.webContents = {
-                send: () => { },
+                send: (channel, ...args) => {
+                    sentIpcMessages.push({ channel, args });
+                },
                 getURL: () => 'file:///Users/test/DateBack_App_Source/src/index.html',
                 once: (_event, cb) => { if (typeof cb === 'function') cb(); },
                 on: () => { },
@@ -177,6 +180,10 @@ function bootstrapMainForTests() {
             shellCalls.openExternal.length = 0;
             shellCalls.showItemInFolder.length = 0;
         },
+        getSentIpcMessages: () => sentIpcMessages.map((entry) => ({ channel: entry.channel, args: [...entry.args] })),
+        resetSentIpcMessages: () => {
+            sentIpcMessages.length = 0;
+        },
         restoreEnv: () => {
             if (previousDateBackTestMode === undefined) {
                 delete process.env.DATEBACK_TEST_MODE;
@@ -288,7 +295,7 @@ async function approveFolderSelection(targetPath) {
     assert.equal(selected, targetPath);
 }
 
-const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, restoreEnv } = bootstrapMainForTests();
+const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, getSentIpcMessages, resetSentIpcMessages, restoreEnv } = bootstrapMainForTests();
 
 function killLeakedCaffeinateProcesses() {
     const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles() : [];
@@ -317,6 +324,7 @@ test.afterEach(() => {
     });
     resetMessageBoxCalls();
     resetShellCalls();
+    resetSentIpcMessages();
     killLeakedCaffeinateProcesses();
 });
 
@@ -421,6 +429,77 @@ test('start-processing happy path uses organizer args and spawn options', async 
     organizerCall.proc.emit('close', 0);
     const result = await promise;
     assert.deepEqual(result, { success: true });
+
+    cleanupTmp([tmpZipPath]);
+});
+
+test('start-processing forwards runtime disk_full events and returns structured disk-full failure', async () => {
+    const tmpZipPath = mkTmpFile('disk-full-start.zip', 'zip');
+    const spawnRecorder = makeSpawnRecorder();
+
+    withOverrides({
+        validateSender: () => true,
+        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: '/tmp/out' }),
+        resolveAndValidateAutoUploadOptions: async () => ({
+            success: true,
+            options: {
+                autoUploadEnabled: false,
+                normalizedUploadMode: 'copy',
+                resolvedCacheGb: 5,
+                resolvedCacheLowGb: 3,
+                resolvedMaxUploadRetries: 20,
+                providedStagingDir: false,
+                canonicalDestinationDir: null,
+                canonicalStagingDir: null
+            }
+        }),
+        buildOrganizerArgsForStart: () => ['--sentinel-disk-full'],
+        resolveOrganizerCommand: (_isDev, args) => ({ command: 'dummy-organizer', args, ffmpegPath: '/ffmpeg' }),
+        cleanupOrphanedProcesses: () => { },
+        spawn: spawnRecorder.spawnStub
+    });
+
+    const promise = callHandler('start-processing', {}, {
+        zipPath: tmpZipPath,
+        outputDir: '/tmp/out',
+        pauseBetweenBatches: false,
+        resumeMode: 'skip',
+        autoUpload: false
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const organizerCall = spawnRecorder.calls.find((c) => c.command === 'dummy-organizer');
+    assert.ok(organizerCall);
+
+    organizerCall.proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+        type: 'disk_full',
+        scope: 'output',
+        path: '/tmp/out/Batch_01',
+        message: 'DateBack stopped because the working drive ran out of space.'
+    })}\n`));
+    organizerCall.proc.emit('close', 1);
+
+    const result = await promise;
+    assert.deepEqual(result, {
+        success: false,
+        errorType: 'DISK_FULL',
+        message: 'DateBack stopped because the working drive ran out of space.',
+        details: {
+            type: 'disk_full',
+            scope: 'output',
+            path: '/tmp/out/Batch_01',
+            message: 'DateBack stopped because the working drive ran out of space.'
+        }
+    });
+
+    const progressMessages = getSentIpcMessages().filter((entry) => entry.channel === 'progress-update');
+    assert.equal(progressMessages.length, 1);
+    assert.deepEqual(progressMessages[0].args[0], {
+        type: 'disk_full',
+        scope: 'output',
+        path: '/tmp/out/Batch_01',
+        message: 'DateBack stopped because the working drive ran out of space.'
+    });
 
     cleanupTmp([tmpZipPath]);
 });

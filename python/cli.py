@@ -128,7 +128,13 @@ def main():
         
         print(f"Processing complete!", flush=True)
         sys.exit(0)
-        
+    except processor.RuntimeDiskFullError as e:
+        json_output("error", {
+            "errorType": "DISK_FULL",
+            "message": str(e),
+            "details": getattr(e, "details", {}) or {}
+        })
+        sys.exit(1)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         json_output("error", {"message": str(e)})
