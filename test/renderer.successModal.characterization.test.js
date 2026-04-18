@@ -101,11 +101,13 @@ function buildSuccessModalContext() {
     const modalTitle = createElement();
     const subtitleEl = createElement();
     const subtextEl = createElement();
+    const thanksEl = createElement();
     const successModal = createElement(['hidden']);
     successModal.querySelector = (selector) => {
         if (selector === 'h2') return modalTitle;
         if (selector === '.success-subtitle') return subtitleEl;
         if (selector === '.modal-subtext') return subtextEl;
+        if (selector === '.thanks') return thanksEl;
         return null;
     };
 
@@ -113,19 +115,27 @@ function buildSuccessModalContext() {
     const btnOpenFolder = createElement();
     btnOpenFolder.disabled = true;
     const btnViewSummary = createElement(['hidden']);
+    const btnNextStepsGuide = createElement(['hidden']);
     const btnRetryCorrupted = createElement(['hidden']);
     const btnOpenStagingFolder = createElement(['hidden']);
     btnOpenStagingFolder.dataset = {};
+    const calls = {
+        configureNextStepsGuide: []
+    };
 
     const context = {
         successModal,
         statsContainer,
         btnOpenFolder,
         btnViewSummary,
+        btnNextStepsGuide,
         btnRetryCorrupted,
         btnOpenStagingFolder,
         buildSuccessModalCopyHelper: helpers.buildSuccessModalCopy,
         buildSuccessModalRowsHelper: helpers.buildSuccessModalRows,
+        configureNextStepsGuide: (stats) => {
+            calls.configureNextStepsGuide.push(stats);
+        },
         document: {
             createElement: () => createElement()
         }
@@ -138,12 +148,15 @@ function buildSuccessModalContext() {
             modalTitle,
             subtitleEl,
             subtextEl,
+            thanksEl,
             statsContainer,
             btnOpenFolder,
             btnViewSummary,
+            btnNextStepsGuide,
             btnRetryCorrupted,
             btnOpenStagingFolder
-        }
+        },
+        calls
     };
 }
 
@@ -155,11 +168,25 @@ function runShowSuccessModal(context, stats) {
 let lastStats = null;
 const buildSuccessModalCopyHelper = this.buildSuccessModalCopyHelper;
 const buildSuccessModalRowsHelper = this.buildSuccessModalRowsHelper;
+const configureNextStepsGuide = this.configureNextStepsGuide;
 ${showSuccessModalSource}
 this.__showSuccessModal = showSuccessModal;
 `);
     script.runInContext(vmContext);
     vmContext.__showSuccessModal(stats);
+}
+
+function runShowPartialSummaryModal(context, processedCount, totalCount) {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const functionSource = extractNamedFunctionSource(rendererSource, 'showPartialSummaryModal');
+    const vmContext = vm.createContext(context);
+    const script = new vm.Script(`
+let isShowingPartialSummary = false;
+${functionSource}
+this.__showPartialSummaryModal = showPartialSummaryModal;
+`);
+    script.runInContext(vmContext);
+    vmContext.__showPartialSummaryModal(processedCount, totalCount);
 }
 
 function getStatRows(statsContainer) {
@@ -179,7 +206,7 @@ function getStatNotes(statsContainer) {
 }
 
 test('showSuccessModal: COMPUTER mode renders non-cloud rows/copy and retry visibility', () => {
-    const { context, elements } = buildSuccessModalContext();
+    const { context, elements, calls } = buildSuccessModalContext();
     const stats = {
         auto_upload: false,
         success: 125,
@@ -196,6 +223,8 @@ test('showSuccessModal: COMPUTER mode renders non-cloud rows/copy and retry visi
     assert.equal(elements.subtitleEl.style.display, 'block');
     assert.equal(elements.subtextEl.textContent, 'Saved 125 new memories. We skipped 7 files that were already in your folder.');
     assert.equal(elements.subtextEl.style.display, 'block');
+    assert.equal(elements.thanksEl.textContent, 'Thanks for using DateBack!');
+    assert.equal(elements.thanksEl.style.display, 'block');
 
     const rows = getStatRows(elements.statsContainer);
     assert.deepEqual(rows.map((row) => row.label), [
@@ -218,8 +247,10 @@ test('showSuccessModal: COMPUTER mode renders non-cloud rows/copy and retry visi
     assert.equal(elements.successModal.classList.contains('hidden'), false);
     assert.equal(elements.btnOpenFolder.disabled, false);
     assert.equal(elements.btnViewSummary.classList.contains('hidden'), false);
+    assert.equal(elements.btnNextStepsGuide.classList.contains('hidden'), false);
     assert.equal(elements.btnRetryCorrupted.classList.contains('hidden'), false);
     assert.equal(elements.btnOpenStagingFolder.classList.contains('hidden'), true);
+    assert.deepEqual(calls.configureNextStepsGuide, [stats]);
 });
 
 test('showSuccessModal: CLOUD mode success renders cloud delivery rows and single cloud subtitle behavior', () => {
@@ -266,6 +297,7 @@ test('showSuccessModal: CLOUD mode success renders cloud delivery rows and singl
     const notes = getStatNotes(elements.statsContainer);
     assert.ok(notes.includes('ℹ️ Delivered: 3,837 copied + 61 already present = 3,898 total. Errors: 0.'));
     assert.equal(elements.btnRetryCorrupted.classList.contains('hidden'), true);
+    assert.equal(elements.thanksEl.style.display, 'block');
 });
 
 test('showSuccessModal: CLOUD mode with errors shows warning copy and upload error row', () => {
@@ -304,4 +336,30 @@ test('showSuccessModal: CLOUD mode with errors shows warning copy and upload err
     const notes = getStatNotes(elements.statsContainer);
     assert.ok(notes.includes('ℹ️ Delivery summary: 900 copied + 95 already present = 995 total. Errors: 5.'));
     assert.equal(elements.btnRetryCorrupted.classList.contains('hidden'), false);
+});
+
+test('showPartialSummaryModal: paused summary avoids completion copy and hides next steps', () => {
+    const { context, elements } = buildSuccessModalContext();
+    context.document.getElementById = (id) => {
+        if (id === 'btn-next-steps-guide') return elements.btnNextStepsGuide;
+        return null;
+    };
+
+    runShowPartialSummaryModal(context, 320, 900);
+
+    assert.equal(elements.modalTitle.textContent, 'Progress Saved');
+    assert.equal(elements.subtitleEl.textContent, 'This run is paused, not complete.');
+    assert.equal(elements.subtitleEl.style.display, 'block');
+    assert.equal(elements.subtextEl.textContent, 'Resume anytime to continue with the remaining memories.');
+    assert.equal(elements.thanksEl.style.display, 'none');
+    assert.equal(elements.btnNextStepsGuide.classList.contains('hidden'), true);
+    assert.equal(elements.btnViewSummary.classList.contains('hidden'), true);
+    assert.equal(elements.btnRetryCorrupted.classList.contains('hidden'), true);
+
+    const rows = getStatRows(elements.statsContainer);
+    assert.deepEqual(rows.map((row) => row.label), [
+        'Files Processed:',
+        'Total in Export:',
+        'Remaining:'
+    ]);
 });

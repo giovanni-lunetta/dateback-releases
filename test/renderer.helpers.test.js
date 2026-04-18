@@ -228,6 +228,36 @@ test('success modal rows: non-cloud includes skipped row and duplicate note', ()
     assert.ok(notes.includes('ℹ️ Skipped 3 files that already exist in the destination folder.'));
 });
 
+test('next steps guide state: cloud mode hides manual upload guidance and switches cleanup copy', () => {
+    const state = helpers.buildNextStepsGuideState({
+        auto_upload: true,
+        errors: 0
+    });
+
+    assert.equal(state.isCloudMode, true);
+    assert.equal(state.showLocalStorageSection, false);
+    assert.equal(state.showManualCloudUploadSection, false);
+    assert.equal(state.showCloudDeliveredSection, true);
+    assert.equal(state.cloudFolderButtonLabel, 'Open Cloud Folder');
+    assert.equal(state.storageTipButtonLabel, 'Open Working Folder');
+    assert.ok(state.intro.includes('synced cloud folder'));
+    assert.ok(state.storageTipText.includes('local working folder'));
+});
+
+test('next steps guide state: computer mode keeps local/manual guidance and output cleanup copy', () => {
+    const state = helpers.buildNextStepsGuideState({
+        auto_upload: false,
+        errors: 0
+    });
+
+    assert.equal(state.isCloudMode, false);
+    assert.equal(state.showLocalStorageSection, true);
+    assert.equal(state.showManualCloudUploadSection, true);
+    assert.equal(state.showCloudDeliveredSection, false);
+    assert.equal(state.storageTipButtonLabel, 'Open Output Folder');
+    assert.ok(state.intro.includes('organized locally'));
+});
+
 test('processing ui state: running locks controls and shows stop', () => {
     const state = helpers.computeProcessingUiState({ isProcessing: true, stoppedByUser: false });
     assert.equal(state.btnBrowseOutputDisabled, true);

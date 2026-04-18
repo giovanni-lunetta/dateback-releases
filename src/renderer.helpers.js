@@ -15,7 +15,7 @@
             return 'Your processed memories will be saved here.';
         }
         if (mode === 'CLOUD') {
-            return 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Options if needed.';
+            return 'DateBack uses a default local working folder in Cloud mode. Change it in Advanced Cloud Settings if needed.';
         }
         return 'Choose a storage mode above to continue.';
     }
@@ -461,6 +461,45 @@
         return items;
     }
 
+    function buildNextStepsGuideState(stats = {}) {
+        const isCloudMode = !!stats.auto_upload;
+        const hasErrors = Number(stats.errors || 0) > 0;
+
+        if (isCloudMode) {
+            return {
+                isCloudMode,
+                intro: hasErrors
+                    ? 'DateBack copied finished memories into your synced cloud folder, but this run finished with some errors.'
+                    : 'DateBack already copied finished memories into your synced cloud folder.',
+                showLocalStorageSection: false,
+                showManualCloudUploadSection: false,
+                showCloudDeliveredSection: true,
+                cloudDeliveredCopy: hasErrors
+                    ? 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running, then retry any corrupted files before cleaning up local space.'
+                    : 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running until it finishes syncing everything upstream.',
+                cloudDeliveredFollowup: 'Keep the local working and staging folders until your cloud provider finishes. After that, you can remove local leftovers to reclaim disk space.',
+                cloudFolderButtonLabel: 'Open Cloud Folder',
+                storageTipTitle: 'Clean Up Local Space',
+                storageTipText: 'After your cloud provider finishes uploading, you can delete DateBack\'s local working folder and any custom staging folder to reclaim disk space.',
+                storageTipButtonLabel: 'Open Working Folder'
+            };
+        }
+
+        return {
+            isCloudMode,
+            intro: 'Your memories are organized locally. You can leave them on your computer, back them up, or upload them elsewhere later.',
+            showLocalStorageSection: true,
+            showManualCloudUploadSection: true,
+            showCloudDeliveredSection: false,
+            cloudDeliveredCopy: '',
+            cloudDeliveredFollowup: '',
+            cloudFolderButtonLabel: 'Open Cloud Folder',
+            storageTipTitle: 'Pro Tip: Free Up Space',
+            storageTipText: 'Once your memories are safely backed up somewhere else, delete the local folder to reclaim disk space.',
+            storageTipButtonLabel: 'Open Output Folder'
+        };
+    }
+
     function computeModeVisibilityState({
         mode,
         isProcessing,
@@ -515,6 +554,7 @@
         computeProcessingUiState,
         buildSuccessModalCopy,
         buildSuccessModalRows,
+        buildNextStepsGuideState,
         resolveStorageMode,
         buildStartProcessingArgs,
         resolveRunModeFlags,

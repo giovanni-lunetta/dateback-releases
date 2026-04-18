@@ -142,11 +142,6 @@
                     <button id="btn-browse-output" class="btn btn-secondary">Change</button>
                 </div>
                 <p id="working-folder-help" class="context-helper">Choose a storage mode above to continue.</p>
-                <div id="storage-summary" class="storage-summary hidden" aria-live="polite">
-                    <span id="staging-free-space">Free space in temporary working folder: --</span>
-                    <span class="storage-summary-separator">•</span>
-                    <span id="staging-cache-usage">DateBack may use up to: -- temporary staging space</span>
-                </div>
             </section>
 
             <!-- Step 3: Cloud Destination -->
@@ -155,39 +150,57 @@
                     <div class="section-label-row">
                         <label id="cloud-destination-label" class="section-label">3. Select Your Synced Cloud Folder</label>
                         <button type="button" class="section-help-icon"
-                            aria-label="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack will copy your processed memories into this folder."
-                            data-tooltip="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack will copy your processed memories into this folder.">?</button>
+                            aria-label="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack uses temporary local space during processing, then copies finished Batch folders into this synced destination."
+                            data-tooltip="Select a folder inside your cloud provider (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box). DateBack uses temporary local space during processing, then copies finished Batch folders into this synced destination.">?</button>
                     </div>
-                    <p id="cloud-destination-lead" class="context-helper context-helper-emphasis">Choose the synced cloud folder where finished memories should land.</p>
                     <div class="input-group cloud-destination-input-group destination-primary-row">
                         <input type="text" id="destination-path" class="text-input" placeholder="Destination folder (Dropbox/Drive/iCloud...)" readonly>
                         <button id="btn-browse-destination" class="btn btn-secondary">Choose folder...</button>
-                    </div>
-                    <div class="handoff-helper-row hidden" aria-live="polite">
-                        <span id="handoff-helper-text">Finished memories are copied here. Your cloud app uploads them.</span>
-                        <span id="handoff-tooltip" class="handoff-tooltip" aria-label="Cloud mode uses a local working folder for processing and staging before copying files into this synced destination.">i</span>
                     </div>
                     <p id="cloud-destination-error" class="destination-error hidden">Choose a cloud destination folder (iCloud Drive, Google Drive, OneDrive, Dropbox, or Box).</p>
                     <p id="sync-folder-warning" class="sync-folder-warning hidden"></p>
 
                     <details id="auto-upload-advanced" class="auto-upload-advanced flow-advanced-panel">
-                        <summary>Advanced Cloud Options</summary>
+                        <summary class="advanced-panel-summary">
+                            <span class="advanced-panel-summary-main">
+                                <span class="advanced-panel-summary-title">Advanced Cloud Settings</span>
+                                <span class="advanced-panel-summary-badge">Optional</span>
+                            </span>
+                            <span class="advanced-panel-summary-toggle" aria-hidden="true"></span>
+                        </summary>
+                        <p class="advanced-panel-intro">Most people can leave these settings as-is.</p>
                         <div class="advanced-settings-stack">
                             <div class="advanced-setting-block">
                                 <div class="advanced-setting-copy">
-                                    <p class="advanced-setting-label">Working folder override</p>
-                                    <p class="advanced-setting-caption">Default: DateBack uses its standard local processing folder unless you change it here.</p>
+                                    <div class="advanced-setting-heading">
+                                        <p class="advanced-setting-label">Local Working Folder</p>
+                                        <button
+                                            type="button"
+                                            class="section-help-icon advanced-setting-help"
+                                            aria-label="Only change this if you want DateBack's local processing files somewhere else. Used for manifests, reports, retries, and local processing files."
+                                            data-tooltip="Only change this if you want DateBack's local processing files somewhere else. Used for manifests, reports, retries, and local processing files."
+                                        >?</button>
+                                    </div>
                                 </div>
                                 <div class="input-group advanced-setting-input-row">
                                     <input type="text" id="cloud-working-root-display" class="text-input" placeholder="Default local processing folder" readonly>
-                                    <button id="btn-browse-cloud-working-root" class="btn btn-secondary">Choose folder...</button>
+                                    <button id="btn-browse-cloud-working-root" class="btn btn-secondary advanced-setting-button">Choose...</button>
                                 </div>
-                                <p class="disk-usage-hint">Used for manifests, reports, retries, and the default local staging area.</p>
                             </div>
 
                             <div class="advanced-setting-block">
                                 <div class="advanced-setting-copy">
-                                    <p class="advanced-setting-label">Temporary storage</p>
+                                    <div class="advanced-setting-heading">
+                                        <p class="advanced-setting-label">Temporary Storage</p>
+                                        <button
+                                            id="temporary-storage-help"
+                                            type="button"
+                                            class="section-help-icon advanced-setting-help"
+                                            aria-label="Automatic is best for most runs. DateBack manages temporary space automatically."
+                                            data-base-tooltip="Automatic is best for most runs. DateBack manages temporary space automatically."
+                                            data-tooltip="Automatic is best for most runs. DateBack manages temporary space automatically."
+                                        >?</button>
+                                    </div>
                                 </div>
                                 <div class="advanced-setting-choice-group">
                                     <div class="disk-usage-row advanced-disk-usage-row">
@@ -200,8 +213,6 @@
                                             <span>Manual</span>
                                         </label>
                                     </div>
-                                    <p id="cache-auto-hint" class="disk-usage-hint">Automatic chooses temporary storage based on free space and keeps a safety buffer so cloud delivery can continue smoothly.</p>
-                                    <p id="auto-cache-preview" class="disk-usage-hint hidden"></p>
                                     <p id="cache-low-space-warning" class="disk-usage-warning hidden">Low free space detected. Cloud runs may pause often until your cloud app catches up.</p>
 
                                     <div id="manual-cache-settings" class="advanced-manual-cache hidden">
@@ -215,7 +226,7 @@
                                                 <input type="number" id="cache-low-gb" class="text-input" min="0" step="0.1" value="3" placeholder="Resume threshold (GB)">
                                             </div>
                                         </div>
-                                        <p class="disk-usage-hint">Cloud delivery resumes after temporary files drop below your resume threshold.</p>
+                                        <p class="disk-usage-hint">Cloud delivery resumes after temporary files drop below this threshold.</p>
                                     </div>
 
                                     <div id="transfer-method-section" class="hidden">
@@ -227,15 +238,22 @@
                                 </div>
                             </div>
 
-                            <div class="advanced-setting-block">
+                            <div class="advanced-setting-block advanced-setting-block-optional">
                                 <div class="advanced-setting-copy">
-                                    <p class="advanced-setting-label">Custom staging folder</p>
+                                    <div class="advanced-setting-heading">
+                                        <p class="advanced-setting-label">Staging Folder</p>
+                                        <button
+                                            type="button"
+                                            class="section-help-icon advanced-setting-help"
+                                            aria-label="Optional. If blank, DateBack uses a hidden .staging folder inside the working folder. This holds temporary files during cloud delivery."
+                                            data-tooltip="Optional. If blank, DateBack uses a hidden .staging folder inside the working folder. This holds temporary files during cloud delivery."
+                                        >?</button>
+                                    </div>
                                 </div>
                                 <div class="input-group advanced-setting-input-row">
-                                    <input type="text" id="staging-path" class="text-input" placeholder="Optional: Custom staging folder" readonly>
-                                    <button id="btn-browse-staging" class="btn btn-secondary">Choose folder...</button>
+                                    <input type="text" id="staging-path" class="text-input" placeholder="Custom staging folder" readonly>
+                                    <button id="btn-browse-staging" class="btn btn-secondary advanced-setting-button">Choose...</button>
                                 </div>
-                                <p class="disk-usage-hint">If not set, DateBack stages files in a hidden <code>.staging</code> folder inside the working folder above.</p>
                             </div>
                         </div>
                     </details>
@@ -262,7 +280,6 @@
                         <span id="storage-required" class="stat-value-large">-</span>
                     </div>
                 </div>
-                <p id="storage-required-note" class="storage-context-note hidden">Cloud Mode needs temporary free space before finished memories move into your synced cloud folder.</p>
                 <div id="storage-warning" class="storage-warning hidden">
                     ⚠️ <strong>Warning:</strong> You might run out of space! Please free up some storage.
                 </div>
@@ -475,8 +492,9 @@
     <div id="next-steps-modal" class="modal hidden">
         <div class="modal-content modal-wide">
             <h2>What's Next?</h2>
+            <p id="next-steps-intro" class="modal-subtext modal-centered">Choose what you want to do next with this run.</p>
 
-            <div class="guide-section local-storage">
+            <div id="guide-local-storage" class="guide-section local-storage">
                 <h3>
                     <svg class="section-icon" width="20" height="20" viewBox="0 0 20 20" fill="none"
                         xmlns="http://www.w3.org/2000/svg">
@@ -491,7 +509,7 @@
                     them up however you'd like.</p>
             </div>
 
-            <div class="guide-section cloud-upload">
+            <div id="guide-manual-cloud-upload" class="guide-section cloud-upload">
                 <h3>☁️ Uploading to the Cloud?</h3>
                 <p>Your memories are already organized into <strong>Batch</strong> folders for easier upload.</p>
 
@@ -543,11 +561,18 @@
                 </div>
             </div>
 
+            <div id="guide-cloud-delivered" class="guide-section cloud-delivered hidden">
+                <h3>☁️ Cloud Delivery Finished</h3>
+                <p id="cloud-delivered-copy">DateBack already copied finished memories into your synced cloud folder. Keep your cloud app running until it finishes uploading.</p>
+                <p id="cloud-delivered-followup">Keep the local working and staging folders until your cloud provider finishes. After that, you can remove local leftovers to reclaim disk space.</p>
+                <button id="btn-open-cloud-folder-guide" class="btn btn-secondary btn-small">Open Cloud Folder</button>
+            </div>
+
             <div class="guide-section storage-tip">
                 <div class="storage-tip-content">
                     <div class="storage-tip-text">
-                        <h3>💡 Pro Tip: Free Up Space</h3>
-                        <p>Once your memories are safely in the cloud, delete the local folder to reclaim disk space.
+                        <h3 id="storage-tip-title">💡 Pro Tip: Free Up Space</h3>
+                        <p id="storage-tip-body">Once your memories are safely in the cloud, delete the local folder to reclaim disk space.
                         </p>
                     </div>
                     <button id="btn-open-folder-tip" class="btn btn-secondary btn-small">📂 Open Output Folder</button>

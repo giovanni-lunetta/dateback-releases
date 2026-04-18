@@ -102,3 +102,98 @@ this.__handleProgressUpdate = handleProgressUpdate;
     assert.deepEqual(calls.setProgressPhase.at(-1), ['Processing', 'processing']);
     assert.deepEqual(calls.setProgressStatusVisibility.at(-1), [true]);
 });
+
+test('handleProgressUpdate uses waiting-for-space copy during cloud auto-pause', () => {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const handleProgressUpdateSource = extractNamedFunctionSource(rendererSource, 'handleProgressUpdate');
+
+    const progressTextContent = createElement();
+    const progressEta = createElement();
+    const progressFill = createElement();
+    const calls = {
+        setProgressPhase: [],
+        setProgressStatusVisibility: []
+    };
+
+    const context = vm.createContext({
+        Date,
+        console: { log() {}, warn() {}, error() {} },
+        progressTextContent,
+        progressEta,
+        progressFill,
+        etaTimestamps: [],
+        lastProgressCount: 0,
+        lastProgressTime: 0,
+        setProgressPhase: (...args) => calls.setProgressPhase.push(args),
+        setProgressStatusVisibility: (...args) => calls.setProgressStatusVisibility.push(args),
+        formatTimeRemaining: (seconds) => `${seconds} sec`,
+        showBatchPauseModal: () => {},
+        lastUploadUiUpdateAt: 0,
+        formatBytes: (value) => `${value}B`,
+        enterNeedsAttentionState: () => {},
+        showSuccessModal: () => {}
+    });
+
+    new vm.Script(`
+${handleProgressUpdateSource}
+this.__handleProgressUpdate = handleProgressUpdate;
+`).runInContext(context);
+
+    context.__handleProgressUpdate({ type: 'auto_pause', staging_gb: 4.8, cache_gb: 5 });
+
+    assert.equal(progressTextContent.textContent, 'Cloud sync needs to catch up before DateBack can continue.');
+    assert.equal(progressEta.textContent, 'Temporary staging reached 4.8 GB of 5 GB. Keep your cloud app running, or free space, and DateBack will resume automatically.');
+    assert.deepEqual(calls.setProgressPhase.at(-1), ['Waiting for Space', 'paused']);
+    assert.deepEqual(calls.setProgressStatusVisibility.at(-1), [true]);
+});
+
+test('handleProgressUpdate routes runtime disk_full events into the dedicated out-of-space state', () => {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const handleProgressUpdateSource = extractNamedFunctionSource(rendererSource, 'handleProgressUpdate');
+
+    const progressTextContent = createElement();
+    const progressEta = createElement();
+    const progressFill = createElement();
+    let diskFullPayload = null;
+
+    const context = vm.createContext({
+        Date,
+        console: { log() {}, warn() {}, error() {} },
+        progressTextContent,
+        progressEta,
+        progressFill,
+        etaTimestamps: [],
+        lastProgressCount: 0,
+        lastProgressTime: 0,
+        setProgressPhase: () => {},
+        setProgressStatusVisibility: () => {},
+        formatTimeRemaining: (seconds) => `${seconds} sec`,
+        showBatchPauseModal: () => {},
+        lastUploadUiUpdateAt: 0,
+        formatBytes: (value) => `${value}B`,
+        enterNeedsAttentionState: () => {},
+        enterRuntimeDiskFullState: (payload) => {
+            diskFullPayload = payload;
+        },
+        showSuccessModal: () => {}
+    });
+
+    new vm.Script(`
+${handleProgressUpdateSource}
+this.__handleProgressUpdate = handleProgressUpdate;
+`).runInContext(context);
+
+    context.__handleProgressUpdate({
+        type: 'disk_full',
+        scope: 'staging',
+        path: '/tmp/staging',
+        message: 'DateBack stopped because the local staging drive ran out of space.'
+    });
+
+    assert.deepEqual(diskFullPayload, {
+        type: 'disk_full',
+        scope: 'staging',
+        path: '/tmp/staging',
+        message: 'DateBack stopped because the local staging drive ran out of space.'
+    });
+});
