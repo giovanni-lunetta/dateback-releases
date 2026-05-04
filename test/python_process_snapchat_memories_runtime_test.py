@@ -3,8 +3,8 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import requests
@@ -45,13 +45,18 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, response):
-        self.response = response
+    def __init__(self, responses):
+        if isinstance(responses, (list, tuple)):
+            self.responses = list(responses)
+        else:
+            self.responses = [responses]
         self.calls = []
 
     def get(self, url, **kwargs):
         self.calls.append({"url": url, **kwargs})
-        return self.response
+        if not self.responses:
+            raise AssertionError(f"Unexpected GET call to {url}")
+        return self.responses.pop(0)
 
 
 class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
@@ -213,7 +218,18 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
 
             self.assertEqual(output_dir, staging_dir / "Batch_08")
 
-    def test_stream_download_to_path_streams_bytes_with_redirects_enabled(self):
+    def test_is_allowed_download_url_rejects_sibling_domains(self):
+        self.assertFalse(psm.is_allowed_download_url("https://evil-snapchat.com/media.jpg"))
+        self.assertFalse(psm.is_allowed_download_url("https://evilsc-cdn.net/media.jpg"))
+        self.assertFalse(psm.is_allowed_download_url("https://snapchat.com.evil.example/media.jpg"))
+
+    def test_is_allowed_download_url_accepts_exact_or_subdomain_matches(self):
+        self.assertTrue(psm.is_allowed_download_url("https://sc-cdn.net/media.jpg"))
+        self.assertTrue(psm.is_allowed_download_url("https://cf-st.sc-cdn.net/media.jpg"))
+        self.assertTrue(psm.is_allowed_download_url("https://snapchat.com/media.jpg"))
+        self.assertTrue(psm.is_allowed_download_url("https://accounts.snapchat.com/media.jpg"))
+
+    def test_stream_download_to_path_streams_bytes_without_automatic_redirects(self):
         response = FakeResponse(
             chunks=[b"abc", b"def"],
             headers={"Content-Type": "image/jpeg"},
@@ -230,22 +246,51 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             self.assertEqual(len(session.calls), 1)
             self.assertEqual(session.calls[0]["url"], "https://cf-st.sc-cdn.net/media")
             self.assertTrue(session.calls[0]["stream"])
-            self.assertTrue(session.calls[0]["allow_redirects"])
+            self.assertFalse(session.calls[0]["allow_redirects"])
             self.assertEqual(response.chunk_size, 8192)
 
-    def test_stream_download_to_path_rejects_blocked_redirect_chain(self):
-        response = FakeResponse(
+    def test_stream_download_to_path_follows_allowed_redirect_manually(self):
+        redirect_response = FakeResponse(
+            status_code=302,
+            headers={"Location": "https://cf-st.sc-cdn.net/final.jpg"},
+            url="https://snapchat.com/start",
+        )
+        final_response = FakeResponse(
             chunks=[b"abc"],
             headers={"Content-Type": "image/jpeg"},
-            history=[SimpleNamespace(url="https://evil.example/redirect")],
+            url="https://cf-st.sc-cdn.net/final.jpg",
         )
-        session = FakeSession(response)
+        session = FakeSession([redirect_response, final_response])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = Path(temp_dir) / "download.bin"
+            with mock.patch.object(psm, "get_requests_session", return_value=session):
+                written = psm.stream_download_to_path("https://snapchat.com/start", str(target_path))
+
+            self.assertEqual(written, 3)
+            self.assertEqual(target_path.read_bytes(), b"abc")
+            self.assertEqual([call["url"] for call in session.calls], [
+                "https://snapchat.com/start",
+                "https://cf-st.sc-cdn.net/final.jpg",
+            ])
+            self.assertTrue(all(call["allow_redirects"] is False for call in session.calls))
+
+    def test_stream_download_to_path_rejects_blocked_redirect_before_following(self):
+        redirect_response = FakeResponse(
+            status_code=302,
+            headers={"Location": "https://evil.example/final.jpg"},
+            url="https://snapchat.com/start",
+        )
+        session = FakeSession([redirect_response])
 
         with tempfile.TemporaryDirectory() as temp_dir:
             target_path = Path(temp_dir) / "download.bin"
             with mock.patch.object(psm, "get_requests_session", return_value=session):
                 with self.assertRaisesRegex(ValueError, "Blocked redirect target"):
-                    psm.stream_download_to_path("https://cf-st.sc-cdn.net/media", str(target_path))
+                    psm.stream_download_to_path("https://snapchat.com/start", str(target_path))
+
+            self.assertEqual(len(session.calls), 1)
+            self.assertEqual(session.calls[0]["url"], "https://snapchat.com/start")
 
     def test_stream_download_to_path_rejects_oversized_downloads(self):
         response = FakeResponse(
@@ -286,6 +331,88 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             with mock.patch.object(psm, "get_requests_session", return_value=session):
                 with self.assertRaisesRegex(ValueError, "Unexpected content type"):
                     psm.stream_download_to_path("https://cf-st.sc-cdn.net/media", str(target_path))
+
+    def test_select_memories_history_json_rejects_duplicate_json_members(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "mydata~123.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("mydata~123/json/memories_history.json", '{"Saved Media": []}')
+                zf.writestr("other/json/memories_history.json", '{"Saved Media": []}')
+
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                with self.assertRaisesRegex(ValueError, "multiple memories_history.json"):
+                    psm.select_memories_history_json_member(zf)
+
+    def test_read_memories_history_json_rejects_oversized_json_member(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "mydata~123.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("mydata~123/json/memories_history.json", '{"Saved Media": []}')
+
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                with mock.patch.object(psm, "MAX_JSON_BYTES", 4):
+                    with self.assertRaisesRegex(ValueError, "memories_history.json is too large"):
+                        psm.read_memories_history_json(zf, "mydata~123/json/memories_history.json")
+
+    def test_recover_pending_ignores_stale_temp_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_dir = Path(temp_dir) / "staging"
+            staging_dir.mkdir()
+            real_file = staging_dir / "Batch_01" / "real.jpg"
+            temp_file = staging_dir / "Batch_01" / "real.jpg.tmp.abcd1234"
+            real_file.parent.mkdir(parents=True)
+            real_file.write_bytes(b"real")
+            temp_file.write_bytes(b"partial")
+
+            ledger = psm.UploadLedger(str(Path(temp_dir) / ".upload_ledger.jsonl"))
+            adapter = psm.FolderDestinationAdapter(str(Path(temp_dir) / "dest"), staging_dir=str(staging_dir))
+            manager = psm.AutoUploadManager(
+                str(staging_dir),
+                adapter,
+                ledger,
+                progress_callback=None,
+                cache_gb=1,
+                cache_low_gb=0.5,
+            )
+
+            recovered = manager.recover_pending()
+
+            self.assertEqual(recovered, 1)
+            self.assertIn(os.path.realpath(real_file), manager._pending)
+            self.assertNotIn(os.path.realpath(temp_file), manager._pending)
+
+    def test_save_batch_progress_can_raise_when_required(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "Processed_Memories_2026-03-18"
+            output_dir.mkdir()
+            events = []
+
+            with mock.patch.object(psm, "OUTPUT_DIR", str(output_dir)), \
+                 mock.patch.object(psm, "atomic_write_text", side_effect=OSError("disk failed")):
+                with self.assertRaisesRegex(OSError, "disk failed"):
+                    psm.save_batch_progress(
+                        0,
+                        1,
+                        total_files=1,
+                        processed_indices={0},
+                        output_dir=str(output_dir),
+                        raise_on_error=True,
+                        progress_callback=events.append,
+                    )
+
+            self.assertEqual(events[0]["type"], "processing_fatal")
+            self.assertEqual(events[0]["message"], "Could not save resume manifest.")
+            self.assertEqual(events[0]["last_error"], "disk failed")
+
+    def test_apply_retry_timestamp_sets_original_file_time(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = Path(temp_dir) / "retry.jpg"
+            target_path.write_bytes(b"abc")
+
+            psm.apply_retry_timestamp(str(target_path), "2021-05-28 20:50:07 UTC")
+
+            expected = psm.datetime(2021, 5, 28, 20, 50, 7, tzinfo=psm.timezone.utc).timestamp()
+            self.assertEqual(int(target_path.stat().st_mtime), int(expected))
 
 
 if __name__ == "__main__":

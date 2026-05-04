@@ -33,6 +33,8 @@ let caffeinateProcess = null; // Sleep prevention process
 let intentionalStop = false; // Track if user intentionally stopped processing
 let currentValidatedOutputDir = null; // Store validated output dir for secure resume
 let approvedOutputDirs = new Set(); // Track user-approved output directories
+let approvedAutoUploadDestinationDirs = new Set(); // Track user-approved cloud destination directories
+let approvedAutoUploadStagingDirs = new Set(); // Track user-approved explicit staging directories
 let trustedRendererDocumentKey = null;
 const TRUSTED_RENDERER_PROTOCOLS = new Set(['file:', 'app:']);
 const DEBUG_SECURITY = String(process.env.DATEBACK_DEBUG_SECURITY || '').toLowerCase();
@@ -46,6 +48,15 @@ const POLAR_PROD_BASE_URL = 'https://api.polar.sh';
 const POLAR_SANDBOX_BASE_URL = 'https://sandbox-api.polar.sh';
 const POLAR_FALLBACK_PROD_ORG_ID = '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
 const ORGANIZER_WORKER_STATE_FILE = 'organizer-worker-state.json';
+const FOLDER_SELECTION_PURPOSES = new Set(['output', 'destination', 'staging']);
+const ALLOWED_EXTERNAL_HOSTS = new Set([
+    'dateback.app',
+    'www.dateback.app',
+    'accounts.snapchat.com',
+    'photos.google.com'
+]);
+const ALLOWED_MAILTO_RECIPIENTS = new Set(['support@dateback.app']);
+const ALLOWED_MAILTO_QUERY_KEYS = new Set(['subject', 'body']);
 
 function checkRateLimit(identifier) {
     const now = Date.now();
@@ -631,6 +642,40 @@ function isPathInsideDir(filePath, allowedDir) {
     return canonicalFile.startsWith(canonicalDir + path.sep) || canonicalFile === canonicalDir;
 }
 
+function normalizeFolderSelectionPurpose(rawPurpose) {
+    if (typeof rawPurpose !== 'string') {
+        return 'output';
+    }
+    const purpose = rawPurpose.trim().toLowerCase();
+    if (!FOLDER_SELECTION_PURPOSES.has(purpose)) {
+        return 'output';
+    }
+    return purpose;
+}
+
+function getApprovedDirectorySetForPurpose(purpose) {
+    if (purpose === 'destination') {
+        return approvedAutoUploadDestinationDirs;
+    }
+    if (purpose === 'staging') {
+        return approvedAutoUploadStagingDirs;
+    }
+    return approvedOutputDirs;
+}
+
+function getAllApprovedDirectorySets() {
+    return [
+        approvedOutputDirs,
+        approvedAutoUploadDestinationDirs,
+        approvedAutoUploadStagingDirs
+    ];
+}
+
+function approveDirectoryForPurpose(canonicalPath, rawPurpose) {
+    const purpose = normalizeFolderSelectionPurpose(rawPurpose);
+    getApprovedDirectorySetForPurpose(purpose).add(canonicalPath);
+}
+
 function findNearestExistingPath(pathToCheck) {
     let checkPath = pathToCheck;
     while (checkPath && checkPath !== '/' && !fs.existsSync(checkPath)) {
@@ -773,7 +818,9 @@ function authorizeOutputDirForOperation(canonicalOutputDir, options = {}) {
 function authorizeOpenFolderTarget(canonicalPath) {
     return (
         (currentValidatedOutputDir && isPathInsideDir(canonicalPath, currentValidatedOutputDir)) ||
-        Array.from(approvedOutputDirs).some(approvedRoot => isPathInsideDir(canonicalPath, approvedRoot))
+        getAllApprovedDirectorySets().some((approvedSet) => (
+            Array.from(approvedSet).some(approvedRoot => isPathInsideDir(canonicalPath, approvedRoot))
+        ))
     );
 }
 
@@ -929,26 +976,61 @@ function validateExternalUrlInput(url) {
     return null;
 }
 
-// Security: Safely open external URLs with protocol whitelist
-function openExternalSafely(rawUrl) {
+function validateExternalUrlPolicy(rawUrl) {
+    let parsedUrl;
     try {
-        const parsedUrl = new URL(rawUrl);
-        const allowedProtocols = ['http:', 'https:', 'mailto:'];
-        const os = require('os');
-        const isDev = !app.isPackaged;
+        parsedUrl = new URL(rawUrl);
+    } catch {
+        return { success: false, error: 'Invalid URL' };
+    }
 
-
-        if (!allowedProtocols.includes(parsedUrl.protocol)) {
-            console.error(`[SECURITY] Blocked openExternal with disallowed protocol: ${parsedUrl.protocol}`);
-            return { success: false, error: `Protocol ${parsedUrl.protocol} is not allowed` };
+    if (parsedUrl.protocol === 'mailto:') {
+        let recipient = '';
+        try {
+            recipient = decodeURIComponent(parsedUrl.pathname || '').trim().toLowerCase();
+        } catch {
+            return { success: false, error: 'Invalid URL' };
         }
+        if (!recipient || !ALLOWED_MAILTO_RECIPIENTS.has(recipient)) {
+            return { success: false, error: 'Email recipient is not allowed' };
+        }
+        for (const key of parsedUrl.searchParams.keys()) {
+            if (!ALLOWED_MAILTO_QUERY_KEYS.has(key.toLowerCase())) {
+                return { success: false, error: 'Email query parameter is not allowed' };
+            }
+        }
+        return null;
+    }
 
-        shell.openExternal(parsedUrl.toString());
-        return { success: true };
-    } catch (e) {
+    if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+        const hostname = parsedUrl.hostname.toLowerCase().replace(/\.$/, '');
+        if (!ALLOWED_EXTERNAL_HOSTS.has(hostname)) {
+            return { success: false, error: 'URL host is not allowed' };
+        }
+        return null;
+    }
+
+    return { success: false, error: `Protocol ${parsedUrl.protocol} is not allowed` };
+}
+
+// Security: Safely open external URLs with protocol, host, and recipient allowlists.
+function openExternalSafely(rawUrl) {
+    const policyResponse = validateExternalUrlPolicy(rawUrl);
+    if (policyResponse) {
+        console.error(`[SECURITY] Blocked openExternal: ${policyResponse.error}`);
+        return policyResponse;
+    }
+
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(rawUrl);
+    } catch {
         console.error(`[SECURITY] Invalid URL passed to openExternal: ${rawUrl}`);
         return { success: false, error: 'Invalid URL' };
     }
+
+    shell.openExternal(parsedUrl.toString());
+    return { success: true };
 }
 
 
@@ -1097,6 +1179,29 @@ async function resolveAndValidateAutoUploadOptions(
             canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
         } catch (e) {
             return { success: false, response: { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message } };
+        }
+
+        if (!approvedAutoUploadDestinationDirs.has(canonicalDestinationDir)) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Destination directory not approved. Please choose it with the folder picker.',
+                    error: 'Destination directory not approved. Please choose it with the folder picker.'
+                }
+            };
+        }
+        if (providedStagingDir && !approvedAutoUploadStagingDirs.has(canonicalStagingDir)) {
+            return {
+                success: false,
+                response: {
+                    success: false,
+                    errorType: 'PATH_VALIDATION',
+                    message: 'Staging directory not approved. Please choose it with the folder picker.',
+                    error: 'Staging directory not approved. Please choose it with the folder picker.'
+                }
+            };
         }
 
         if (canonicalDestinationDir === canonicalStagingDir) {
@@ -2224,8 +2329,8 @@ ipcMain.handle('find-zip', async (event) => {
     }
 });
 
-// Open folder dialog for output selection
-ipcMain.handle('select-folder', async (event) => {
+// Open folder dialog for purpose-specific folder selection
+ipcMain.handle('select-folder', async (event, purpose = 'output') => {
     const unauthorizedResponse = enforceAuthorizedSender(event, null);
     if (unauthorizedResponse !== null) {
         return unauthorizedResponse;
@@ -2247,7 +2352,7 @@ ipcMain.handle('select-folder', async (event) => {
             // but we can refuse to create an approval entry, effectively failing later checks.
             console.error(`[SECURITY] refused to approve sensitive root: ${canonical}`);
         } else {
-            approvedOutputDirs.add(canonical);
+            approveDirectoryForPurpose(canonical, purpose);
         }
     }
 
@@ -2609,9 +2714,6 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
         // Find bundled executables
         const isDev = !app.isPackaged;
 
-        // Start caffeinate to prevent sleep during processing (Insomniac Mode)
-        startCaffeinateSafely();
-
         // SECURITY: Validate zipPath before passing to subprocess
         if (!zipPath || typeof zipPath !== 'string') {
             failStart('Invalid ZIP path provided');
@@ -2655,6 +2757,9 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
         ];
 
         // Process paused check is handled by Python script resume signal logic
+
+        // Start caffeinate only after synchronous start validation has passed.
+        startCaffeinateSafely();
 
         const { organizer, processEnv } = prepareStartOrganizerRun({
             isDev,
@@ -2785,6 +2890,30 @@ ipcMain.handle('retry-corrupted', async (event, {
 
 // License Management
 
+function extractLicenseStatus(rawLicenseData) {
+    if (!rawLicenseData || typeof rawLicenseData !== 'object') {
+        return null;
+    }
+    return rawLicenseData.status || rawLicenseData.state || null;
+}
+
+function buildPersistedLicenseState(rawLicenseData, activatedAt = new Date().toISOString()) {
+    return {
+        valid: true,
+        activatedAt,
+        licenseId: rawLicenseData?.id || null,
+        status: extractLicenseStatus(rawLicenseData)
+    };
+}
+
+function buildLicenseStatusPayload(license) {
+    const legacyLicenseData = license && typeof license.licenseData === 'object' ? license.licenseData : null;
+    return {
+        id: license.licenseId || legacyLicenseData?.id || null,
+        status: license.status || extractLicenseStatus(legacyLicenseData)
+    };
+}
+
 ipcMain.handle('validate-license', async (event, licenseKey) => {
     const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, valid: false, message: 'Unauthorized sender' });
     if (unauthorizedResponse) {
@@ -2818,19 +2947,17 @@ ipcMain.handle('validate-license', async (event, licenseKey) => {
 
         // Polar.sh returns 200 OK if valid, with license data
         if (response.status === 200 && response.data.id) {
-            // Store the validated license
-            store.set('license', {
-                key: licenseKey,
-                valid: true,
-                activatedAt: new Date().toISOString(),
-                licenseData: response.data
-            });
+            const persistedLicense = buildPersistedLicenseState(response.data);
+            store.set('license', persistedLicense);
 
             return {
                 success: true,
                 valid: true,
                 message: 'License activated successfully!',
-                data: response.data
+                data: {
+                    id: persistedLicense.licenseId,
+                    status: persistedLicense.status
+                }
             };
         } else {
             return {
@@ -2868,11 +2995,20 @@ ipcMain.handle('get-license-status', async (event) => {
 
     // Optional: Re-validate periodically (uncomment if needed)
     // You can add periodic re-validation here to prevent key sharing
+    if (
+        Object.prototype.hasOwnProperty.call(license, 'key') ||
+        Object.prototype.hasOwnProperty.call(license, 'licenseData')
+    ) {
+        store.set('license', {
+            ...buildPersistedLicenseState(buildLicenseStatusPayload(license), license.activatedAt),
+            valid: true
+        });
+    }
 
     return {
         valid: true,
         activatedAt: license.activatedAt,
-        data: license.licenseData
+        data: buildLicenseStatusPayload(license)
     };
 });
 

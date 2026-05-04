@@ -1,5 +1,8 @@
 import os
 
+STAGED_MEDIA_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif', '.mp4', '.mov', '.m4v'}
+STAGED_TEMP_MARKERS = ('.tmp', '.partial', '.part', '.download', '.crdownload')
+
 
 def parse_batch_folder_number(batch_folder):
     """Convert a Batch_XX folder name into a zero-based batch index."""
@@ -9,6 +12,16 @@ def parse_batch_folder_number(batch_folder):
         return int(batch_folder.split('_', 1)[1]) - 1
     except (IndexError, ValueError):
         return None
+
+
+def is_countable_staged_media(path_value):
+    name = os.path.basename(path_value)
+    lower_name = name.lower()
+    if name.startswith("."):
+        return False
+    if any(marker in lower_name for marker in STAGED_TEMP_MARKERS):
+        return False
+    return os.path.splitext(lower_name)[1] in STAGED_MEDIA_EXTENSIONS
 
 
 def compute_last_completed_batch(batch_num, batch_completed=True):
@@ -48,7 +61,7 @@ def scan_existing_batch_root(batch_root, batch_size):
 
     scan_result["orphaned_root_files"] = len([
         name for name in root_entries
-        if os.path.isfile(os.path.join(batch_root, name)) and not name.startswith('.')
+        if os.path.isfile(os.path.join(batch_root, name)) and is_countable_staged_media(os.path.join(batch_root, name))
     ])
 
     batch_folders = sorted(
@@ -73,7 +86,7 @@ def scan_existing_batch_root(batch_root, batch_size):
         batch_path = os.path.join(batch_root, batch_folder)
         files_in_batch = len([
             name for name in os.listdir(batch_path)
-            if os.path.isfile(os.path.join(batch_path, name)) and not name.startswith('.')
+            if os.path.isfile(os.path.join(batch_path, name)) and is_countable_staged_media(os.path.join(batch_path, name))
         ])
         scan_result["existing_batch_files"] += files_in_batch
 
@@ -129,7 +142,7 @@ def scan_existing_batch_roots(staging_root, destination_root, batch_size, comple
             return
         scan_result["orphaned_root_files"] += len([
             name for name in root_entries
-            if os.path.isfile(os.path.join(batch_root, name)) and not name.startswith('.')
+            if os.path.isfile(os.path.join(batch_root, name)) and is_countable_staged_media(os.path.join(batch_root, name))
         ])
 
     def add_batch_file(batch_folder, entry_key):
@@ -156,7 +169,7 @@ def scan_existing_batch_roots(staging_root, destination_root, batch_size, comple
                 continue
             for name in batch_entries:
                 file_path = os.path.join(batch_path, name)
-                if not name.startswith('.') and os.path.isfile(file_path):
+                if os.path.isfile(file_path) and is_countable_staged_media(file_path):
                     add_batch_file(batch_folder, ("dest", os.path.realpath(file_path)))
 
     def scan_staging_root(batch_root):
@@ -180,7 +193,7 @@ def scan_existing_batch_roots(staging_root, destination_root, batch_size, comple
                 continue
             for name in batch_entries:
                 file_path = os.path.join(batch_path, name)
-                if name.startswith('.') or not os.path.isfile(file_path):
+                if not os.path.isfile(file_path) or not is_countable_staged_media(file_path):
                     continue
 
                 canonical_file_path = os.path.realpath(file_path)

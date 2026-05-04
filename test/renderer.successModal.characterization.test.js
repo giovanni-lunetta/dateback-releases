@@ -221,7 +221,10 @@ test('showSuccessModal: COMPUTER mode renders non-cloud rows/copy and retry visi
     assert.equal(elements.modalTitle.textContent, 'Processing Complete!');
     assert.equal(elements.subtitleEl.textContent, 'Your Snapchat Memories are safely stored.');
     assert.equal(elements.subtitleEl.style.display, 'block');
-    assert.equal(elements.subtextEl.textContent, 'Saved 125 new memories. We skipped 7 files that were already in your folder.');
+    assert.equal(
+        elements.subtextEl.textContent,
+        'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.'
+    );
     assert.equal(elements.subtextEl.style.display, 'block');
     assert.equal(elements.thanksEl.textContent, 'Thanks for using DateBack!');
     assert.equal(elements.thanksEl.style.display, 'block');
@@ -317,7 +320,10 @@ test('showSuccessModal: CLOUD mode with errors shows warning copy and upload err
     runShowSuccessModal(context, stats);
 
     assert.equal(elements.modalTitle.textContent, 'Cloud Processing Complete!');
-    assert.equal(elements.subtextEl.textContent, 'Completed with errors. You can retry corrupted files.');
+    assert.equal(
+        elements.subtextEl.textContent,
+        'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.'
+    );
 
     const rows = getStatRows(elements.statsContainer);
     assert.deepEqual(rows.map((row) => row.label), [

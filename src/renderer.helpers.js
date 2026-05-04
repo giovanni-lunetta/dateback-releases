@@ -216,7 +216,8 @@
             : 0;
         const alreadyInDestination = Math.max(0, confirmedInDestination - copiedThisRun);
         const uploadErrorEvents = Number.isFinite(stats.upload_error_events) ? stats.upload_error_events : 0;
-        const cloudHasErrors = isCloudModeStats && Number(stats.errors || 0) > 0;
+        const hasProcessingErrors = Number(stats.errors || 0) > 0;
+        const cloudHasErrors = isCloudModeStats && hasProcessingErrors;
 
         const usedTrustManifest = !!stats.used_trust_manifest || (typeof stats.previously_processed === 'number' && stats.previously_processed > 0);
         const manifestTotalFiles = typeof stats.manifest_total_files === 'number' ? stats.manifest_total_files : null;
@@ -258,11 +259,15 @@
             subtext = 'No new memories found. All files in this export already exist in your destination folder.';
         }
 
+        if (!isCloudModeStats && hasProcessingErrors) {
+            subtext = 'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.';
+        }
+
         if (isCloudModeStats) {
             if (hasCloudDeliveryStats) {
                 headline = 'Cloud Processing Complete!';
                 if (cloudHasErrors) {
-                    subtext = 'Completed with errors. You can retry corrupted files.';
+                    subtext = 'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.';
                 } else {
                     subtext = 'Processing and cloud delivery completed.';
                 }
@@ -475,7 +480,7 @@
                 showManualCloudUploadSection: false,
                 showCloudDeliveredSection: true,
                 cloudDeliveredCopy: hasErrors
-                    ? 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running, then retry any corrupted files before cleaning up local space.'
+                    ? 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running. Retry can redownload regular photo/video failures; overlay memories may need a fresh full run before you clean up local space.'
                     : 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running until it finishes syncing everything upstream.',
                 cloudDeliveredFollowup: 'Keep the local working and staging folders until your cloud provider finishes. After that, you can remove local leftovers to reclaim disk space.',
                 cloudFolderButtonLabel: 'Open Cloud Folder',

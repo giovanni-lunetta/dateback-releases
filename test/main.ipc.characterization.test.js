@@ -106,9 +106,14 @@ function bootstrapMainForTests() {
         quitAndInstall: () => { }
     };
 
+    let storeGetImpl = () => undefined;
+    let storeSetImpl = () => { };
+    let storeDeleteImpl = () => { };
+
     class StoreStub {
-        get() { return undefined; }
-        set() { }
+        get(key) { return storeGetImpl(key); }
+        set(key, value) { return storeSetImpl(key, value); }
+        delete(key) { return storeDeleteImpl(key); }
     }
 
     class LoggerStub {
@@ -164,6 +169,20 @@ function bootstrapMainForTests() {
         },
         setAxiosPostImpl: (impl) => {
             axiosPostImpl = impl;
+        },
+        setStoreGetImpl: (impl) => {
+            storeGetImpl = impl;
+        },
+        setStoreSetImpl: (impl) => {
+            storeSetImpl = impl;
+        },
+        setStoreDeleteImpl: (impl) => {
+            storeDeleteImpl = impl;
+        },
+        resetStoreImpls: () => {
+            storeGetImpl = () => undefined;
+            storeSetImpl = () => { };
+            storeDeleteImpl = () => { };
         },
         getLatestMenuTemplate: () => latestMenuTemplate,
         getMessageBoxCalls: () => messageBoxCalls.map((args) => [...args]),
@@ -289,13 +308,13 @@ async function expectUnauthorized(handlerName, payload, expected) {
     assert.deepEqual(result, expected);
 }
 
-async function approveFolderSelection(targetPath) {
+async function approveFolderSelection(targetPath, purpose) {
     setDialogOpenResult({ canceled: false, filePaths: [targetPath] });
-    const selected = await callHandler('select-folder', createAuthorizedEvent());
+    const selected = await callHandler('select-folder', createAuthorizedEvent(), purpose);
     assert.equal(selected, targetPath);
 }
 
-const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, getSentIpcMessages, resetSentIpcMessages, restoreEnv } = bootstrapMainForTests();
+const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, setStoreGetImpl, setStoreSetImpl, setStoreDeleteImpl, resetStoreImpls, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, getSentIpcMessages, resetSentIpcMessages, restoreEnv } = bootstrapMainForTests();
 
 function killLeakedCaffeinateProcesses() {
     const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles() : [];
@@ -325,6 +344,7 @@ test.afterEach(() => {
     resetMessageBoxCalls();
     resetShellCalls();
     resetSentIpcMessages();
+    resetStoreImpls();
     killLeakedCaffeinateProcesses();
 });
 
@@ -431,6 +451,152 @@ test('start-processing happy path uses organizer args and spawn options', async 
     assert.deepEqual(result, { success: true });
 
     cleanupTmp([tmpZipPath]);
+});
+
+test('start-processing rejects unapproved auto-upload destination directory', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-auto-destination-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const destinationDir = path.join(tmpRoot, 'destination');
+    const tmpZipPath = path.join(tmpRoot, 'auto-destination.zip');
+    fs.writeFileSync(tmpZipPath, 'zip');
+
+    try {
+        await approveFolderSelection(outputDir, 'output');
+        withOverrides({
+            cleanupOrphanedProcesses: () => { },
+            buildOrganizerArgsForStart: () => ['--auto-destination-unapproved'],
+            resolveOrganizerCommand: () => ({
+                command: 'dummy-organizer',
+                args: ['--auto-destination-unapproved'],
+                ffmpegPath: '/ffmpeg'
+            }),
+            runOrganizerSubprocess: () => Promise.resolve({ success: true }),
+            spawn: makeSpawnRecorder().spawnStub
+        });
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: tmpZipPath,
+            outputDir,
+            autoUpload: true,
+            destinationDir,
+            cacheGb: 1,
+            cacheLowGb: 0.5,
+            uploadMode: 'copy'
+        });
+        assert.equal(result.success, false);
+        assert.equal(result.errorType, 'PATH_VALIDATION');
+        assert.match(result.error, /Destination directory not approved/);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
+test('start-processing rejects unapproved auto-upload staging directory', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-auto-staging-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const destinationDir = path.join(tmpRoot, 'destination');
+    const stagingDir = path.join(tmpRoot, 'staging');
+    const tmpZipPath = path.join(tmpRoot, 'auto-staging.zip');
+    fs.writeFileSync(tmpZipPath, 'zip');
+
+    try {
+        await approveFolderSelection(outputDir, 'output');
+        await approveFolderSelection(destinationDir, 'destination');
+        withOverrides({
+            cleanupOrphanedProcesses: () => { },
+            buildOrganizerArgsForStart: () => ['--auto-staging-unapproved'],
+            resolveOrganizerCommand: () => ({
+                command: 'dummy-organizer',
+                args: ['--auto-staging-unapproved'],
+                ffmpegPath: '/ffmpeg'
+            }),
+            runOrganizerSubprocess: () => Promise.resolve({ success: true }),
+            spawn: makeSpawnRecorder().spawnStub
+        });
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: tmpZipPath,
+            outputDir,
+            autoUpload: true,
+            destinationDir,
+            stagingDir,
+            cacheGb: 1,
+            cacheLowGb: 0.5,
+            uploadMode: 'copy'
+        });
+        assert.equal(result.success, false);
+        assert.equal(result.errorType, 'PATH_VALIDATION');
+        assert.match(result.error, /Staging directory not approved/);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
+test('start-processing accepts approved auto-upload destination and staging directories', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-auto-approved-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const destinationDir = path.join(tmpRoot, 'destination');
+    const stagingDir = path.join(tmpRoot, 'staging');
+    const tmpZipPath = path.join(tmpRoot, 'auto-approved.zip');
+    fs.writeFileSync(tmpZipPath, 'zip');
+
+    try {
+        await approveFolderSelection(outputDir, 'output');
+        await approveFolderSelection(destinationDir, 'destination');
+        await approveFolderSelection(stagingDir, 'staging');
+        withOverrides({
+            cleanupOrphanedProcesses: () => { },
+            buildOrganizerArgsForStart: () => ['--auto-approved'],
+            resolveOrganizerCommand: () => ({
+                command: 'dummy-organizer',
+                args: ['--auto-approved'],
+                ffmpegPath: '/ffmpeg'
+            }),
+            runOrganizerSubprocess: () => Promise.resolve({ success: true }),
+            spawn: makeSpawnRecorder().spawnStub
+        });
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: tmpZipPath,
+            outputDir,
+            autoUpload: true,
+            destinationDir,
+            stagingDir,
+            cacheGb: 1,
+            cacheLowGb: 0.5,
+            uploadMode: 'copy'
+        });
+        assert.deepEqual(result, { success: true });
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
+test('start-processing does not start caffeinate before zip validation succeeds', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-invalid-start-');
+    const outputDir = path.join(tmpRoot, 'output');
+    let caffeinateStarted = false;
+
+    try {
+        await approveFolderSelection(outputDir, 'output');
+        withOverrides({
+            spawn: (command) => {
+                if (command === 'caffeinate') {
+                    caffeinateStarted = true;
+                }
+                return createFakeProc();
+            }
+        });
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: path.join(tmpRoot, 'missing.zip'),
+            outputDir
+        });
+        assert.equal(result.success, false);
+        assert.equal(caffeinateStarted, false);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
 });
 
 test('start-processing forwards runtime disk_full events and returns structured disk-full failure', async () => {
@@ -1313,13 +1479,40 @@ test('open-url returns invalid url for non-string payload', async () => {
     assert.deepEqual(result, { success: false, error: 'Invalid URL' });
 });
 
-test('open-url happy path opens external url and returns success shape', async () => {
-    const targetUrl = 'https://example.com/';
-    const result = await callHandler('open-url', createAuthorizedEvent(), targetUrl);
-    assert.deepEqual(result, { success: true });
+test('open-url blocks unapproved http hosts', async () => {
+    const result = await callHandler('open-url', createAuthorizedEvent(), 'https://example.com/');
+    assert.deepEqual(result, { success: false, error: 'URL host is not allowed' });
+});
+
+test('open-url allows configured DateBack and workflow hosts only', async () => {
+    const allowedUrls = [
+        'https://dateback.app/#export-guide',
+        'https://accounts.snapchat.com/v2/download-my-data',
+        'https://photos.google.com/'
+    ];
+
+    for (const targetUrl of allowedUrls) {
+        const result = await callHandler('open-url', createAuthorizedEvent(), targetUrl);
+        assert.deepEqual(result, { success: true });
+    }
 
     const shellCalls = getShellCalls();
-    assert.deepEqual(shellCalls.openExternal, [targetUrl]);
+    assert.deepEqual(shellCalls.openExternal, allowedUrls);
+});
+
+test('open-url blocks Polar and GitHub hosts from renderer IPC', async () => {
+    const blockedUrls = [
+        'https://api.polar.sh/v1/customer-portal/license-keys/validate',
+        'https://github.com/FFmpeg/FFmpeg'
+    ];
+
+    for (const targetUrl of blockedUrls) {
+        const result = await callHandler('open-url', createAuthorizedEvent(), targetUrl);
+        assert.deepEqual(result, { success: false, error: 'URL host is not allowed' });
+    }
+
+    const shellCalls = getShellCalls();
+    assert.deepEqual(shellCalls.openExternal, []);
 });
 
 test('open-external rejects unauthorized sender', async () => {
@@ -1332,12 +1525,27 @@ test('open-external blocks disallowed protocol', async () => {
 });
 
 test('open-external happy path opens external url and returns success shape', async () => {
-    const targetUrl = 'https://example.com/';
+    const targetUrl = 'https://dateback.app/';
     const result = await callHandler('open-external', createAuthorizedEvent(), targetUrl);
     assert.deepEqual(result, { success: true });
 
     const shellCalls = getShellCalls();
     assert.deepEqual(shellCalls.openExternal, [targetUrl]);
+});
+
+test('open-external allows support mailto only', async () => {
+    const result = await callHandler('open-external', createAuthorizedEvent(), 'mailto:support@dateback.app?subject=Help&body=Diagnostic%20details');
+    assert.deepEqual(result, { success: true });
+
+    const blocked = await callHandler('open-external', createAuthorizedEvent(), 'mailto:attacker@example.com');
+    assert.deepEqual(blocked, { success: false, error: 'Email recipient is not allowed' });
+    const blockedBcc = await callHandler('open-external', createAuthorizedEvent(), 'mailto:support@dateback.app?bcc=attacker@example.com');
+    assert.deepEqual(blockedBcc, { success: false, error: 'Email query parameter is not allowed' });
+    const blockedTo = await callHandler('open-external', createAuthorizedEvent(), 'mailto:support@dateback.app?to=attacker@example.com');
+    assert.deepEqual(blockedTo, { success: false, error: 'Email query parameter is not allowed' });
+
+    const shellCalls = getShellCalls();
+    assert.deepEqual(shellCalls.openExternal, ['mailto:support@dateback.app?subject=Help&body=Diagnostic%20details']);
 });
 
 test('validate-license rejects unauthorized sender', async () => {
@@ -1353,6 +1561,56 @@ test('validate-license returns connectivity failure message on request error', a
         success: false,
         valid: false,
         message: 'Failed to validate license. Please check your internet connection.'
+    });
+});
+
+test('validate-license stores only minimized non-secret license state', async () => {
+    let storedLicense = null;
+    setStoreSetImpl((key, value) => {
+        if (key === 'license') {
+            storedLicense = value;
+        }
+    });
+    setAxiosPostImpl(async () => ({
+        status: 200,
+        data: {
+            id: 'lic_123',
+            key: 'SECRET-SHOULD-NOT-PERSIST',
+            customer: { email: 'customer@example.com' },
+            status: 'active'
+        }
+    }));
+
+    const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
+
+    assert.equal(result.success, true);
+    assert.deepEqual(result.data, { id: 'lic_123', status: 'active' });
+    assert.equal(storedLicense.valid, true);
+    assert.equal(storedLicense.licenseId, 'lic_123');
+    assert.equal(storedLicense.status, 'active');
+    assert.equal(Object.prototype.hasOwnProperty.call(storedLicense, 'key'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(storedLicense, 'licenseData'), false);
+});
+
+test('get-license-status returns only minimized non-secret license state', async () => {
+    setStoreGetImpl((key) => {
+        assert.equal(key, 'license');
+        return {
+            valid: true,
+            activatedAt: '2026-05-03T12:00:00.000Z',
+            licenseId: 'lic_123',
+            status: 'active',
+            key: 'SECRET-SHOULD-NOT-RETURN',
+            licenseData: { key: 'SECRET-SHOULD-NOT-RETURN' }
+        };
+    });
+
+    const result = await callHandler('get-license-status', createAuthorizedEvent());
+
+    assert.deepEqual(result, {
+        valid: true,
+        activatedAt: '2026-05-03T12:00:00.000Z',
+        data: { id: 'lic_123', status: 'active' }
     });
 });
 

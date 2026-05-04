@@ -289,7 +289,7 @@ const buildNextStepsGuideStateHelper = rendererHelpers.buildNextStepsGuideState 
             showManualCloudUploadSection: false,
             showCloudDeliveredSection: true,
             cloudDeliveredCopy: hasErrors
-                ? 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running, then retry any corrupted files before cleaning up local space.'
+                ? 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running. Retry can redownload regular photo/video failures; overlay memories may need a fresh full run before you clean up local space.'
                 : 'Open your synced cloud folder and confirm the delivered Batch folders are present. Keep your cloud app running until it finishes syncing everything upstream.',
             cloudDeliveredFollowup: 'Keep the local working and staging folders until your cloud provider finishes. After that, you can remove local leftovers to reclaim disk space.',
             cloudFolderButtonLabel: 'Open Cloud Folder',
@@ -436,7 +436,8 @@ const buildSuccessModalCopyHelper = rendererHelpers.buildSuccessModalCopy || ((s
         : 0;
     const alreadyInDestination = Math.max(0, confirmedInDestination - copiedThisRun);
     const uploadErrorEvents = Number.isFinite(stats.upload_error_events) ? stats.upload_error_events : 0;
-    const cloudHasErrors = isCloudModeStats && Number(stats.errors || 0) > 0;
+    const hasProcessingErrors = Number(stats.errors || 0) > 0;
+    const cloudHasErrors = isCloudModeStats && hasProcessingErrors;
     const usedTrustManifest = !!stats.used_trust_manifest || (typeof stats.previously_processed === 'number' && stats.previously_processed > 0);
     const manifestTotalFiles = typeof stats.manifest_total_files === 'number' ? stats.manifest_total_files : null;
     const previousProcessed = typeof stats.previously_processed === 'number' ? stats.previously_processed : 0;
@@ -474,11 +475,14 @@ const buildSuccessModalCopyHelper = rendererHelpers.buildSuccessModalCopy || ((s
         headline = 'You are Up to Date!';
         subtext = 'No new memories found. All files in this export already exist in your destination folder.';
     }
+    if (!isCloudModeStats && hasProcessingErrors) {
+        subtext = 'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.';
+    }
     if (isCloudModeStats) {
         if (hasCloudDeliveryStats) {
             headline = 'Cloud Processing Complete!';
             if (cloudHasErrors) {
-                subtext = 'Completed with errors. You can retry corrupted files.';
+                subtext = 'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.';
             } else {
                 subtext = 'Processing and cloud delivery completed.';
             }
@@ -1461,7 +1465,7 @@ function updateSyncFolderWarning() {
 }
 
 async function chooseStagingFolderAndRefresh() {
-    const selected = await window.api.selectFolder();
+    const selected = await window.api.selectFolder('staging');
     if (selected) {
         stagingPathInput.value = selected;
         updateAutoCachePreview();
@@ -1718,7 +1722,7 @@ window.addEventListener('drop', (e) => e.preventDefault());
 
 // Browse Output
 btnBrowseOutput.addEventListener('click', async () => {
-    const path = await window.api.selectFolder();
+    const path = await window.api.selectFolder('output');
     if (path) {
         setOutputDirState(path);
         await refreshOutputDirDependentUi();
@@ -1727,7 +1731,7 @@ btnBrowseOutput.addEventListener('click', async () => {
 
 if (btnBrowseCloudWorkingRoot) {
     btnBrowseCloudWorkingRoot.addEventListener('click', async () => {
-        const path = await window.api.selectFolder();
+        const path = await window.api.selectFolder('output');
         if (path) {
             setOutputDirState(path);
             await refreshOutputDirDependentUi();
@@ -1736,7 +1740,7 @@ if (btnBrowseCloudWorkingRoot) {
 }
 
 btnBrowseDestination.addEventListener('click', async () => {
-    const selected = await window.api.selectFolder();
+    const selected = await window.api.selectFolder('destination');
     if (selected) {
         destinationPathInput.value = selected;
         updateAutoCachePreview();
@@ -3582,7 +3586,7 @@ btnRetryCorrupted.addEventListener('click', async () => {
     progressText.classList.add('processing');
     progressFill.style.width = '50%'; // Indeterminate
     progressBar.classList.remove('ready');
-    progressEta.textContent = 'DateBack is reprocessing the files that failed last time.';
+    progressEta.textContent = 'DateBack is redownloading regular photo/video failures. Overlay memories may need a fresh full run.';
 
     try {
         const outputDir = getEffectiveOutputDir();

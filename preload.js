@@ -29,12 +29,29 @@ function normalizeOptionalPath(value) {
     return trimmed;
 }
 
+function normalizeFolderPurpose(value) {
+    if (value === undefined || value === null) {
+        return 'output';
+    }
+    if (typeof value !== 'string') {
+        throw new Error('Folder purpose must be a string');
+    }
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) {
+        return 'output';
+    }
+    if (!['output', 'destination', 'staging'].includes(trimmed)) {
+        throw new Error('Folder purpose is not supported');
+    }
+    return trimmed;
+}
+
 // Expose protected methods to the renderer process
 contextBridge.exposeInMainWorld('api', {
     // File dialogs
     selectZip: () => ipcRenderer.invoke('select-zip'),
     findZip: () => ipcRenderer.invoke('find-zip'),
-    selectFolder: () => ipcRenderer.invoke('select-folder'),
+    selectFolder: (purpose) => ipcRenderer.invoke('select-folder', normalizeFolderPurpose(purpose)),
     openFolder: (path) => ipcRenderer.invoke('open-folder', requireString(path, 'Folder path')),
     openUrl: (url) => ipcRenderer.invoke('open-url', requireString(url, 'URL')),
     openExternal: (url) => ipcRenderer.invoke('open-external', requireString(url, 'URL')),

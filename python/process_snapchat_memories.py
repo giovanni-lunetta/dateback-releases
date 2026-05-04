@@ -49,6 +49,7 @@ REDIRECT_ALLOWED_HOST_SUFFIXES = ALLOWED_HOST_SUFFIXES + ("cloudfront.net",)
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2GB per file limit
 MAX_NESTED_ZIP_EXTRACT_BYTES = MAX_DOWNLOAD_BYTES
 MAX_NESTED_ZIP_ENTRY_BYTES = MAX_DOWNLOAD_BYTES
+MAX_JSON_BYTES = 100 * 1024 * 1024
 
 # Configuration
 JSON_PATH = 'mydata~1766711891202/json/memories_history.json'
@@ -76,7 +77,8 @@ ZIP_METRICS_ENABLED = str(os.environ.get("DATEBACK_DEBUG_ZIP_METRICS") or os.env
 VERIFY_PERF_DEBUG_ENABLED = str(os.environ.get("DATEBACK_DEBUG_VERIFY_PERF") or os.environ.get("DATEBACK_DEBUG", "")).lower() in ("1", "true", "yes", "on")
 RETRY_UPLOAD_DEBUG_ENABLED = str(os.environ.get("DATEBACK_DEBUG_RETRY_UPLOAD") or os.environ.get("DATEBACK_DEBUG", "")).lower() in ("1", "true", "yes", "on")
 STAGED_MEDIA_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.gif', '.mp4', '.mov', '.m4v'}
-STAGED_TEMP_SUFFIXES = ('.tmp', '.partial', '.part', '.download', '.crdownload')
+STAGED_TEMP_MARKERS = ('.tmp', '.partial', '.part', '.download', '.crdownload')
+STAGED_TEMP_SUFFIXES = STAGED_TEMP_MARKERS
 
 # CURRENT_BATCH_DIR: The active batch folder where files should be written
 # This is set dynamically during batch processing to avoid orphaned files
@@ -263,6 +265,14 @@ def is_zip_file(file_path, zip_file=None, zip_lock=None):
         print(f"   [WARNING] ZIP check failed for {os.path.basename(file_path)}: {e}", flush=True)
         return False
 
+def hostname_matches_suffix(hostname, suffix):
+    if not hostname or not suffix:
+        return False
+    normalized_host = hostname.rstrip(".").lower()
+    normalized_suffix = suffix.rstrip(".").lower()
+    return normalized_host == normalized_suffix or normalized_host.endswith("." + normalized_suffix)
+
+
 def is_allowed_download_url(url, allowed_suffixes=None):
     """
     Security: Validate download URL to prevent SSRF and malicious downloads.
@@ -280,9 +290,9 @@ def is_allowed_download_url(url, allowed_suffixes=None):
         if parsed.scheme != "https":
             return False
         
-        suffixes = allowed_suffixes or ALLOWED_HOST_SUFFIXES
+        suffixes = ALLOWED_HOST_SUFFIXES if allowed_suffixes is None else allowed_suffixes
         # Must match allowed Snapchat CDN suffixes
-        return any(hostname.endswith(suffix) for suffix in suffixes)
+        return any(hostname_matches_suffix(hostname, suffix) for suffix in suffixes)
     except Exception:
         return False
 
@@ -406,6 +416,41 @@ def zipinfo_is_symlink(member_info):
     """True when a ZipInfo entry represents a symlink."""
     unix_mode = member_info.external_attr >> 16
     return stat.S_ISLNK(unix_mode) or ((unix_mode & 0xF000) == 0xA000)
+
+
+def select_memories_history_json_member(zf):
+    """Find the one canonical Snapchat memories_history.json member in an export ZIP."""
+    candidates = []
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        normalized = os.path.normpath(info.filename.replace("\\", "/"))
+        parts = normalized.split("/")
+        if len(parts) >= 3 and parts[-2] == "json" and parts[-1] == "memories_history.json":
+            if zipinfo_is_symlink(info):
+                raise ValueError("memories_history.json cannot be a symbolic link")
+            candidates.append(info.filename)
+    if not candidates:
+        raise FileNotFoundError("Could not find 'memories_history.json' inside the ZIP.")
+    if len(candidates) > 1:
+        raise ValueError("ZIP contains multiple memories_history.json files.")
+    return candidates[0]
+
+
+def read_memories_history_json(zf, member_name):
+    """Read memories_history.json from a ZIP with symlink and size bounds."""
+    info = zf.getinfo(member_name)
+    if info.is_dir():
+        raise ValueError("memories_history.json must be a regular file")
+    if zipinfo_is_symlink(info):
+        raise ValueError("memories_history.json cannot be a symbolic link")
+    if info.file_size < 0 or info.file_size > MAX_JSON_BYTES:
+        raise ValueError("memories_history.json is too large")
+    with zf.open(info) as jf:
+        payload = jf.read(MAX_JSON_BYTES + 1)
+    if len(payload) > MAX_JSON_BYTES:
+        raise ValueError("memories_history.json is too large")
+    return json.loads(payload.decode("utf-8"))
 
 
 def safe_extract(zf, extract_dir):
@@ -584,7 +629,7 @@ def is_staged_media_file(path_value):
     if not base_name or base_name.startswith('.'):
         return False
     lower_name = base_name.lower()
-    if lower_name.endswith(STAGED_TEMP_SUFFIXES):
+    if any(marker in lower_name for marker in STAGED_TEMP_MARKERS):
         return False
     ext = os.path.splitext(lower_name)[1]
     return ext in STAGED_MEDIA_EXTENSIONS
@@ -872,7 +917,7 @@ class AutoUploadManager:
         os.makedirs(self.staging_dir, exist_ok=True)
         self.adapter.prepare()
         # Initialize counters from one staging scan at startup.
-        files = list_files_recursive(self.staging_dir)
+        files = [path for path in list_files_recursive(self.staging_dir) if is_staged_media_file(path)]
         with self._lock:
             self._tracked_files = set(files)
             self._staged_count = len(files)
@@ -953,6 +998,8 @@ class AutoUploadManager:
     def recover_pending(self):
         recovered = 0
         for staged_path in list_files_recursive(self.staging_dir):
+            if not is_staged_media_file(staged_path):
+                continue
             file_size = 0
             try:
                 file_size = os.path.getsize(staged_path)
@@ -1262,11 +1309,44 @@ def atomic_write_stream_to_file(write_func, dst_path):
                 pass
 
 
+def get_with_validated_redirects(session, url, timeout=60, stream=True, max_redirects=5):
+    """Fetch a URL with redirects disabled, validating each target before following."""
+    current_url = url
+    redirect_statuses = (301, 302, 303, 307, 308)
+    for _ in range(max_redirects + 1):
+        if not is_allowed_download_url(current_url, REDIRECT_ALLOWED_HOST_SUFFIXES):
+            raise ValueError(f"Blocked redirect target: {current_url}")
+        response = session.get(
+            current_url,
+            timeout=timeout,
+            stream=stream,
+            allow_redirects=False,
+        )
+        if response.status_code not in redirect_statuses:
+            return response
+        location = response.headers.get("Location")
+        if not location:
+            close_response = getattr(response, "close", None)
+            if close_response:
+                close_response()
+            raise ValueError("Redirect response missing Location header")
+        next_url = requests.compat.urljoin(current_url, location)
+        if not is_allowed_download_url(next_url, REDIRECT_ALLOWED_HOST_SUFFIXES):
+            close_response = getattr(response, "close", None)
+            if close_response:
+                close_response()
+            raise ValueError(f"Blocked redirect target: {next_url}")
+        close_response = getattr(response, "close", None)
+        if close_response:
+            close_response()
+        current_url = next_url
+    raise ValueError("Too many redirects while downloading media")
+
+
 def stream_download_to_path(download_url, temp_path, timeout=60):
     """Stream a Snapchat media download to disk with redirect and size validation."""
     session = get_requests_session()
-    with session.get(download_url, timeout=timeout, stream=True, allow_redirects=True) as response:
-        validate_download_redirect_chain(response)
+    with get_with_validated_redirects(session, download_url, timeout=timeout, stream=True) as response:
         if response.status_code in (403, 410):
             raise ExpiredDownloadLinkError(f"Download link expired (HTTP {response.status_code})")
 
@@ -1375,6 +1455,40 @@ def resolve_retry_display_name(entry, fallback_index):
     return f"memory_{fallback_index + 1}"
 
 
+def parse_snapchat_utc_timestamp(date_str):
+    dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
+    return dt.replace(tzinfo=timezone.utc).timestamp()
+
+
+def apply_retry_timestamp(path_value, date_str):
+    ts_epoch = parse_snapchat_utc_timestamp(date_str)
+    os.utime(path_value, (ts_epoch, ts_epoch))
+    return ts_epoch
+
+
+def retry_entry_has_overlay_source_metadata(entry):
+    """True when a report entry carries enough source metadata for overlay reconstruction."""
+    return any(entry.get(key) for key in (
+        "zip_member",
+        "source_zip_member",
+        "main_member",
+        "overlay_member",
+        "overlay_metadata",
+    ))
+
+
+def retry_entry_may_require_overlay_metadata(entry):
+    """Detect entries likely produced by overlay ZIP processing without inventing metadata."""
+    text_parts = [
+        entry.get("file"),
+        entry.get("reason"),
+        entry.get("retry_reason"),
+        entry.get("media_type"),
+    ]
+    text = " ".join(str(part).lower() for part in text_parts if part)
+    return "overlay" in text or ".zip" in text or "bad zip file" in text or "no main file in zip" in text
+
+
 def resolve_total_accounted_for_verification(logical_processed_before_run, current_results_count):
     """Combine skipped logical progress with this run's report entries."""
     prior_count = logical_processed_before_run if isinstance(logical_processed_before_run, int) and logical_processed_before_run >= 0 else 0
@@ -1403,7 +1517,19 @@ def resolve_auto_upload_retry_batch_dir(staging_dir, destination_dir, upload_led
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
 
-def save_batch_progress(batch_num, total_batches, total_files=None, processed_indices=None, zip_fingerprint=None, output_dir=None, icloud_mode=None, actual_file_count=None, batch_completed=True):
+def save_batch_progress(
+    batch_num,
+    total_batches,
+    total_files=None,
+    processed_indices=None,
+    zip_fingerprint=None,
+    output_dir=None,
+    icloud_mode=None,
+    actual_file_count=None,
+    batch_completed=True,
+    raise_on_error=False,
+    progress_callback=None,
+):
     """Save batch progress to disk without treating partial batches as completed."""
     try:
         overall_start = time.perf_counter()
@@ -1446,6 +1572,15 @@ def save_batch_progress(batch_num, total_batches, total_files=None, processed_in
         )
     except Exception as e:
         print(f"Warning: Could not save batch progress: {e}", flush=True)
+        if raise_on_error:
+            emit_processing_event(
+                progress_callback,
+                "processing_fatal",
+                message="Could not save resume manifest.",
+                last_error=str(e),
+                path=get_batch_progress_file(),
+            )
+            raise
 
 def load_batch_progress():
     """Load the last batch progress. Returns the batch number to start from (0-indexed)."""
@@ -2084,8 +2219,7 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
              
              if not os.path.exists(dl_path) or (remote_size is not None and os.path.getsize(dl_path) != remote_size):
                  session = get_requests_session()
-                 with session.get(download_url, stream=True, timeout=30, allow_redirects=True) as r:
-                     validate_download_redirect_chain(r)
+                 with get_with_validated_redirects(session, download_url, timeout=30, stream=True) as r:
                      if r.status_code == 403 or r.status_code == 410:
                          with expired_link_lock:
                              expired_link_counter += 1
@@ -2946,7 +3080,9 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                     output_dir=OUTPUT_DIR,
                     icloud_mode=pause_batches,
                     actual_file_count=total_files_organized,
-                    batch_completed=False
+                    batch_completed=False,
+                    raise_on_error=bool(trust_manifest or auto_upload),
+                    progress_callback=progress_callback,
                 )
                 print(f"   ✓ Manifest saved: {total_files_organized} files processed.", flush=True)
                 
@@ -3004,7 +3140,9 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             zip_fingerprint=zip_fingerprint,
             output_dir=OUTPUT_DIR,
             icloud_mode=pause_batches,
-            actual_file_count=total_files_organized  # Pass actual file count (includes duplicates)
+            actual_file_count=total_files_organized,  # Pass actual file count (includes duplicates)
+            raise_on_error=bool(trust_manifest or auto_upload),
+            progress_callback=progress_callback,
         )
 
         if ABORT_PROCESSING.is_set():
@@ -3298,20 +3436,9 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
         
         with zipfile.ZipFile(zip_path, 'r') as zf:
             # 2. Find JSON
-            json_path_in_zip = None
-            for name in zf.namelist():
-                if name.endswith('memories_history.json'):
-                    json_path_in_zip = name
-                    break
-            
-            if not json_path_in_zip:
-                raise FileNotFoundError("Could not find 'memories_history.json' inside the ZIP.")
-                
+            json_path_in_zip = select_memories_history_json_member(zf)
             print(f"Found JSON in ZIP at: {json_path_in_zip}", flush=True)
-            
-            # Read JSON directly from ZIP
-            with zf.open(json_path_in_zip) as jf:
-                json_content = json.load(jf)
+            json_content = read_memories_history_json(zf, json_path_in_zip)
             
             # Temporary fix: set_config expects a PATH for json, but we have content.
             # We will handle this by passing the content or a dummy path?
@@ -3496,9 +3623,11 @@ def retry_failed_entries(
 
                 print(f"  [{idx + 1}/{total}] Retrying {original_file}...", flush=True)
 
+                can_restore_retry_timestamp = False
                 try:
                     dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
                     timestamp_name = dt.strftime('%Y-%m-%d_%H-%M-%S')
+                    can_restore_retry_timestamp = True
                 except ValueError:
                     timestamp_name = date_str.replace(':', '-').replace(' ', '_')
 
@@ -3585,6 +3714,33 @@ def retry_failed_entries(
                     stats['errors'] += 1
                     results.append({**entry, 'retry_status': 'Error', 'retry_reason': f'Download error: {e}'})
                     continue
+
+                if is_zip_file(output_path):
+                    overlay_reason = (
+                        "Overlay retry unavailable: retry reports do not preserve enough source ZIP/overlay metadata "
+                        "to reconstruct overlay media safely."
+                    )
+                    try:
+                        safe_delete(output_path, output_dir)
+                    except Exception:
+                        pass
+                    print(f"  ⚠️ {overlay_reason}", flush=True)
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': overlay_reason})
+                    continue
+
+                if retry_entry_may_require_overlay_metadata(entry) and not retry_entry_has_overlay_source_metadata(entry):
+                    print(
+                        "  ⚠️ Overlay retry note: detailed_report.json does not include source ZIP/overlay members; "
+                        "retry can only redownload flat media.",
+                        flush=True
+                    )
+
+                if can_restore_retry_timestamp:
+                    try:
+                        apply_retry_timestamp(output_path, date_str)
+                    except OSError as e:
+                        print(f"  ⚠️ Could not restore original timestamp: {e}", flush=True)
 
                 if upload_manager:
                     upload_manager.enqueue(output_path)

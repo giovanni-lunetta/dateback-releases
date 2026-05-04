@@ -211,6 +211,42 @@ test('success modal copy: cloud mode with delivery stats sets cloud headline/sub
     assert.equal(summary.alreadyInDestination, 10);
 });
 
+test('success modal copy: cloud mode with errors documents retry limits', () => {
+    const summary = helpers.buildSuccessModalCopy({
+        auto_upload: true,
+        success: 100,
+        errors: 2,
+        images: 50,
+        videos: 50,
+        upload_confirmed_in_destination: 98,
+        upload_copied_this_run: 90,
+        upload_error_events: 2
+    });
+
+    assert.equal(summary.headline, 'Cloud Processing Complete!');
+    assert.equal(
+        summary.subtext,
+        'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.'
+    );
+});
+
+test('success modal copy: computer mode with errors documents retry limits', () => {
+    const summary = helpers.buildSuccessModalCopy({
+        auto_upload: false,
+        success: 12,
+        duplicates: 3,
+        errors: 1,
+        images: 6,
+        videos: 6
+    });
+
+    assert.equal(summary.headline, 'Processing Complete!');
+    assert.equal(
+        summary.subtext,
+        'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.'
+    );
+});
+
 test('success modal rows: non-cloud includes skipped row and duplicate note', () => {
     const stats = {
         auto_upload: false,
@@ -242,6 +278,16 @@ test('next steps guide state: cloud mode hides manual upload guidance and switch
     assert.equal(state.storageTipButtonLabel, 'Open Working Folder');
     assert.ok(state.intro.includes('synced cloud folder'));
     assert.ok(state.storageTipText.includes('local working folder'));
+});
+
+test('next steps guide state: cloud errors document retry limits', () => {
+    const state = helpers.buildNextStepsGuideState({
+        auto_upload: true,
+        errors: 1
+    });
+
+    assert.ok(state.cloudDeliveredCopy.includes('Retry can redownload regular photo/video failures'));
+    assert.ok(state.cloudDeliveredCopy.includes('overlay memories may need a fresh full run'));
 });
 
 test('next steps guide state: computer mode keeps local/manual guidance and output cleanup copy', () => {

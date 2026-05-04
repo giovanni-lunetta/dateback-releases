@@ -147,7 +147,7 @@ class BatchResumeLogicTests(unittest.TestCase):
             (staging_root / "Batch_01" / "b.jpg").write_text("x")
             (staging_root / "Batch_02" / "c.jpg").write_text("x")
             (staging_root / "Batch_03" / "d.jpg").write_text("x")
-            (staging_root / "loose.tmp").write_text("x")
+            (staging_root / "loose.jpg").write_text("x")
 
             scan = scan_existing_batch_root(str(staging_root), batch_size=2)
 
@@ -158,6 +158,20 @@ class BatchResumeLogicTests(unittest.TestCase):
             self.assertEqual(scan["batch_folders"], ["Batch_01", "Batch_02", "Batch_03"])
             self.assertEqual(scan["highest_existing_batch_num"], 2)
             self.assertEqual(scan["next_available_batch"], 3)
+
+    def test_scan_existing_batch_root_ignores_staged_temp_suffixes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_root = Path(temp_dir) / "staging"
+            batch_dir = staging_root / "Batch_01"
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "real.jpg").write_text("x")
+            (batch_dir / "real.jpg.tmp.abcd").write_text("x")
+            (batch_dir / "upload.partial").write_text("x")
+
+            scan = scan_existing_batch_root(str(staging_root), batch_size=500)
+
+            self.assertEqual(scan["existing_batch_files"], 1)
+            self.assertEqual(scan["files_in_incomplete_batch"], 1)
 
     def test_scan_existing_batch_roots_merges_staging_and_destination_batch_counts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
