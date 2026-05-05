@@ -1650,7 +1650,7 @@ def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, outp
             # Count slashes: /Volumes/USB = 2 slashes (root), /Volumes/USB/folder = 3+ slashes (subfolder)
             if abs_output.count('/') <= 2:
                 drive_name = os.path.basename(abs_output)
-                raise ValueError(f"Cannot use external drive root. Please create a subfolder (e.g., /Volumes/{drive_name}/MemSavr_Output)")
+                raise ValueError(f"Cannot use external drive root. Please create a subfolder (e.g., /Volumes/{drive_name}/DateBack_Output)")
 
         OUTPUT_DIR = abs_output
 
@@ -1746,7 +1746,7 @@ def check_space_and_wait(path, min_gb=None, resume_gb=None):
             print(f"   👉 iCloud: macOS should optimize automatically. Check System Settings.", flush=True)
             print(f"   ------------------------------------------------", flush=True)
             print(f"   Target to Resume: > {resume_gb} GB free space.", flush=True)
-            print(f"   MemSavr is waiting and checking space every {POLL_INTERVAL_SEC} seconds...", flush=True)
+            print(f"   DateBack is waiting and checking space every {POLL_INTERVAL_SEC} seconds...", flush=True)
             
             # Sub-loop to wait for Resume Threshold
             while True:
@@ -2784,7 +2784,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         if abs_output.startswith('/Volumes/'):
             if abs_output.count('/') <= 2:
                 drive_name = os.path.basename(abs_output)
-                raise ValueError(f"Cannot use external drive root. Please create a subfolder (e.g., /Volumes/{drive_name}/MemSavr_Output)")
+                raise ValueError(f"Cannot use external drive root. Please create a subfolder (e.g., /Volumes/{drive_name}/DateBack_Output)")
         
         if os.path.exists(OUTPUT_DIR):
             shutil.rmtree(OUTPUT_DIR)
