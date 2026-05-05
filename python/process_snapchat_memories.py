@@ -3465,9 +3465,10 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # Count entries in detailed report for comparison
     report_success_entries = sum(1 for r in results if r.get('status') == 'Success')
     total_accounted = resolve_total_accounted_for_verification(logical_processed_before_run, len(results))
+    unrecoverable_count = missing_count + skipped_count
 
     print(f"   Total memories from export: {manifest_total_files}", flush=True)
-    print(f"   Total accounted for: {total_accounted} (Success={success_count}, Duplicates={duplicate_count}, Errors={error_count})", flush=True)
+    print(f"   Total reviewed: {total_accounted} (Success={success_count}, Duplicates={duplicate_count}, Missing={missing_count}, Skipped={skipped_count}, Errors={error_count})", flush=True)
 
     # Check for timestamp collisions (same filename from different memories)
     if report_success_entries > success_count:
@@ -3476,7 +3477,19 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         print(f"         The later file overwrote the earlier one. Both are in the report.", flush=True)
 
     if total_accounted == manifest_total_files:
-        print(f"   ✅ All {manifest_total_files} memories accounted for!", flush=True)
+        if unrecoverable_count > 0:
+            noun = "memory" if unrecoverable_count == 1 else "memories"
+            print(f"   ⚠️  {unrecoverable_count} {noun} could not be recovered from this export.", flush=True)
+            print(f"      DateBack reviewed all {manifest_total_files} metadata rows, but only saved {success_count} files.", flush=True)
+            if missing_count > 0:
+                print(f"      Missing={missing_count}: no usable local media file or download URL.", flush=True)
+            if skipped_count > 0:
+                print(f"      Skipped={skipped_count}: incomplete or invalid metadata prevented processing.", flush=True)
+        elif error_count > 0:
+            noun = "memory" if error_count == 1 else "memories"
+            print(f"   ⚠️  All {manifest_total_files} metadata rows were reviewed, but {error_count} {noun} ended with errors.", flush=True)
+        else:
+            print(f"   ✅ All {manifest_total_files} memories recovered!", flush=True)
     else:
         diff = manifest_total_files - total_accounted
         if diff > 0:

@@ -1,9 +1,11 @@
 import json
 import os
 import sys
+import io
 import tempfile
 import unittest
 import zipfile
+import contextlib
 from pathlib import Path
 from unittest import mock
 
@@ -413,6 +415,43 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
                 (Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-05-07.mp4").read_bytes(),
                 b"video-bytes",
             )
+
+    def test_process_from_zip_warns_when_metadata_rows_have_no_media_or_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            image_id = "11111111-1111-4111-8111-111111111111"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:04:05 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                },
+                {
+                    "Date": "2025-05-06 07:08:09 UTC",
+                    "Media Type": "Video",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                },
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+
+                image_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-main.jpg")
+                image_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(image_info, b"image-bytes")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            self.assertEqual(stats["missing"], 1)
+            self.assertNotIn("All 2 memories accounted for", stdout.getvalue())
+            self.assertIn("1 memory could not be recovered from this export", stdout.getvalue())
 
     def test_recover_pending_ignores_stale_temp_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

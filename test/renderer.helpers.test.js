@@ -247,6 +247,35 @@ test('success modal copy: computer mode with errors documents retry limits', () 
     );
 });
 
+test('success modal copy: missing export media is presented as partial recovery', () => {
+    const stats = {
+        auto_upload: false,
+        success: 1029,
+        duplicates: 1,
+        missing: 2907,
+        skipped: 0,
+        errors: 0,
+        images: 613,
+        videos: 416,
+        manifest_total_files: 3937,
+        report_success_count: 1029,
+        actual_files_on_disk: 1029
+    };
+
+    const summary = helpers.buildSuccessModalCopy(stats);
+    const rows = helpers.buildSuccessModalRows(stats, summary);
+    const notes = rows.filter((item) => item.type === 'note').map((item) => item.text);
+
+    assert.equal(summary.headline, 'Partial Export Processed');
+    assert.equal(summary.subtext, 'Saved 1,029 files. 2,907 memories were missing media in this Snapchat export.');
+    assert.deepEqual(
+        rows.filter((item) => item.type === 'row' && item.label === 'Unavailable in Export:').map((item) => item.value),
+        ['2,907']
+    );
+    assert.ok(notes.includes('⚠️ 2,907 memories did not include local media files or download URLs in this Snapchat export.'));
+    assert.equal(notes.some((text) => text.includes('All 3,937 memories accounted for')), false);
+});
+
 test('success modal rows: non-cloud includes skipped row and duplicate note', () => {
     const stats = {
         auto_upload: false,

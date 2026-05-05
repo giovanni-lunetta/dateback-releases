@@ -217,6 +217,10 @@
         const alreadyInDestination = Math.max(0, confirmedInDestination - copiedThisRun);
         const uploadErrorEvents = Number.isFinite(stats.upload_error_events) ? stats.upload_error_events : 0;
         const hasProcessingErrors = Number(stats.errors || 0) > 0;
+        const missingCount = Number(stats.missing || 0);
+        const skippedMetadataCount = Number(stats.skipped || 0);
+        const unavailableCount = missingCount;
+        const unrecoverableCount = missingCount + skippedMetadataCount;
         const cloudHasErrors = isCloudModeStats && hasProcessingErrors;
 
         const usedTrustManifest = !!stats.used_trust_manifest || (typeof stats.previously_processed === 'number' && stats.previously_processed > 0);
@@ -229,7 +233,7 @@
             ? stats.manifest_processed_count
             : previousProcessed + currentRunNew;
 
-        const total = usedTrustManifest && manifestTotalFiles ? manifestTotalFiles : stats.success + stats.duplicates + stats.errors + (stats.skipped || 0);
+        const total = usedTrustManifest && manifestTotalFiles ? manifestTotalFiles : stats.success + stats.duplicates + stats.errors + unrecoverableCount;
         const newCount = usedTrustManifest ? currentRunNew : stats.success;
         const skippedCount = stats.duplicates;
         const displayTotal = manifestTotalFiles || total;
@@ -259,7 +263,20 @@
             subtext = 'No new memories found. All files in this export already exist in your destination folder.';
         }
 
-        if (!isCloudModeStats && hasProcessingErrors) {
+        if (!isCloudModeStats && unrecoverableCount > 0) {
+            const unrecoverableText = unrecoverableCount.toLocaleString();
+            if (newCount > 0) {
+                headline = 'Partial Export Processed';
+                if (missingCount > 0 && skippedMetadataCount === 0) {
+                    subtext = `Saved ${newCount.toLocaleString()} files. ${unrecoverableText} memories were missing media in this Snapchat export.`;
+                } else {
+                    subtext = `Saved ${newCount.toLocaleString()} files. ${unrecoverableText} memories could not be recovered from this export.`;
+                }
+            } else {
+                headline = 'No Recoverable Media Found';
+                subtext = `${unrecoverableText} memories were listed, but this export did not include recoverable media.`;
+            }
+        } else if (!isCloudModeStats && hasProcessingErrors) {
             subtext = 'Completed with errors. Retry can redownload regular photo/video files; overlay memories may need a fresh full run.';
         }
 
@@ -295,6 +312,10 @@
             total,
             newCount,
             skippedCount,
+            missingCount,
+            skippedMetadataCount,
+            unavailableCount,
+            unrecoverableCount,
             displayTotal,
             headline,
             subtext
@@ -402,6 +423,36 @@
         }
 
         if (!summary.isCloudModeStats) {
+            if (summary.unavailableCount > 0) {
+                items.push({
+                    type: 'row',
+                    label: 'Unavailable in Export:',
+                    value: summary.unavailableCount.toLocaleString(),
+                    valueClass: 'orange',
+                    isDivider: true
+                });
+                items.push({
+                    type: 'note',
+                    noteClass: 'warning',
+                    text: `⚠️ ${summary.unavailableCount.toLocaleString()} memories did not include local media files or download URLs in this Snapchat export.`,
+                    style: null
+                });
+            }
+            if (summary.skippedMetadataCount > 0) {
+                items.push({
+                    type: 'row',
+                    label: 'Skipped Rows:',
+                    value: summary.skippedMetadataCount.toLocaleString(),
+                    valueClass: 'orange',
+                    isDivider: true
+                });
+                items.push({
+                    type: 'note',
+                    noteClass: 'warning',
+                    text: `⚠️ ${summary.skippedMetadataCount.toLocaleString()} memories had incomplete or invalid metadata and were skipped.`,
+                    style: null
+                });
+            }
             items.push({
                 type: 'row',
                 label: 'Already Existed (Skipped):',
@@ -441,7 +492,7 @@
             });
         }
 
-        if (summary.manifestTotalFiles && !summary.isCloudModeStats) {
+        if (summary.manifestTotalFiles && !summary.isCloudModeStats && summary.unrecoverableCount === 0) {
             const totalAccountedFor = cumulativeSuccessCount + stats.duplicates + stats.errors;
             if (totalAccountedFor === summary.manifestTotalFiles) {
                 items.push({

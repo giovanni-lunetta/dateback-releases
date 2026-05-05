@@ -2832,6 +2832,17 @@ textarea {
     text-align: center;
 }
 
+.stat-note.warning {
+    background: rgba(255, 184, 77, 0.14);
+    border: 1px solid var(--accent-primary);
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--accent-primary);
+    text-align: center;
+}
+
 .next-steps {
     margin-bottom: 20px;
 }
