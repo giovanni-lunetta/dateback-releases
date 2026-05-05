@@ -14,9 +14,6 @@ function bootstrapMainForTests() {
     const sentIpcMessages = [];
     let dialogOpenResult = { filePaths: [] };
     const messageBoxCalls = [];
-    let axiosPostImpl = async () => {
-        throw new Error('Forced axios failure');
-    };
     const shellCalls = {
         openPath: [],
         openExternal: [],
@@ -106,16 +103,6 @@ function bootstrapMainForTests() {
         quitAndInstall: () => { }
     };
 
-    let storeGetImpl = () => undefined;
-    let storeSetImpl = () => { };
-    let storeDeleteImpl = () => { };
-
-    class StoreStub {
-        get(key) { return storeGetImpl(key); }
-        set(key, value) { return storeSetImpl(key, value); }
-        delete(key) { return storeDeleteImpl(key); }
-    }
-
     class LoggerStub {
         getLogDirectory() { return '/tmp/dateback-test-logs'; }
         info() { }
@@ -136,8 +123,6 @@ function bootstrapMainForTests() {
     Module._load = function patchedLoad(request, parent, isMain) {
         if (request === 'electron') return electronStub;
         if (request === 'electron-updater') return { autoUpdater: autoUpdaterStub };
-        if (request === 'electron-store') return StoreStub;
-        if (request === 'axios') return { post: (...args) => axiosPostImpl(...args) };
         if (request === './src/logger') return LoggerStub;
         if (request === './src/supportLogs') return SupportLogsStub;
         if (request === 'dotenv') return { config: () => ({}) };
@@ -166,23 +151,6 @@ function bootstrapMainForTests() {
         }),
         setDialogOpenResult: (result) => {
             dialogOpenResult = result;
-        },
-        setAxiosPostImpl: (impl) => {
-            axiosPostImpl = impl;
-        },
-        setStoreGetImpl: (impl) => {
-            storeGetImpl = impl;
-        },
-        setStoreSetImpl: (impl) => {
-            storeSetImpl = impl;
-        },
-        setStoreDeleteImpl: (impl) => {
-            storeDeleteImpl = impl;
-        },
-        resetStoreImpls: () => {
-            storeGetImpl = () => undefined;
-            storeSetImpl = () => { };
-            storeDeleteImpl = () => { };
         },
         getLatestMenuTemplate: () => latestMenuTemplate,
         getMessageBoxCalls: () => messageBoxCalls.map((args) => [...args]),
@@ -260,29 +228,6 @@ function cleanupTmp(paths) {
     }
 }
 
-async function withEnv(overrides, callback) {
-    const previous = new Map();
-    for (const [key, value] of Object.entries(overrides)) {
-        previous.set(key, process.env[key]);
-        if (value === undefined) {
-            delete process.env[key];
-        } else {
-            process.env[key] = value;
-        }
-    }
-    try {
-        return await callback();
-    } finally {
-        for (const [key, value] of previous.entries()) {
-            if (value === undefined) {
-                delete process.env[key];
-            } else {
-                process.env[key] = value;
-            }
-        }
-    }
-}
-
 function makeSpawnRecorder() {
     const calls = [];
     const procs = [];
@@ -314,7 +259,7 @@ async function approveFolderSelection(targetPath, purpose) {
     assert.equal(selected, targetPath);
 }
 
-const { handlers, createAuthorizedEvent, setDialogOpenResult, setAxiosPostImpl, setStoreGetImpl, setStoreSetImpl, setStoreDeleteImpl, resetStoreImpls, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, getSentIpcMessages, resetSentIpcMessages, restoreEnv } = bootstrapMainForTests();
+const { handlers, createAuthorizedEvent, setDialogOpenResult, getLatestMenuTemplate, getMessageBoxCalls, resetMessageBoxCalls, getShellCalls, resetShellCalls, getSentIpcMessages, resetSentIpcMessages, restoreEnv } = bootstrapMainForTests();
 
 function killLeakedCaffeinateProcesses() {
     const handles = typeof process._getActiveHandles === 'function' ? process._getActiveHandles() : [];
@@ -338,13 +283,9 @@ function killLeakedCaffeinateProcesses() {
 test.afterEach(() => {
     delete globalThis.__DATEBACK_MAIN_TEST_OVERRIDES;
     setDialogOpenResult({ filePaths: [] });
-    setAxiosPostImpl(async () => {
-        throw new Error('Forced axios failure');
-    });
     resetMessageBoxCalls();
     resetShellCalls();
     resetSentIpcMessages();
-    resetStoreImpls();
     killLeakedCaffeinateProcesses();
 });
 
@@ -1500,9 +1441,8 @@ test('open-url allows configured DateBack and workflow hosts only', async () => 
     assert.deepEqual(shellCalls.openExternal, allowedUrls);
 });
 
-test('open-url blocks Polar and GitHub hosts from renderer IPC', async () => {
+test('open-url blocks GitHub hosts from renderer IPC', async () => {
     const blockedUrls = [
-        'https://api.polar.sh/v1/customer-portal/license-keys/validate',
         'https://github.com/FFmpeg/FFmpeg'
     ];
 
@@ -1548,152 +1488,8 @@ test('open-external allows support mailto only', async () => {
     assert.deepEqual(shellCalls.openExternal, ['mailto:support@dateback.app?subject=Help&body=Diagnostic%20details']);
 });
 
-test('validate-license rejects unauthorized sender', async () => {
-    await expectUnauthorized('validate-license', 'ABC-123', { success: false, valid: false, message: 'Unauthorized sender' });
-});
-
-test('validate-license returns connectivity failure message on request error', async () => {
-    setAxiosPostImpl(async () => {
-        throw new Error('Deterministic network failure');
-    });
-    const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
-    assert.deepEqual(result, {
-        success: false,
-        valid: false,
-        message: 'Failed to validate license. Please check your internet connection.'
-    });
-});
-
-test('validate-license stores only minimized non-secret license state', async () => {
-    let storedLicense = null;
-    setStoreSetImpl((key, value) => {
-        if (key === 'license') {
-            storedLicense = value;
-        }
-    });
-    setAxiosPostImpl(async () => ({
-        status: 200,
-        data: {
-            id: 'lic_123',
-            key: 'SECRET-SHOULD-NOT-PERSIST',
-            customer: { email: 'customer@example.com' },
-            status: 'active'
-        }
-    }));
-
-    const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
-
-    assert.equal(result.success, true);
-    assert.deepEqual(result.data, { id: 'lic_123', status: 'active' });
-    assert.equal(storedLicense.valid, true);
-    assert.equal(storedLicense.licenseId, 'lic_123');
-    assert.equal(storedLicense.status, 'active');
-    assert.equal(Object.prototype.hasOwnProperty.call(storedLicense, 'key'), false);
-    assert.equal(Object.prototype.hasOwnProperty.call(storedLicense, 'licenseData'), false);
-});
-
-test('get-license-status returns only minimized non-secret license state', async () => {
-    setStoreGetImpl((key) => {
-        assert.equal(key, 'license');
-        return {
-            valid: true,
-            activatedAt: '2026-05-03T12:00:00.000Z',
-            licenseId: 'lic_123',
-            status: 'active',
-            key: 'SECRET-SHOULD-NOT-RETURN',
-            licenseData: { key: 'SECRET-SHOULD-NOT-RETURN' }
-        };
-    });
-
-    const result = await callHandler('get-license-status', createAuthorizedEvent());
-
-    assert.deepEqual(result, {
-        valid: true,
-        activatedAt: '2026-05-03T12:00:00.000Z',
-        data: { id: 'lic_123', status: 'active' }
-    });
-});
-
-test('validate-license default config targets production Polar endpoint and fallback org', async () => {
-    await withEnv({
-        DATEBACK_POLAR_ENV: undefined,
-        POLAR_ORG_ID: undefined,
-        POLAR_ORG_ID_SANDBOX: undefined
-    }, async () => {
-        let capturedUrl = null;
-        let capturedBody = null;
-        let capturedConfig = null;
-        setAxiosPostImpl(async (url, body, config) => {
-            capturedUrl = url;
-            capturedBody = body;
-            capturedConfig = config;
-            return { status: 200, data: { id: 'lic_prod_1' } };
-        });
-
-        const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
-        assert.equal(result.success, true);
-        assert.equal(result.valid, true);
-        assert.equal(capturedUrl, 'https://api.polar.sh/v1/customer-portal/license-keys/validate');
-        assert.deepEqual(capturedBody, {
-            key: 'ABC-123',
-            organization_id: '4fee54f8-96c3-4302-8c3f-e71fd47da3fb'
-        });
-        assert.deepEqual(capturedConfig?.headers, {
-            Accept: 'application/json',
-            'Content-Type': 'application/json'
-        });
-        assert.equal(capturedConfig?.timeout, 15000);
-    });
-});
-
-test('validate-license sandbox env falls back to production unless allow flag is enabled', async () => {
-    await withEnv({
-        DATEBACK_POLAR_ENV: 'sandbox',
-        DATEBACK_ALLOW_SANDBOX: undefined,
-        POLAR_ORG_ID: undefined,
-        POLAR_ORG_ID_SANDBOX: 'sandbox-org-id'
-    }, async () => {
-        let capturedUrl = null;
-        let capturedBody = null;
-        setAxiosPostImpl(async (url, body) => {
-            capturedUrl = url;
-            capturedBody = body;
-            return { status: 200, data: { id: 'lic_prod_guard_1' } };
-        });
-
-        const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
-        assert.equal(result.success, true);
-        assert.equal(result.valid, true);
-        assert.equal(capturedUrl, 'https://api.polar.sh/v1/customer-portal/license-keys/validate');
-        assert.deepEqual(capturedBody, {
-            key: 'ABC-123',
-            organization_id: '4fee54f8-96c3-4302-8c3f-e71fd47da3fb'
-        });
-    });
-});
-
-test('validate-license sandbox mode targets sandbox Polar endpoint and sandbox org id when allow flag is set', async () => {
-    await withEnv({
-        DATEBACK_POLAR_ENV: 'sandbox',
-        DATEBACK_ALLOW_SANDBOX: '1',
-        POLAR_ORG_ID: 'prod-org-id',
-        POLAR_ORG_ID_SANDBOX: 'sandbox-org-id'
-    }, async () => {
-        let capturedUrl = null;
-        let capturedBody = null;
-        setAxiosPostImpl(async (url, body) => {
-            capturedUrl = url;
-            capturedBody = body;
-            return { status: 200, data: { id: 'lic_sandbox_1' } };
-        });
-
-        const result = await callHandler('validate-license', createAuthorizedEvent(), 'ABC-123');
-        assert.equal(result.success, true);
-        assert.equal(result.valid, true);
-        assert.equal(capturedUrl, 'https://sandbox-api.polar.sh/v1/customer-portal/license-keys/validate');
-        assert.deepEqual(capturedBody, {
-            key: 'ABC-123',
-            organization_id: 'sandbox-org-id'
-        });
-    });
+test('free build does not register license activation IPC handlers', () => {
+    assert.equal(handlers.has('validate-license'), false);
+    assert.equal(handlers.has('get-license-status'), false);
+    assert.equal(handlers.has('clear-license'), false);
 });

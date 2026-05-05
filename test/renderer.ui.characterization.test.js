@@ -208,6 +208,21 @@ test('renderer.js stores the onLogsExported cleanup function', () => {
     );
 });
 
+test('renderer free build does not call license activation APIs', () => {
+    const rendererSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8'
+    );
+    const htmlSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'index.html'), 'utf8'
+    );
+
+    assert.equal(rendererSrc.includes('getLicenseStatus'), false);
+    assert.equal(rendererSrc.includes('validateLicense'), false);
+    assert.equal(rendererSrc.includes('license-key-input'), false);
+    assert.equal(htmlSrc.includes('license-modal'), false);
+    assert.equal(htmlSrc.includes('license-key-input'), false);
+});
+
 test('updateAutoUploadUiState glue: CLOUD mode running', () => {
     const { context, elements, calls } = buildUiStateContext({
         mode: 'CLOUD',

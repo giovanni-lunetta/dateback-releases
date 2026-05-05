@@ -4,7 +4,7 @@
 
 ### Overview
 
-All releases are patch/minor bumps on `main`. No release branches. The GitHub remote is `giovanni-lunetta/dateback-releases` (private). The website repo is separate and its changes must never be committed/pushed by the release agent — leave them uncommitted and report the diff.
+All releases are patch/minor bumps on `main`. No release branches. The GitHub remote is `giovanni-lunetta/dateback-releases` and production releases must be publicly downloadable. The website repo is separate and its changes must never be committed/pushed by the release agent — leave them uncommitted and report the diff.
 
 ---
 
@@ -15,9 +15,12 @@ All releases are patch/minor bumps on `main`. No release branches. The GitHub re
 ```bash
 git status --short     # must be clean (only untracked dist* dirs allowed)
 git branch -v          # must be on main, up to date
+unset GH_TOKEN
+gh repo view giovanni-lunetta/dateback-releases --json visibility -q .visibility
 ```
 
 If dirty: stash or commit any in-progress work before proceeding.
+The release repository visibility check must print `PUBLIC`; the website download links use GitHub Releases directly and will not work for customers while the repository is private.
 
 #### 2. Version bump
 
@@ -38,7 +41,7 @@ node -e "const p=require('./package-lock.json'); console.log(p.version, p.packag
 
 ```bash
 npm ci
-npm run test:all      # runs: node --check main.js + renderer files, then node --test (69 tests)
+npm run test:all      # runs: node --check main.js + renderer files, then node --test
 ```
 
 Do not proceed if any test fails.
@@ -59,7 +62,9 @@ source ../.env && export APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
 npm run build:mac
 ```
 
-Output: `dist/DateBack-X.Y.Z-arm64.dmg`
+Output:
+- `dist/DateBack-X.Y.Z-arm64.dmg`
+- `dist/latest-mac.yml` (auto-update metadata)
 
 **Verify binaries inside the built .app:**
 ```bash
@@ -82,8 +87,11 @@ shasum -a 256 dist/DateBack-X.Y.Z-arm64.dmg
 **Place artifacts:**
 ```bash
 mkdir -p /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z
+mkdir -p /Users/giovanni-lunetta/DateBack_Business/Builds/latest
 cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/
+cp dist/latest-mac.yml /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/
 cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/DateBack_Business/Builds/latest/
+cp dist/latest-mac.yml /Users/giovanni-lunetta/DateBack_Business/Builds/latest/
 ```
 
 #### 6. QA build (internal only — do NOT upload to GitHub)
@@ -98,13 +106,6 @@ Write `/tmp/dateback-qa-build.json`:
   "productName": "DateBack QA",
   "publish": null,
   "mac": {
-    "extendInfo": {
-      "LSEnvironment": {
-        "DATEBACK_POLAR_ENV": "sandbox",
-        "DATEBACK_ALLOW_SANDBOX": "1",
-        "POLAR_ORG_ID_SANDBOX": "f8d31d6a-6539-41dc-be45-a0ee5b9ed660"
-      }
-    },
     "target": { "target": "dmg", "arch": ["arm64"] }
   },
   "extraResources": [
@@ -112,7 +113,7 @@ Write `/tmp/dateback-qa-build.json`:
     { "from": "assets/bin/ffmpeg", "to": "bin/ffmpeg" }
   ],
   "directories": { "output": "dist-qa" },
-  "artifactName": "DateBack-X.Y.Z-QA-sandbox-arm64.dmg"
+  "artifactName": "DateBack-X.Y.Z-QA-arm64.dmg"
 }
 ```
 
@@ -122,7 +123,7 @@ source ../.env && export APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
 npx electron-builder --config /tmp/dateback-qa-build.json --mac
 ```
 
-Output: `dist-qa/DateBack-X.Y.Z-QA-sandbox-arm64.dmg`
+Output: `dist-qa/DateBack-X.Y.Z-QA-arm64.dmg`
 
 **Verify binaries in QA .app:**
 ```bash
@@ -131,21 +132,18 @@ ls -lh "dist-qa/mac-arm64/DateBack QA.app/Contents/Resources/bin/"
 
 **Verify Info.plist LSEnvironment and bundle ID:**
 ```bash
-hdiutil attach "dist-qa/DateBack-X.Y.Z-QA-sandbox-arm64.dmg" -nobrowse -quiet
-plutil -p "/Volumes/DateBack QA X.Y.Z-arm64/DateBack QA.app/Contents/Info.plist" | grep -E "CFBundleIdentifier|CFBundleName|CFBundleShortVersionString|LSEnvironment" -A 8
+hdiutil attach "dist-qa/DateBack-X.Y.Z-QA-arm64.dmg" -nobrowse -quiet
+plutil -p "/Volumes/DateBack QA X.Y.Z-arm64/DateBack QA.app/Contents/Info.plist" | grep -E "CFBundleIdentifier|CFBundleName|CFBundleShortVersionString" -A 8
 hdiutil detach "/Volumes/DateBack QA X.Y.Z-arm64" -quiet
 ```
 
 Expected plist values:
 - `CFBundleIdentifier` = `com.giovannilunetta.dateback.qa`
 - `CFBundleName` = `DateBack QA`
-- `LSEnvironment.DATEBACK_POLAR_ENV` = `sandbox`
-- `LSEnvironment.DATEBACK_ALLOW_SANDBOX` = `1`
-- `LSEnvironment.POLAR_ORG_ID_SANDBOX` = `f8d31d6a-6539-41dc-be45-a0ee5b9ed660`
 
 **Place QA artifact:**
 ```bash
-cp dist-qa/DateBack-X.Y.Z-QA-sandbox-arm64.dmg \
+cp dist-qa/DateBack-X.Y.Z-QA-arm64.dmg \
    /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/
 ```
 
@@ -160,12 +158,13 @@ git push origin vX.Y.Z
 unset GH_TOKEN
 gh release create vX.Y.Z \
   /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-arm64.dmg \
+  /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/latest-mac.yml \
   --repo giovanni-lunetta/dateback-releases \
   --title "DateBack vX.Y.Z – <short title>" \
   --notes "<release notes>"
 ```
 
-Upload **production DMG only**. Never upload the QA DMG to GitHub Releases.
+Upload **production DMG and `latest-mac.yml` only**. Never upload the QA DMG to GitHub Releases.
 
 #### 8. Release notes doc (in-repo)
 
@@ -188,6 +187,15 @@ File: `/Users/giovanni-lunetta/DateBack_Business/DateBack_Website/changelog.html
 - Change the previously-latest entry's `<details>` to remove the `open` attribute.
 - Leave the file modified but **unstaged/uncommitted**. Report the diff to the user.
 
+Before the website is deployed, verify the public download target:
+
+```bash
+unset GH_TOKEN
+gh repo view giovanni-lunetta/dateback-releases --json latestRelease,visibility --jq '{visibility:.visibility, latestTag:.latestRelease.tagName}'
+```
+
+The output must show `visibility` as `PUBLIC` and `latestTag` as `vX.Y.Z`. Do not deploy website copy that advertises a new free release while GitHub `releases/latest` still points to an older build.
+
 ---
 
 ### Notarization
@@ -208,9 +216,12 @@ After every release, report:
 - [ ] Commit hashes for: version bump, docs commit
 - [ ] Tag pushed (`vX.Y.Z`)
 - [ ] GitHub Release URL
+- [ ] GitHub release repository visibility is `PUBLIC`
 - [ ] `ls` evidence that both DMGs contain `Contents/Resources/bin/memory-organizer` and `Contents/Resources/bin/ffmpeg`
 - [ ] SHA256 of production DMG
+- [ ] SHA256 of `latest-mac.yml`
 - [ ] SHA256 of QA DMG
+- [ ] Auto-update metadata asset (`latest-mac.yml`) uploaded to the GitHub Release
 - [ ] Notarization status (both builds)
 - [ ] Website changelog diff (uncommitted)
 
@@ -228,7 +239,6 @@ After every release, report:
 | GitHub remote | `giovanni-lunetta/dateback-releases` |
 | Bundle ID (prod) | `com.giovannilunetta.dateback` |
 | Bundle ID (QA) | `com.giovannilunetta.dateback.qa` |
-| Polar sandbox org | `f8d31d6a-6539-41dc-be45-a0ee5b9ed660` |
 
 ---
 
@@ -236,6 +246,5 @@ After every release, report:
 
 - **`GH_TOKEN` env var** — if set, it overrides keyring auth and causes 401. Always `unset GH_TOKEN` before `gh release create`.
 - **QA binaries missing** — using `--config` with electron-builder discards `package.json` build config including `extraResources`. The QA config JSON must always re-declare the explicit `extraResources` file mappings.
-- **Sandbox API host** — correct host is `sandbox-api.polar.sh` (not `sandbox.polar.sh` which 404s).
 - **`dist-qa/` in working tree** — this directory is untracked/gitignored; it being present does not mean the tree is dirty for release purposes.
 - **Version in `package-lock.json`** — appears in two places: top-level `"version"` and `packages[""].version`. Both must be bumped.

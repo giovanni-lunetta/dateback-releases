@@ -5,8 +5,6 @@ const { spawn, spawnSync } = require('child_process');
 const { fileURLToPath } = require('url');
 const AdmZip = require('adm-zip');
 const checkDiskSpace = require('check-disk-space').default;
-const Store = require('electron-store');
-const axios = require('axios');
 const { autoUpdater } = require('electron-updater');
 const Logger = require('./src/logger');
 const SupportLogs = require('./src/supportLogs');
@@ -17,8 +15,6 @@ try {
 } catch (_dotenvError) {
     // dotenv is optional in packaged runtime environments.
 }
-
-const store = new Store();
 
 // Configure auto-updater
 autoUpdater.autoDownload = false;
@@ -40,13 +36,6 @@ const TRUSTED_RENDERER_PROTOCOLS = new Set(['file:', 'app:']);
 const DEBUG_SECURITY = String(process.env.DATEBACK_DEBUG_SECURITY || '').toLowerCase();
 const SECURITY_DEBUG_ENABLED = DEBUG_SECURITY === '1' || DEBUG_SECURITY === 'true' || DEBUG_SECURITY === 'yes' || DEBUG_SECURITY === 'on';
 
-// Rate Limiter for Security (prevent brute-force attacks)
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const RATE_LIMIT_MAX = 5; // 5 attempts per minute
-const POLAR_PROD_BASE_URL = 'https://api.polar.sh';
-const POLAR_SANDBOX_BASE_URL = 'https://sandbox-api.polar.sh';
-const POLAR_FALLBACK_PROD_ORG_ID = '4fee54f8-96c3-4302-8c3f-e71fd47da3fb';
 const ORGANIZER_WORKER_STATE_FILE = 'organizer-worker-state.json';
 const FOLDER_SELECTION_PURPOSES = new Set(['output', 'destination', 'staging']);
 const ALLOWED_EXTERNAL_HOSTS = new Set([
@@ -57,52 +46,6 @@ const ALLOWED_EXTERNAL_HOSTS = new Set([
 ]);
 const ALLOWED_MAILTO_RECIPIENTS = new Set(['support@dateback.app']);
 const ALLOWED_MAILTO_QUERY_KEYS = new Set(['subject', 'body']);
-
-function checkRateLimit(identifier) {
-    const now = Date.now();
-    const record = rateLimitMap.get(identifier);
-
-    if (!record || now > record.resetTime) {
-        rateLimitMap.set(identifier, {
-            count: 1,
-            resetTime: now + RATE_LIMIT_WINDOW
-        });
-        return true;
-    }
-
-    if (record.count >= RATE_LIMIT_MAX) {
-        return false;
-    }
-
-    record.count++;
-    return true;
-}
-
-function getPolarLicenseValidationConfig() {
-    const polarEnv = String(process.env.DATEBACK_POLAR_ENV || '').toLowerCase();
-    const allowSandbox = process.env.DATEBACK_ALLOW_SANDBOX === '1';
-    const isSandbox = polarEnv === 'sandbox' && allowSandbox;
-    if (isSandbox) {
-        return {
-            baseUrl: POLAR_SANDBOX_BASE_URL,
-            orgId: process.env.POLAR_ORG_ID_SANDBOX || process.env.POLAR_ORG_ID || POLAR_FALLBACK_PROD_ORG_ID
-        };
-    }
-    return {
-        baseUrl: POLAR_PROD_BASE_URL,
-        orgId: process.env.POLAR_ORG_ID || POLAR_FALLBACK_PROD_ORG_ID
-    };
-}
-
-// Cleanup old rate limit entries every 5 minutes
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, record] of rateLimitMap.entries()) {
-        if (now > record.resetTime) {
-            rateLimitMap.delete(key);
-        }
-    }
-}, 5 * 60 * 1000);
 
 // Support Logs System
 let logger = null;
@@ -1619,7 +1562,7 @@ Not affiliated with Snap Inc.
 Snapchat® is a registered trademark of Snap Inc.
 
 © 2026 Giovanni Lunetta
-Licensed under MIT License`,
+Free for personal, non-commercial use. All rights reserved.`,
                             buttons: ['OK']
                         });
                     }
@@ -2886,137 +2829,4 @@ ipcMain.handle('retry-corrupted', async (event, {
             mode: 'retry'
         }).then(resolve);
     });
-});
-
-// License Management
-
-function extractLicenseStatus(rawLicenseData) {
-    if (!rawLicenseData || typeof rawLicenseData !== 'object') {
-        return null;
-    }
-    return rawLicenseData.status || rawLicenseData.state || null;
-}
-
-function buildPersistedLicenseState(rawLicenseData, activatedAt = new Date().toISOString()) {
-    return {
-        valid: true,
-        activatedAt,
-        licenseId: rawLicenseData?.id || null,
-        status: extractLicenseStatus(rawLicenseData)
-    };
-}
-
-function buildLicenseStatusPayload(license) {
-    const legacyLicenseData = license && typeof license.licenseData === 'object' ? license.licenseData : null;
-    return {
-        id: license.licenseId || legacyLicenseData?.id || null,
-        status: license.status || extractLicenseStatus(legacyLicenseData)
-    };
-}
-
-ipcMain.handle('validate-license', async (event, licenseKey) => {
-    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, valid: false, message: 'Unauthorized sender' });
-    if (unauthorizedResponse) {
-        return unauthorizedResponse;
-    }
-
-    // Rate limiting to prevent brute-force attacks
-    if (!checkRateLimit('license-validation')) {
-        return {
-            success: false,
-            valid: false,
-            message: 'Too many validation attempts. Please wait 60 seconds and try again.'
-        };
-    }
-
-    try {
-        // Polar.sh License Validation API (uses JSON data)
-        // Documentation: https://docs.polar.sh/api/license-keys
-
-        const { baseUrl, orgId } = getPolarLicenseValidationConfig();
-        const response = await axios.post(`${baseUrl}/v1/customer-portal/license-keys/validate`, {
-            key: licenseKey,
-            organization_id: orgId
-        }, {
-            headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            },
-            timeout: 15000
-        });
-
-        // Polar.sh returns 200 OK if valid, with license data
-        if (response.status === 200 && response.data.id) {
-            const persistedLicense = buildPersistedLicenseState(response.data);
-            store.set('license', persistedLicense);
-
-            return {
-                success: true,
-                valid: true,
-                message: 'License activated successfully!',
-                data: {
-                    id: persistedLicense.licenseId,
-                    status: persistedLicense.status
-                }
-            };
-        } else {
-            return {
-                success: true,
-                valid: false,
-                message: 'Invalid license key'
-            };
-        }
-    } catch (error) {
-        const status = error.response?.status;
-        const message = error.message;
-        if (status) {
-            console.error(`License validation failed (status ${status}): ${message}`);
-        } else {
-            console.error(`License validation failed: ${message}`);
-        }
-        return {
-            success: false,
-            valid: false,
-            message: error.response?.data?.error || 'Failed to validate license. Please check your internet connection.'
-        };
-    }
-});
-
-ipcMain.handle('get-license-status', async (event) => {
-    if (!validateSender(event)) {
-        return { valid: false, trial: false };
-    }
-
-    const license = store.get('license');
-
-    if (!license || !license.valid) {
-        return { valid: false, trial: false };
-    }
-
-    // Optional: Re-validate periodically (uncomment if needed)
-    // You can add periodic re-validation here to prevent key sharing
-    if (
-        Object.prototype.hasOwnProperty.call(license, 'key') ||
-        Object.prototype.hasOwnProperty.call(license, 'licenseData')
-    ) {
-        store.set('license', {
-            ...buildPersistedLicenseState(buildLicenseStatusPayload(license), license.activatedAt),
-            valid: true
-        });
-    }
-
-    return {
-        valid: true,
-        activatedAt: license.activatedAt,
-        data: buildLicenseStatusPayload(license)
-    };
-});
-
-ipcMain.handle('clear-license', async (event) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
-    }
-
-    store.delete('license');
-    return { success: true };
 });

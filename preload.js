@@ -72,11 +72,6 @@ contextBridge.exposeInMainWorld('api', {
     checkBatteryStatus: () => ipcRenderer.invoke('check-battery-status'),
     getResumeManifest: (args) => ipcRenderer.invoke('get-resume-manifest', args && typeof args === 'object' ? args : {}),
 
-    // License management
-    validateLicense: (licenseKey) => ipcRenderer.invoke('validate-license', requireString(licenseKey, 'License key')),
-    getLicenseStatus: () => ipcRenderer.invoke('get-license-status'),
-    clearLicense: () => ipcRenderer.invoke('clear-license'),
-
     // Progress callbacks
     onProgressUpdate: (callback) => {
         if (typeof callback !== 'function') return () => { };

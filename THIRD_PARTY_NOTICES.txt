@@ -44,9 +44,7 @@ or BlueOak-1.0.0). For a complete list, run: npm list --production
 
 Key dependencies:
 - adm-zip@0.5.16 - MIT
-- axios@1.13.2 - MIT
 - check-disk-space@3.4.0 - MIT
-- electron-store@8.1.0 - MIT
 - electron-updater@6.6.2 - MIT
 - glob@13.0.0 - ISC
 

@@ -3397,15 +3397,9 @@ textarea {
     color: var(--text-main);
 }
 
-.modal-license-shell,
 .modal-support-shell,
 .modal-logs-shell {
     position: relative;
-}
-
-.modal-license-shell {
-    max-width: 460px;
-    text-align: left;
 }
 
 .modal-support-shell {

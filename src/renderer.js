@@ -102,13 +102,6 @@ const storageTipTitle = document.getElementById('storage-tip-title');
 const storageTipBody = document.getElementById('storage-tip-body');
 const btnOpenFolderTip = document.getElementById('btn-open-folder-tip');
 
-// License Modal elements
-const licenseModal = document.getElementById('license-modal');
-const licenseKeyInput = document.getElementById('license-key-input');
-// Buy license button removed - users get app after purchase
-const btnActivateLicense = document.getElementById('btn-activate-license');
-const licenseStatus = document.getElementById('license-status');
-
 // Storage Warning Modal elements
 const storageWarningModal = document.getElementById('storage-warning-modal');
 const storageWarningTitle = document.getElementById('storage-warning-title');
@@ -126,7 +119,6 @@ const btnMessageOk = document.getElementById('btn-message-ok');
 let isProcessing = false;
 let currentOutputDir = '';
 let currentMemoryCount = 0;
-let isLicensed = false;
 let hadPartialRun = false;  // Track if user stopped mid-processing
 let lastProcessedCount = 0; // Track how many files were processed before stopping
 let lastUploadUiUpdateAt = 0;
@@ -1605,9 +1597,6 @@ function clearFilePath() {
 
 // Initialize
 async function init() {
-    // Check license status first
-    await checkLicense();
-
     // Get default paths
     const defaults = await window.api.getDefaults();
     if (defaults.zipPath) {
@@ -3757,136 +3746,6 @@ if (btnOpenFolderTip) {
         }
     });
 }
-
-// ===== LICENSE MANAGEMENT =====
-
-async function checkLicense() {
-    try {
-        const status = await window.api.getLicenseStatus();
-
-        if (status.valid) {
-            isLicensed = true;
-            licenseModal.classList.add('hidden');
-        } else {
-            isLicensed = false;
-            showLicenseModal();
-        }
-    } catch (error) {
-        console.error('Error checking license:', error);
-        isLicensed = false;
-        showLicenseModal();
-    }
-}
-
-function showLicenseModal() {
-    licenseModal.classList.remove('hidden');
-    licenseKeyInput.value = '';
-    licenseStatus.textContent = '';
-    licenseStatus.classList.add('hidden');
-    licenseStatus.classList.remove('success', 'error');
-}
-
-function showLicenseStatus(message, isError = false) {
-    licenseStatus.classList.remove('hidden');
-    licenseStatus.classList.remove('success', 'error');
-    licenseStatus.classList.add(isError ? 'error' : 'success');
-
-    // Security: Use safe DOM creation instead of innerHTML to prevent XSS from API responses
-    licenseStatus.textContent = ''; // Clear existing content
-
-    // Create SVG element
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('width', '16');
-    svg.setAttribute('height', '16');
-    svg.setAttribute('viewBox', '0 0 20 20');
-    svg.setAttribute('fill', 'none');
-    svg.style.display = 'inline-block';
-    svg.style.verticalAlign = 'middle';
-    svg.style.marginRight = '6px';
-
-    if (isError) {
-        // Warning triangle icon
-        const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path1.setAttribute('d', 'M10 2L2 17h16L10 2z');
-        path1.setAttribute('fill', 'var(--accent-red)');
-        path1.setAttribute('stroke', 'var(--accent-red)');
-        path1.setAttribute('stroke-width', '1.5');
-
-        const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path2.setAttribute('d', 'M10 8v4M10 14h.01');
-        path2.setAttribute('stroke', 'white');
-        path2.setAttribute('stroke-width', '1.5');
-        path2.setAttribute('stroke-linecap', 'round');
-
-        svg.appendChild(path1);
-        svg.appendChild(path2);
-    } else {
-        // Success checkmark icon
-        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        circle.setAttribute('cx', '10');
-        circle.setAttribute('cy', '10');
-        circle.setAttribute('r', '9');
-        circle.setAttribute('fill', 'var(--accent-primary)');
-        circle.setAttribute('stroke', 'var(--accent-primary)');
-        circle.setAttribute('stroke-width', '1.5');
-
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', 'M6 10L9 13L14 7');
-        path.setAttribute('stroke', 'white');
-        path.setAttribute('stroke-width', '2');
-        path.setAttribute('stroke-linecap', 'round');
-        path.setAttribute('stroke-linejoin', 'round');
-
-        svg.appendChild(circle);
-        svg.appendChild(path);
-    }
-
-    // Append SVG and message text safely
-    licenseStatus.appendChild(svg);
-    licenseStatus.appendChild(document.createTextNode(message));
-}
-
-// Buy License button removed - users receive license key via email after purchase from Polar.sh
-
-// Activate License button
-btnActivateLicense.addEventListener('click', async () => {
-    const licenseKey = licenseKeyInput.value.trim().toUpperCase();
-
-    if (!licenseKey) {
-        showLicenseStatus('Please enter a license key', true);
-        return;
-    }
-
-    btnActivateLicense.disabled = true;
-    btnActivateLicense.textContent = 'Validating...';
-
-    try {
-        const result = await window.api.validateLicense(licenseKey);
-
-        if (result.valid) {
-            showLicenseStatus('License activated successfully!', false);
-            isLicensed = true;
-
-            // Close modal after success
-            setTimeout(() => {
-                licenseModal.classList.add('hidden');
-            }, 1500);
-        } else {
-            showLicenseStatus('License key not recognized. Please verify your key or contact support.', true);
-        }
-    } catch (error) {
-        showLicenseStatus('Failed to validate license. Please check your internet connection.', true);
-    } finally {
-        btnActivateLicense.disabled = false;
-        btnActivateLicense.textContent = 'Activate License';
-    }
-});
-
-// Auto-format license key input (add dashes)
-licenseKeyInput.addEventListener('input', (e) => {
-    let value = e.target.value.replace(/[^A-Z0-9-]/g, '').toUpperCase();
-    e.target.value = value;
-});
 
 // ============================================
 // Contact Support Modal

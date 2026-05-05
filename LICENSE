@@ -1,24 +1,20 @@
-MIT License
+DateBack Application License
 
-Copyright (c) 2025 Giovanni Lunetta
+Copyright (c) 2026 Giovanni Lunetta. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+DateBack is provided as a free download for personal, non-commercial use. You
+are granted a personal, non-exclusive, non-transferable license to install and
+use the DateBack desktop application for organizing your own exported media.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+You may not redistribute, resell, sublicense, rent, lease, host as a service,
+reverse engineer, decompile, modify, or create derivative works from the
+DateBack desktop application except where applicable law expressly permits such
+activity.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+DateBack is provided "as is", without warranty of any kind, express or implied,
+including but not limited to warranties of merchantability, fitness for a
+particular purpose, and noninfringement. In no event shall the author be liable
+for any claim, damages, or other liability arising from use of the application.
 
 ================================================================================
 THIRD-PARTY LICENSES
@@ -42,7 +38,7 @@ FFmpeg Source Code: https://github.com/FFmpeg/FFmpeg (tag: n8.0.1)
 FFmpeg Legal Information: https://ffmpeg.org/legal.html
 
 Complete source package including FFmpeg, x264, and x265:
-https://savemymemories.app/licenses/ffmpeg-source.zip
+https://dateback.app/licenses/ffmpeg-source.zip
 SHA256: 286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a
 
 The GPL v2.0 license text is included in this distribution at:
@@ -82,17 +78,6 @@ adm-zip
 MIT License - https://github.com/cthackers/adm-zip/blob/master/LICENSE
 
 --------------------------------------------------------------------------------
-axios
---------------------------------------------------------------------------------
-MIT License - https://github.com/axios/axios/blob/v1.x/LICENSE
-
---------------------------------------------------------------------------------
-electron-store
---------------------------------------------------------------------------------
-MIT License - https://github.com/sindresorhus/electron-store/blob/main/license
-
---------------------------------------------------------------------------------
 check-disk-space
 --------------------------------------------------------------------------------
 MIT License - https://github.com/Alex-AK-A/check-disk-space/blob/master/LICENSE
-

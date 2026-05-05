@@ -23,3 +23,4 @@
 - [v1.1.4](./release-notes-v1.1.4.md)
 - [v1.2.0](./release-notes-v1.2.0.md)
 - [v1.2.1](./release-notes-v1.2.1.md)
+- [v1.3.0](./release-notes-v1.3.0.md)
