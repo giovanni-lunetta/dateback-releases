@@ -532,6 +532,12 @@ def stream_zip_member_to_temp(zip_file, member_name, zip_lock=None, mem_id=None,
     Copy a ZIP member to temp_processing under a short lock window.
     Returns absolute temp path and bytes written.
     """
+    # If this member lives in a companion ZIP, open that ZIP directly (no shared lock needed).
+    companion_path = _companion_zip_registry.get(member_name)
+    if companion_path:
+        with zipfile.ZipFile(companion_path, 'r') as companion_zf:
+            return stream_zip_member_to_temp(companion_zf, member_name, zip_lock=None, mem_id=mem_id, suffix_hint=suffix_hint)
+
     temp_root = canonicalize_dir_path(TEMP_DIR)
     suffix = suffix_hint or os.path.splitext(member_name)[1] or ".bin"
     prefix = f"zipmem_{mem_id}_" if mem_id else "zipmem_"
@@ -1793,6 +1799,8 @@ zip_sid_index = {}
 zip_datetime_media_index = {}
 zip_date_media_index = {}
 zip_claimed_members = set()
+# Maps ZIP member path → companion ZIP file path (for multi-part Snapchat exports)
+_companion_zip_registry = {}
 zip_match_lock = threading.Lock()
 # Global processed index: filename -> size
 processed_index = {}
@@ -1936,16 +1944,17 @@ def claim_zip_member_for_blank_download_url(date_str, media_type):
 
     return None
 
-def build_file_index_from_zip(zip_file_obj):
-    print("Building file index directly from ZIP...", flush=True)
-    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index, zip_claimed_members
-    # We clear it? Or merge? Usually clear for new run.
-    file_size_index = {}
-    zip_name_index = {}
-    zip_sid_index = {}
-    zip_datetime_media_index = {}
-    zip_date_media_index = {}
-    zip_claimed_members = set()
+def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
+    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index, zip_claimed_members, _companion_zip_registry
+    if clear:
+        print("Building file index directly from ZIP...", flush=True)
+        file_size_index = {}
+        zip_name_index = {}
+        zip_sid_index = {}
+        zip_datetime_media_index = {}
+        zip_date_media_index = {}
+        zip_claimed_members = set()
+        _companion_zip_registry = {}
     
     count = 0
     for info in zip_file_obj.infolist():
@@ -1985,13 +1994,57 @@ def build_file_index_from_zip(zip_file_obj):
                 datetime_key = zip_info_datetime_key(info)
                 if datetime_key:
                     zip_datetime_media_index.setdefault((datetime_key, media_kind), []).append(info.filename)
+        if source_zip_path:
+            _companion_zip_registry[info.filename] = source_zip_path
         count += 1
 
     for index in (zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index):
         for names in index.values():
             names.sort()
 
-    print(f"ZIP Index built. Found {count} files.", flush=True)
+    if clear:
+        print(f"ZIP Index built. Found {count} files.", flush=True)
+    else:
+        print(f"  Added {count} files from {os.path.basename(source_zip_path or '?')}.", flush=True)
+
+def _build_companion_zip_indexes(primary_zip_path):
+    """Index companion ZIPs from a multi-part Snapchat export (e.g. mydata~...-2.zip, -3.zip ...)."""
+    primary_dir = os.path.dirname(primary_zip_path)
+    primary_base = os.path.basename(primary_zip_path)
+    stem = primary_base[:-4] if primary_base.lower().endswith('.zip') else primary_base
+
+    companions = []
+    try:
+        for fname in sorted(os.listdir(primary_dir)):
+            if not fname.lower().endswith('.zip'):
+                continue
+            if not re.match(re.escape(stem) + r'-\d+\.zip$', fname, re.IGNORECASE):
+                continue
+            candidate = os.path.realpath(os.path.join(primary_dir, fname))
+            lstat = os.lstat(os.path.join(primary_dir, fname))
+            if not stat.S_ISREG(lstat.st_mode):
+                continue
+            companions.append(candidate)
+    except OSError:
+        return
+
+    if not companions:
+        return
+
+    print(f"Found {len(companions)} companion ZIP(s) — building combined index...", flush=True)
+    total_added = 0
+    for companion_path in companions:
+        try:
+            with zipfile.ZipFile(companion_path, 'r') as companion_zf:
+                before = sum(len(v) for v in zip_name_index.values())
+                build_file_index_from_zip(companion_zf, clear=False, source_zip_path=companion_path)
+                after = sum(len(v) for v in zip_name_index.values())
+                total_added += after - before
+        except Exception as e:
+            print(f"  Warning: Could not index {os.path.basename(companion_path)}: {e}", flush=True)
+
+    print(f"Combined index ready. {total_added} additional files from {len(companions)} companion ZIP(s).", flush=True)
+
 
 def process_zip(zip_path, output_path, ts_epoch=None):
     zip_name = os.path.basename(zip_path)
@@ -2758,6 +2811,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # Build File Index
     if zip_file:
         build_file_index_from_zip(zip_file)
+        if hasattr(zip_file, 'filename') and zip_file.filename:
+            _build_companion_zip_indexes(zip_file.filename)
     else:
         build_file_index(DOWNLOADS_DIR)
         
