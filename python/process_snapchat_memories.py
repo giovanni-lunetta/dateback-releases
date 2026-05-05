@@ -7,7 +7,7 @@ import subprocess
 import requests
 from requests.adapters import HTTPAdapter
 import secrets  # For secure random temp file names
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from PIL import Image
 import mimetypes
 import time
@@ -426,7 +426,7 @@ def select_memories_history_json_member(zf):
             continue
         normalized = os.path.normpath(info.filename.replace("\\", "/"))
         parts = normalized.split("/")
-        if len(parts) >= 3 and parts[-2] == "json" and parts[-1] == "memories_history.json":
+        if len(parts) >= 2 and parts[-2] == "json" and parts[-1] == "memories_history.json":
             if zipinfo_is_symlink(info):
                 raise ValueError("memories_history.json cannot be a symbolic link")
             candidates.append(info.filename)
@@ -1789,6 +1789,11 @@ file_size_index = {}
 zip_name_index = {}
 # ZIP SID index (only populated for ZIP workflows)
 zip_sid_index = {}
+# ZIP timestamp indexes for exports whose JSON rows have blank download URLs
+zip_datetime_media_index = {}
+zip_date_media_index = {}
+zip_claimed_members = set()
+zip_match_lock = threading.Lock()
 # Global processed index: filename -> size
 processed_index = {}
 
@@ -1876,13 +1881,71 @@ def build_verify_expected_filenames(memories):
         expected[i] = (timestamp_name, ext)
     return expected
 
+def normalize_media_kind(media_type):
+    return "Video" if str(media_type or "").lower() == "video" else "Image"
+
+
+def media_kind_from_zip_extension(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    return "Video" if ext in (".mp4", ".mov", ".m4v") else "Image"
+
+
+def zip_info_datetime_key(info):
+    try:
+        dt = datetime(*info.date_time[:6])
+    except Exception:
+        return None
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
+def memory_datetime_match_keys(date_str):
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
+    except (TypeError, ValueError):
+        return []
+
+    keys = [dt.strftime('%Y-%m-%d %H:%M:%S')]
+    # ZIP timestamps have two-second precision, so odd JSON seconds are stored
+    # as the previous even second in Snapchat's local archive files.
+    if dt.second % 2 == 1:
+        keys.append((dt - timedelta(seconds=1)).strftime('%Y-%m-%d %H:%M:%S'))
+    return keys
+
+
+def claim_zip_member_for_blank_download_url(date_str, media_type):
+    media_kind = normalize_media_kind(media_type)
+    exact_keys = memory_datetime_match_keys(date_str)
+
+    with zip_match_lock:
+        for key in exact_keys:
+            for member_name in zip_datetime_media_index.get((key, media_kind), []):
+                if member_name not in zip_claimed_members:
+                    zip_claimed_members.add(member_name)
+                    return member_name
+
+        date_key = str(date_str or "")[:10]
+        date_candidates = [
+            member_name
+            for member_name in zip_date_media_index.get((date_key, media_kind), [])
+            if member_name not in zip_claimed_members
+        ]
+        if len(date_candidates) == 1:
+            member_name = date_candidates[0]
+            zip_claimed_members.add(member_name)
+            return member_name
+
+    return None
+
 def build_file_index_from_zip(zip_file_obj):
     print("Building file index directly from ZIP...", flush=True)
-    global file_size_index, zip_name_index, zip_sid_index
+    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index, zip_claimed_members
     # We clear it? Or merge? Usually clear for new run.
     file_size_index = {}
     zip_name_index = {}
     zip_sid_index = {}
+    zip_datetime_media_index = {}
+    zip_date_media_index = {}
+    zip_claimed_members = set()
     
     count = 0
     for info in zip_file_obj.infolist():
@@ -1910,8 +1973,24 @@ def build_file_index_from_zip(zip_file_obj):
             if sid_match:
                 sid = sid_match.group(1).upper()
                 zip_sid_index.setdefault(sid, []).append(info.filename)
+            local_memory_match = re.match(
+                r'^(\d{4}-\d{2}-\d{2})_[A-F0-9-]{36}-main\.[^.]+$',
+                base_name,
+                re.IGNORECASE
+            )
+            if local_memory_match:
+                media_kind = media_kind_from_zip_extension(base_name)
+                date_key = local_memory_match.group(1)
+                zip_date_media_index.setdefault((date_key, media_kind), []).append(info.filename)
+                datetime_key = zip_info_datetime_key(info)
+                if datetime_key:
+                    zip_datetime_media_index.setdefault((datetime_key, media_kind), []).append(info.filename)
         count += 1
-        
+
+    for index in (zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index):
+        for names in index.values():
+            names.sort()
+
     print(f"ZIP Index built. Found {count} files.", flush=True)
 
 def process_zip(zip_path, output_path, ts_epoch=None):
@@ -2162,7 +2241,7 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
             reason = "Processing aborted."
         return {"id": mem_id, "status": "Error", "reason": reason, "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
 
-    if not date_str or not download_url:
+    if not date_str:
         return {"id": mem_id, "status": "Skipped", "reason": "Missing Metadata", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
 
     ts_epoch = None
@@ -2178,13 +2257,20 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
     if zip_file:
         # ZIP workflow: skip HEAD and prefer direct SID match against archive entries.
         remote_size = None
-        sid = extract_sid_from_download_url(download_url)
-        if sid:
-            matches = zip_sid_index.get(sid)
-        url_name = os.path.basename(download_url.split('?', 1)[0])
-        if not matches and url_name:
-            matches = zip_name_index.get(url_name)
+        if download_url:
+            sid = extract_sid_from_download_url(download_url)
+            if sid:
+                matches = zip_sid_index.get(sid)
+            url_name = os.path.basename(download_url.split('?', 1)[0])
+            if not matches and url_name:
+                matches = zip_name_index.get(url_name)
+        else:
+            claimed_member = claim_zip_member_for_blank_download_url(date_str, media_type)
+            if claimed_member:
+                matches = [claimed_member]
     else:
+        if not download_url:
+            return {"id": mem_id, "status": "Skipped", "reason": "Missing Metadata", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
         remote_size = get_remote_file_size(download_url)
         if remote_size:
             matches = file_size_index.get(remote_size)
@@ -2200,6 +2286,8 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
             local_path = os.path.join(DOWNLOADS_DIR, local_filename)
     else:
         # File not found locally - Attempt Download
+        if zip_file and not download_url:
+            return {"id": mem_id, "status": "Missing", "reason": "No local ZIP media file and no download URL", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
         
         # SECURITY: Validate download URL before attempting download
         if not is_allowed_download_url(download_url):

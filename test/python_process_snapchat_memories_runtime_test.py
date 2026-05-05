@@ -354,6 +354,66 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "memories_history.json is too large"):
                         psm.read_memories_history_json(zf, "mydata~123/json/memories_history.json")
 
+    def test_process_from_zip_uses_local_memory_files_when_download_urls_are_blank(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            image_id = "11111111-1111-4111-8111-111111111111"
+            video_id = "22222222-2222-4222-8222-222222222222"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:04:05 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                },
+                {
+                    "Date": "2024-01-02 03:05:07 UTC",
+                    "Media Type": "Video",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                },
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+
+                image_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-main.jpg")
+                image_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(image_info, b"image-bytes")
+
+                video_info = zipfile.ZipInfo(f"memories/2024-01-02_{video_id}-main.mp4")
+                video_info.date_time = (2024, 1, 2, 3, 5, 6)
+                zf.writestr(video_info, b"video-bytes")
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 2)
+            self.assertEqual(stats["missing"], 0)
+            self.assertEqual(stats["skipped"], 0)
+
+            processed_files = sorted(
+                p.name
+                for p in Path(stats["processed_dir"]).glob("Batch_*/*")
+                if p.is_file()
+            )
+            self.assertEqual(
+                processed_files,
+                [
+                    "2024-01-02_03-04-05.jpg",
+                    "2024-01-02_03-05-07.mp4",
+                ],
+            )
+            self.assertEqual(
+                (Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-04-05.jpg").read_bytes(),
+                b"image-bytes",
+            )
+            self.assertEqual(
+                (Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-05-07.mp4").read_bytes(),
+                b"video-bytes",
+            )
+
     def test_recover_pending_ignores_stale_temp_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             staging_dir = Path(temp_dir) / "staging"
