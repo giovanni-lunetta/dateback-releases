@@ -36,7 +36,15 @@ No action is required for existing users. Existing app settings, selected folder
 ### macOS (Apple Silicon)
 [DateBack-1.3.0-arm64.dmg](https://github.com/giovanni-lunetta/dateback-releases/releases/download/v1.3.0/DateBack-1.3.0-arm64.dmg)
 
-**SHA256:** To be filled during the signed release build.
+**SHA256:**
+```
+9645b44fdaeff05268796006d4cb607e65f61d50ac7a2f541c9d4abe859dc133
+```
+
+**Auto-update metadata SHA256:**
+```
+c48a9428742c0d01ffc6007af945966c7b630b3f06878cccb1a6561e658f52d2
+```
 
 ### System Requirements
 - macOS 11.0 (Big Sur) or later
