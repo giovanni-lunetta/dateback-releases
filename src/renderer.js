@@ -3539,6 +3539,12 @@ function handleProgressUpdate(data) {
             hint: data.last_error || data.message || 'Open the log for details. If this keeps happening, contact support.'
         });
 
+    } else if (data.type === 'companion_found') {
+        const count = data.companion_count || 0;
+        logOutput.textContent += `Found ${count} companion ZIP file${count !== 1 ? 's' : ''} — loading all memories…\n`;
+        logOutput.scrollTop = logOutput.scrollHeight;
+        return;
+
     } else if (data.type === 'disk_full') {
         enterRuntimeDiskFullState(data);
 
