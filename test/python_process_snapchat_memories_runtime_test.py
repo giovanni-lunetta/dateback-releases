@@ -623,5 +623,75 @@ class BuildCompanionZipIndexesTests(unittest.TestCase):
             self.assertEqual(psm._companion_zip_registry, before)
 
 
+class StreamZipMemberCompanionRoutingTests(unittest.TestCase):
+    """Tests that stream_zip_member_to_temp routes to the correct companion ZIP."""
+
+    def _write_zip(self, path, members):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with zipfile.ZipFile(path, 'w') as zf:
+            for name, data in members.items():
+                zf.writestr(name, data)
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        psm.TEMP_DIR = self.tmpdir
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        psm._companion_zip_registry = {}
+        psm.file_size_index = {}
+        psm.zip_name_index = {}
+        psm.zip_sid_index = {}
+        psm.zip_datetime_media_index = {}
+        psm.zip_date_media_index = {}
+        psm.zip_claimed_members = set()
+
+    def test_routes_to_companion_zip(self):
+        """When companion ZIP is registered, recursive call reads from it."""
+        companion_path = os.path.join(self.tmpdir, 'mydata~1234-2.zip')
+        self._write_zip(companion_path, {'media/b.jpg': b'COMPANION_DATA'})
+        # Register a member to live in the companion ZIP
+        psm._companion_zip_registry['media/b.jpg'] = companion_path
+        primary_buf = io.BytesIO()
+        with zipfile.ZipFile(primary_buf, 'w') as zf:
+            zf.writestr('media/a.jpg', b'PRIMARY_DATA')
+        primary_buf.seek(0)
+        with zipfile.ZipFile(primary_buf) as primary_zf:
+            # Call stream_zip_member_to_temp with the primary ZIP.
+            # Since 'media/b.jpg' is registered in a companion, it will open the companion
+            # and recurse, reading from there.
+            # Note: The recursive call will also check the registry, which will find the same entry,
+            # so we test that behavior by having the companion NOT re-index itself in this scenario.
+            temp_path, nbytes = psm.stream_zip_member_to_temp(
+                zip_file=primary_zf,
+                member_name='media/b.jpg',
+                zip_lock=None,
+                mem_id='test1',
+                suffix_hint='.jpg'
+            )
+        with open(temp_path, 'rb') as f:
+            self.assertEqual(f.read(), b'COMPANION_DATA')
+        self.assertEqual(nbytes, len(b'COMPANION_DATA'))
+        os.unlink(temp_path)
+
+    def test_missing_companion_raises_exception(self):
+        """If the companion ZIP file is gone, an exception should propagate (caught by caller)."""
+        psm._companion_zip_registry['media/gone.jpg'] = '/nonexistent/path/companion.zip'
+        primary_buf = io.BytesIO()
+        with zipfile.ZipFile(primary_buf, 'w') as zf:
+            zf.writestr('media/a.jpg', b'x')
+        primary_buf.seek(0)
+        with zipfile.ZipFile(primary_buf) as primary_zf:
+            with self.assertRaises(Exception):
+                psm.stream_zip_member_to_temp(
+                    zip_file=primary_zf,
+                    member_name='media/gone.jpg',
+                    zip_lock=None,
+                    mem_id='test2',
+                    suffix_hint='.jpg'
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

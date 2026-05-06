@@ -535,8 +535,15 @@ def stream_zip_member_to_temp(zip_file, member_name, zip_lock=None, mem_id=None,
     # If this member lives in a companion ZIP, open that ZIP directly (no shared lock needed).
     companion_path = _companion_zip_registry.get(member_name)
     if companion_path:
-        with zipfile.ZipFile(companion_path, 'r') as companion_zf:
-            return stream_zip_member_to_temp(companion_zf, member_name, zip_lock=None, mem_id=mem_id, suffix_hint=suffix_hint)
+        # Temporarily remove the registry entry to prevent infinite recursion when the companion ZIP is opened.
+        # The entry will be restored after the recursive call completes.
+        _companion_zip_registry.pop(member_name, None)
+        try:
+            with zipfile.ZipFile(companion_path, 'r') as companion_zf:
+                return stream_zip_member_to_temp(companion_zf, member_name, zip_lock=None, mem_id=mem_id, suffix_hint=suffix_hint)
+        finally:
+            # Restore the registry entry in case we need it again
+            _companion_zip_registry[member_name] = companion_path
 
     temp_root = canonicalize_dir_path(TEMP_DIR)
     suffix = suffix_hint or os.path.splitext(member_name)[1] or ".bin"
