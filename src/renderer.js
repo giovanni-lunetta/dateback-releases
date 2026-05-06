@@ -1593,7 +1593,7 @@ async function validateZipFile(path) {
 }
 
 // Helper: Set file path and update UI
-async function setFilePath(path) {
+async function setFilePath(path, displayLabel) {
     if (!path) return;
 
     // Validate and check if it's a zip file
@@ -1607,7 +1607,7 @@ async function setFilePath(path) {
     }
 
     zipPathInput.value = path;
-    fileName.textContent = path.split('/').pop();
+    fileName.textContent = displayLabel || path.split('/').pop();
     dropZone.classList.add('hidden');
     fileSelected.classList.remove('hidden');
 
@@ -1721,18 +1721,6 @@ async function showMultiZipCountConfirmation(discoveryResult) {
                     }
                 },
                 {
-                    label: 'Retry Search',
-                    style: 'btn-secondary',
-                    onClick: async () => {
-                        zipDiscoveryPromise = null;
-                        zipDiscoveryResult = null;
-                        zipDiscoveryHandled = false;
-                        const result = await startZipDiscovery();
-                        await processZipDiscoveryResult(result);
-                        resolve();
-                    }
-                },
-                {
                     label: 'Retry & Expand Search',
                     style: 'btn-secondary',
                     onClick: async () => {
@@ -1769,7 +1757,9 @@ async function showMultiZipCountConfirmation(discoveryResult) {
 
 async function handleZipSetConfirmed(allPaths, primaryPath, seedFolder, needsOrganizing) {
     if (!needsOrganizing) {
-        await setFilePath(primaryPath);
+        const folderName = seedFolder ? seedFolder.split('/').pop() : null;
+        const label = allPaths.length > 1 && folderName ? `${allPaths.length} ZIP files · ${folderName}` : null;
+        await setFilePath(primaryPath, label);
         updateOpenFolderButton(seedFolder, allPaths.length);
         return;
     }
@@ -1784,8 +1774,8 @@ async function showZipOrganizeConfirmation(allPaths, primaryPath) {
     return new Promise(resolve => {
         showMultiZipModal(
             'Organize ZIP Files',
-            `DateBack will move your ${allPaths.length} ZIP files into a folder:`,
-            `"${folderName}" in Pictures/SnapchatMemories/`,
+            `DateBack will move your ${allPaths.length} ZIP file${allPaths.length !== 1 ? 's' : ''} into a folder for you located here: Pictures/SnapchatMemories/${folderName}`,
+            `It will be called "${folderName}" and you can view and open it in Finder at any time.`,
             [
                 {
                     label: 'Move and Continue',
@@ -1793,7 +1783,7 @@ async function showZipOrganizeConfirmation(allPaths, primaryPath) {
                     onClick: async () => {
                         const result = await window.api.organizeZipSet(allPaths, folderName);
                         if (result.success) {
-                            await setFilePath(result.primaryPath);
+                            await setFilePath(result.primaryPath, `${allPaths.length} ZIP files · ${folderName}`);
                             updateOpenFolderButton(result.folderPath, allPaths.length);
                         } else {
                             showMessage(
@@ -1846,8 +1836,7 @@ async function init() {
 
     const hasSeenInstructions = localStorage.getItem('hasSeenInstructions');
     if (hasSeenInstructions) {
-        const discoveryResult = await startZipDiscovery();
-        await processZipDiscoveryResult(discoveryResult);
+        startZipDiscovery().then(result => processZipDiscoveryResult(result));
     } else {
         instructionsModal.classList.remove('hidden');
         startZipDiscovery();
@@ -1877,28 +1866,15 @@ dropZone.addEventListener('click', async () => {
 // Find My Zip button handler
 const btnFindZip = document.getElementById('btn-find-zip');
 btnFindZip.addEventListener('click', async (e) => {
-    e.stopPropagation(); // Prevent event bubbling
+    e.stopPropagation();
     e.preventDefault();
 
-    btnFindZip.disabled = true;
-    btnFindZip.textContent = '🔍 Searching...';
+    zipDiscoveryHandled = false;
+    zipDiscoveryPromise = null;
+    zipDiscoveryResult = null;
 
-    const result = await window.api.findZip();
-
-    if (result.success) {
-        await setFilePath(result.path);
-        // Reset text but keep disabled (setFilePath already disables it)
-        btnFindZip.textContent = '🔍 Find My Zip Automatically';
-    } else {
-        showMessage(
-            'Could not find your ZIP automatically',
-            'DateBack could not find a Snapchat export ZIP in your Downloads folder.',
-            'Choose your ZIP manually, or download a fresh export from Snapchat and try again.'
-        );
-        // Only re-enable if search failed
-        btnFindZip.disabled = false;
-        btnFindZip.textContent = '🔍 Find My Zip Automatically';
-    }
+    const result = await startZipDiscovery();
+    await processZipDiscoveryResult(result);
 });
 
 // Clear file

@@ -52,7 +52,7 @@ function createElement() {
     };
 }
 
-test('multi-ZIP retry search processes the replacement discovery result', async () => {
+test('multi-ZIP expand retry search processes the replacement discovery result', async () => {
     const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
     const processZipDiscoveryResultSource = extractNamedFunctionSource(rendererSource, 'processZipDiscoveryResult');
     const showMultiZipCountConfirmationSource = extractNamedFunctionSource(rendererSource, 'showMultiZipCountConfirmation');
@@ -116,8 +116,8 @@ this.__processZipDiscoveryResult = processZipDiscoveryResult;
     });
 
     await Promise.resolve();
-    const retryButton = context.__modalCalls[0].buttons.find((button) => button.label === 'Retry Search');
-    assert.ok(retryButton, 'expected Retry Search button');
+    const retryButton = context.__modalCalls[0].buttons.find((button) => button.label === 'Retry & Expand Search');
+    assert.ok(retryButton, 'expected Retry & Expand Search button');
 
     await retryButton.onClick();
     await processing;
