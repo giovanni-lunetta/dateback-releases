@@ -1642,15 +1642,15 @@ function clearFilePath() {
     updateStartButtonState();
 }
 
-function startZipDiscovery() {
+function startZipDiscovery(expand = false, folderPath = null) {
     if (zipDiscoveryPromise) return zipDiscoveryPromise;
     isZipDiscovering = true;
     zipDiscoveryStatus.classList.remove('hidden');
-    zipDiscoveryText.textContent = 'Searching for Snapchat ZIP files…';
+    zipDiscoveryText.textContent = folderPath ? 'Scanning folder for Snapchat ZIP files…' : 'Searching for Snapchat ZIP files…';
     dropZone.classList.add('searching');
     btnFindZip.disabled = true;
 
-    zipDiscoveryPromise = window.api.discoverZipSet(false).then(result => {
+    zipDiscoveryPromise = window.api.discoverZipSet(expand, folderPath).then(result => {
         isZipDiscovering = false;
         zipDiscoveryResult = result;
         return result;
@@ -1873,7 +1873,7 @@ btnFindZip.addEventListener('click', async (e) => {
     zipDiscoveryPromise = null;
     zipDiscoveryResult = null;
 
-    const result = await startZipDiscovery();
+    const result = await startZipDiscovery(true);
     await processZipDiscoveryResult(result);
 });
 
@@ -1896,23 +1896,38 @@ dropZone.addEventListener('dragleave', (e) => {
     dropZone.classList.remove('drag-over');
 });
 
-dropZone.addEventListener('drop', (e) => {
+dropZone.addEventListener('drop', async (e) => {
     e.preventDefault();
     e.stopPropagation();
     dropZone.classList.remove('drag-over');
 
     const files = e.dataTransfer.files;
-    if (files.length > 0) {
-        const file = files[0];
-        if (file.name.endsWith('.zip')) {
-            setFilePath(file.path);
-        } else {
+    if (files.length === 0) return;
+
+    const file = files[0];
+    if (file.name.endsWith('.zip')) {
+        await setFilePath(file.path);
+    } else if (file.path) {
+        // Dropped a folder — scan it for Snapchat ZIPs
+        zipDiscoveryHandled = false;
+        zipDiscoveryPromise = null;
+        zipDiscoveryResult = null;
+        const result = await startZipDiscovery(false, file.path);
+        if (!result || !result.success) {
             showMessage(
-                'Wrong file type',
-                'Drop your downloaded Snapchat ZIP file here.',
-                'DateBack cannot process folders, images, or other file types in this step.'
+                'No Snapchat ZIPs found',
+                'DateBack could not find any Snapchat export ZIP files in that folder.',
+                'Try dropping a specific mydata~*.zip file instead.'
             );
+        } else {
+            await processZipDiscoveryResult(result);
         }
+    } else {
+        showMessage(
+            'Wrong file type',
+            'Drop your downloaded Snapchat ZIP file here.',
+            'DateBack cannot process this file type in this step.'
+        );
     }
 });
 

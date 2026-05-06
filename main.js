@@ -2273,7 +2273,7 @@ ipcMain.handle('find-zip', async (event) => {
 });
 
 // Discover all ZIPs from the same Snapchat export
-ipcMain.handle('discover-zip-set', async (event, { expand = false } = {}) => {
+ipcMain.handle('discover-zip-set', async (event, { expand = false, folderPath = null } = {}) => {
     if (!validateSender(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
@@ -2289,16 +2289,31 @@ ipcMain.handle('discover-zip-set', async (event, { expand = false } = {}) => {
         path.join(homeDir, 'Pictures'),
     ]);
 
+    // Validate folderPath if provided (must be inside home dir, must exist)
+    if (folderPath) {
+        try {
+            const canonicalFolder = fs.realpathSync(folderPath);
+            const canonicalHome = getCanonicalPath(homeDir);
+            if (!canonicalFolder.startsWith(canonicalHome + path.sep)) {
+                return { success: false, error: 'Folder must be inside your home directory' };
+            }
+        } catch (e) {
+            return { success: false, error: 'Could not access that folder' };
+        }
+    }
+
     const PRIMARY_RE = /^mydata~(\d+)\.zip$/i;
 
     let primaryFiles = [];
     try {
         const { glob } = require('glob');
-        const pattern = expand
-            ? `${homeDir}/**/mydata~*.zip`
-            : `${downloadsDir}/mydata~*.zip`;
+        const pattern = folderPath
+            ? `${folderPath}/mydata~*.zip`
+            : expand
+                ? `${homeDir}/**/mydata~*.zip`
+                : `${downloadsDir}/mydata~*.zip`;
         const opts = {
-            maxDepth: expand ? 5 : 1,
+            maxDepth: folderPath ? 1 : (expand ? 5 : 1),
             ignore: ['**/node_modules/**', '**/Library/**', '**/.Trash/**'],
             nocase: true,
         };
