@@ -143,6 +143,7 @@ let storageMode = 'NONE';
 let zipDiscoveryPromise = null;   // Resolves to discover-zip-set result
 let zipDiscoveryResult = null;    // Cached result once resolved
 let isZipDiscovering = false;
+let zipDiscoveryHandled = false;  // Guard against re-processing on modal re-open
 
 function getEffectiveOutputDir() {
     return (outputPathInput && outputPathInput.value.trim()) || currentOutputDir || '';
@@ -1635,6 +1636,9 @@ function clearFilePath() {
     }
     const existingOpenBtn = document.getElementById('btn-open-zip-folder');
     if (existingOpenBtn) existingOpenBtn.remove();
+    zipDiscoveryHandled = false;
+    zipDiscoveryPromise = null;
+    zipDiscoveryResult = null;
     updateStartButtonState();
 }
 
@@ -1666,6 +1670,11 @@ async function processZipDiscoveryResult(result) {
     if (!result || !result.success) {
         return;
     }
+
+    if (zipDiscoveryHandled) {
+        return;
+    }
+    zipDiscoveryHandled = true;
 
     if (result.totalCount === 1) {
         await setFilePath(result.primaryPath);
