@@ -569,5 +569,59 @@ class BuildFileIndexCompanionModeTests(unittest.TestCase):
         self.assertNotIn('media/snap3.jpg', psm._companion_zip_registry)
 
 
+class BuildCompanionZipIndexesTests(unittest.TestCase):
+    """Tests for _build_companion_zip_indexes sibling detection by filename pattern."""
+
+    def _write_zip(self, path, members):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with zipfile.ZipFile(path, 'w') as zf:
+            for name, data in members.items():
+                zf.writestr(name, data)
+
+    def tearDown(self):
+        psm._companion_zip_registry = {}
+        psm.file_size_index = {}
+        psm.zip_name_index = {}
+        psm.zip_sid_index = {}
+        psm.zip_datetime_media_index = {}
+        psm.zip_date_media_index = {}
+        psm.zip_claimed_members = set()
+
+    def test_detects_numbered_companions(self):
+        """Companions mydata~TS-2.zip and mydata~TS-3.zip should be detected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~1234-2.zip'), {'media/b.jpg': b'b'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~1234-3.zip'), {'media/c.jpg': b'c'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+            psm._build_companion_zip_indexes(primary)
+            self.assertIn('media/b.jpg', psm._companion_zip_registry)
+            self.assertIn('media/c.jpg', psm._companion_zip_registry)
+
+    def test_ignores_different_timestamp(self):
+        """A ZIP with a different timestamp prefix must NOT be indexed as a companion."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~9999-2.zip'), {'media/z.jpg': b'z'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+            psm._build_companion_zip_indexes(primary)
+            self.assertNotIn('media/z.jpg', psm._companion_zip_registry)
+
+    def test_no_companions_is_noop(self):
+        """When no companion ZIPs exist, no error is raised and registry is unchanged."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+            before = dict(psm._companion_zip_registry)
+            psm._build_companion_zip_indexes(primary)
+            self.assertEqual(psm._companion_zip_registry, before)
+
+
 if __name__ == "__main__":
     unittest.main()
