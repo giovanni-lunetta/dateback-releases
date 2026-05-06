@@ -45,7 +45,7 @@
             <!-- Step 1: ZIP Selection with Drag & Drop -->
             <section class="input-section phase-step">
                 <div class="section-label-row">
-                    <label class="section-label">1. Select Downloaded Snapchat File</label>
+                    <label class="section-label" id="step1-label">1. Select Downloaded Snapchat File(s)</label>
                     <button type="button" class="section-help-icon"
                         aria-label="When you download your Snapchat data, it comes as a .zip file. It is usually named mydata_ followed by numbers. Select that .zip file here."
                         data-tooltip="When you download your Snapchat data, it comes as a .zip file. It is usually named mydata_ followed by numbers. Select that .zip file here.">?</button>
@@ -57,6 +57,9 @@
                         <p class="drop-subtext">or click to browse</p>
                     </div>
                     <input type="text" id="zip-path" class="text-input hidden" readonly>
+                </div>
+                <div id="zip-discovery-status" class="zip-discovery-status hidden">
+                    <span id="zip-discovery-text">Searching for Snapchat ZIP files…</span>
                 </div>
                 <div class="zip-selected-stack">
                     <div id="file-selected" class="file-selected hidden">
@@ -463,6 +466,18 @@
             <button id="btn-close-modal" class="btn btn-primary btn-large">
                 I'm Ready!
             </button>
+        </div>
+    </div>
+
+    <!-- Multi-ZIP Confirmation Modal -->
+    <div id="multi-zip-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 id="multi-zip-modal-title">Snapchat ZIPs Found</h2>
+            <p id="multi-zip-modal-text" class="modal-subtext"></p>
+            <p id="multi-zip-modal-subtext" class="modal-subtext"></p>
+            <div class="modal-buttons" id="multi-zip-modal-buttons">
+                <!-- Buttons injected by JS -->
+            </div>
         </div>
     </div>
 
