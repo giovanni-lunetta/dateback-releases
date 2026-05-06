@@ -6,10 +6,12 @@ import tempfile
 import unittest
 import zipfile
 import contextlib
+import threading
 from pathlib import Path
 from unittest import mock
 
 import requests
+from PIL import Image
 
 
 PYTHON_DIR = Path(__file__).resolve().parents[1] / "python"
@@ -65,6 +67,16 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
     def tearDown(self):
         psm.reset_runtime_disk_full_state()
         psm.ABORT_PROCESSING.clear()
+
+    def _image_bytes(self, color, image_format="PNG", size=(8, 8)):
+        buf = io.BytesIO()
+        Image.new("RGBA", size, color).save(buf, format=image_format)
+        return buf.getvalue()
+
+    def _webp_image_bytes(self, color, size=(8, 8)):
+        buf = io.BytesIO()
+        Image.new("RGBA", size, color).save(buf, format="WEBP")
+        return buf.getvalue()
 
     def test_reload_manifest_processed_count_updates_final_auto_upload_success_total(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -416,6 +428,204 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
                 b"video-bytes",
             )
 
+    def test_process_from_zip_merges_top_level_image_overlay_sibling(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            image_id = "11111111-1111-4111-8111-111111111111"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:04:05 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                main_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-main.jpg")
+                main_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(main_info, self._image_bytes((255, 0, 0, 255)))
+                overlay_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-overlay.jpg")
+                overlay_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(overlay_info, self._image_bytes((0, 0, 255, 128)))
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            output_file = Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-04-05.jpg"
+            with Image.open(output_file) as img:
+                pixel = img.convert("RGB").getpixel((0, 0))
+            self.assertNotEqual(pixel, (255, 0, 0))
+            self.assertGreater(pixel[2], 50)
+
+            report = json.loads((output_root / "detailed_report.json").read_text(encoding="utf-8"))
+            self.assertIn("Overlay Merge", report[0]["reason"])
+
+    def test_process_from_zip_overlays_static_image_onto_top_level_video_sibling(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            video_id = "22222222-2222-4222-8222-222222222222"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:05:07 UTC",
+                    "Media Type": "Video",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                video_info = zipfile.ZipInfo(f"memories/2024-01-02_{video_id}-main.mp4")
+                video_info.date_time = (2024, 1, 2, 3, 5, 6)
+                zf.writestr(video_info, b"fake-video")
+                overlay_info = zipfile.ZipInfo(f"memories/2024-01-02_{video_id}-overlay.jpg")
+                overlay_info.date_time = (2024, 1, 2, 3, 5, 6)
+                zf.writestr(overlay_info, self._image_bytes((0, 0, 255, 128)))
+
+            ffmpeg_calls = []
+
+            def fake_ffmpeg(cmd, check, stdout, stderr):
+                ffmpeg_calls.append(cmd)
+                Path(cmd[-1]).write_bytes(b"merged-video")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg):
+                stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            self.assertEqual(len(ffmpeg_calls), 1)
+            self.assertIn("-loop", ffmpeg_calls[0])
+            self.assertTrue(ffmpeg_calls[0][-1].endswith(".mp4"))
+            self.assertTrue(
+                any(
+                    isinstance(arg, str) and "overlay=0:0" in arg
+                    for arg in ffmpeg_calls[0]
+                )
+            )
+            output_file = Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-05-07.mp4"
+            self.assertEqual(output_file.read_bytes(), b"merged-video")
+
+            report = json.loads((output_root / "detailed_report.json").read_text(encoding="utf-8"))
+            self.assertIn("Overlay Merge", report[0]["reason"])
+
+    def test_process_from_zip_normalizes_mislabeled_webp_video_overlay_for_ffmpeg(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            video_id = "22222222-2222-4222-8222-222222222222"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:05:07 UTC",
+                    "Media Type": "Video",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                video_info = zipfile.ZipInfo(f"memories/2024-01-02_{video_id}-main.mp4")
+                video_info.date_time = (2024, 1, 2, 3, 5, 6)
+                zf.writestr(video_info, b"fake-video")
+                overlay_info = zipfile.ZipInfo(f"memories/2024-01-02_{video_id}-overlay.png")
+                overlay_info.date_time = (2024, 1, 2, 3, 5, 6)
+                zf.writestr(overlay_info, self._webp_image_bytes((0, 0, 255, 128)))
+
+            def fake_ffmpeg(cmd, check, stdout, stderr):
+                overlay_path = cmd[cmd.index("-i", cmd.index("-loop")) + 1]
+                self.assertEqual(Path(overlay_path).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+                Path(cmd[-1]).write_bytes(b"merged-video")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg):
+                stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            output_file = Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-05-07.mp4"
+            self.assertEqual(output_file.read_bytes(), b"merged-video")
+
+    def test_process_from_zip_keeps_output_names_unique_across_batches(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            first_id = "11111111-1111-4111-8111-111111111111"
+            second_id = "22222222-2222-4222-8222-222222222222"
+            duplicate_memory = {
+                "Date": "2024-01-02 03:04:05 UTC",
+                "Media Type": "Image",
+                "Download Link": "",
+                "Media Download Url": "",
+            }
+            missing_memory = {
+                "Date": "2024-01-03 03:04:05 UTC",
+                "Media Type": "Image",
+                "Download Link": "",
+                "Media Download Url": "",
+            }
+            memories = [duplicate_memory] + [missing_memory.copy() for _ in range(499)] + [duplicate_memory.copy()]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                first_info = zipfile.ZipInfo(f"memories/2024-01-02_{first_id}-main.jpg")
+                first_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(first_info, b"first-image")
+                second_info = zipfile.ZipInfo(f"memories/2024-01-02_{second_id}-main.jpg")
+                second_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(second_info, b"second-image")
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 2)
+            processed_dir = Path(stats["processed_dir"])
+            self.assertEqual(
+                sorted(p.name for p in processed_dir.glob("Batch_*/*") if p.is_file()),
+                ["2024-01-02_03-04-05.jpg", "2024-01-02_03-04-05_1.jpg"],
+            )
+
+    def test_process_from_zip_merges_top_level_overlay_from_companion_zip(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            companion_path = Path(temp_dir) / "mydata~1700000000000-2.zip"
+            image_id = "33333333-3333-4333-8333-333333333333"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:06:09 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                main_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-main.jpg")
+                main_info.date_time = (2024, 1, 2, 3, 6, 8)
+                zf.writestr(main_info, self._image_bytes((255, 0, 0, 255)))
+
+            with zipfile.ZipFile(companion_path, "w") as zf:
+                overlay_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-overlay.jpg")
+                overlay_info.date_time = (2024, 1, 2, 3, 6, 8)
+                zf.writestr(overlay_info, self._image_bytes((0, 0, 255, 128)))
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            output_file = Path(stats["processed_dir"]) / "Batch_01" / "2024-01-02_03-06-09.jpg"
+            with Image.open(output_file) as img:
+                pixel = img.convert("RGB").getpixel((0, 0))
+            self.assertNotEqual(pixel, (255, 0, 0))
+            self.assertGreater(pixel[2], 50)
+
     def test_process_from_zip_warns_when_metadata_rows_have_no_media_or_url(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_root = Path(temp_dir) / "output"
@@ -525,6 +735,7 @@ class BuildFileIndexCompanionModeTests(unittest.TestCase):
         psm.zip_datetime_media_index = {}
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
+        psm.zip_overlay_sibling_index = {}
 
     def _make_zip(self, members):
         """Return a BytesIO ZipFile containing the given {member_path: bytes} dict."""
@@ -586,6 +797,7 @@ class BuildCompanionZipIndexesTests(unittest.TestCase):
         psm.zip_datetime_media_index = {}
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
+        psm.zip_overlay_sibling_index = {}
 
     def test_detects_numbered_companions(self):
         """Companions mydata~TS-2.zip and mydata~TS-3.zip should be detected."""
@@ -646,6 +858,7 @@ class StreamZipMemberCompanionRoutingTests(unittest.TestCase):
         psm.zip_datetime_media_index = {}
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
+        psm.zip_overlay_sibling_index = {}
 
     def test_routes_to_companion_zip(self):
         """When companion ZIP is registered, recursive call reads from it."""
@@ -692,6 +905,70 @@ class StreamZipMemberCompanionRoutingTests(unittest.TestCase):
                     suffix_hint='.jpg'
                 )
 
+    def test_concurrent_companion_reads_do_not_fallback_to_primary_zip(self):
+        """Concurrent reads of the same companion member should all use the companion ZIP."""
+        primary_path = os.path.join(self.tmpdir, 'mydata~1234.zip')
+        companion_path = os.path.join(self.tmpdir, 'mydata~1234-2.zip')
+        member_name = 'media/shared.jpg'
+        self._write_zip(primary_path, {member_name: b'PRIMARY_DATA'})
+        self._write_zip(companion_path, {member_name: b'COMPANION_DATA'})
+        psm._companion_zip_registry[member_name] = companion_path
+
+        original_zip_file = zipfile.ZipFile
+        first_companion_open_started = threading.Event()
+        release_first_companion_open = threading.Event()
+        first_open_gate_used = threading.Event()
+
+        def gated_zip_file(path_value, *args, **kwargs):
+            opened = original_zip_file(path_value, *args, **kwargs)
+            if path_value == companion_path and not first_open_gate_used.is_set():
+                first_open_gate_used.set()
+                first_companion_open_started.set()
+                release_first_companion_open.wait(timeout=2)
+            return opened
+
+        results = []
+        errors = []
+        results_lock = threading.Lock()
+
+        def read_member(label):
+            try:
+                with original_zip_file(primary_path, 'r') as primary_zf:
+                    temp_path, _ = psm.stream_zip_member_to_temp(
+                        zip_file=primary_zf,
+                        member_name=member_name,
+                        zip_lock=None,
+                        mem_id=label,
+                        suffix_hint='.jpg'
+                    )
+                try:
+                    with open(temp_path, 'rb') as fh:
+                        data = fh.read()
+                finally:
+                    os.unlink(temp_path)
+                with results_lock:
+                    results.append(data)
+            except Exception as exc:
+                with results_lock:
+                    errors.append(exc)
+
+        with mock.patch.object(psm.zipfile, 'ZipFile', gated_zip_file):
+            first = threading.Thread(target=read_member, args=('first',))
+            first.start()
+            self.assertTrue(first_companion_open_started.wait(timeout=2))
+
+            second = threading.Thread(target=read_member, args=('second',))
+            second.start()
+            second.join(timeout=2)
+
+            release_first_companion_open.set()
+            first.join(timeout=2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(results), [b'COMPANION_DATA', b'COMPANION_DATA'])
+
 
 class CompanionFoundEventTests(unittest.TestCase):
     """Tests that _build_companion_zip_indexes emits a JSON companion_found event."""
@@ -710,6 +987,7 @@ class CompanionFoundEventTests(unittest.TestCase):
         psm.zip_datetime_media_index = {}
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
+        psm.zip_overlay_sibling_index = {}
 
     def test_emits_json_event(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -745,6 +1023,7 @@ class ComputeZipSetFingerprintTests(unittest.TestCase):
         psm.zip_datetime_media_index = {}
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
+        psm.zip_overlay_sibling_index = {}
 
     def test_fingerprint_includes_companions(self):
         with tempfile.TemporaryDirectory() as tmpdir:

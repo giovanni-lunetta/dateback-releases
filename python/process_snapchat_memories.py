@@ -535,15 +535,12 @@ def stream_zip_member_to_temp(zip_file, member_name, zip_lock=None, mem_id=None,
     # If this member lives in a companion ZIP, open that ZIP directly (no shared lock needed).
     companion_path = _companion_zip_registry.get(member_name)
     if companion_path:
-        # Temporarily remove the registry entry to prevent infinite recursion when the companion ZIP is opened.
-        # The entry will be restored after the recursive call completes.
-        _companion_zip_registry.pop(member_name, None)
-        try:
+        current_zip_path = getattr(zip_file, 'filename', None)
+        current_zip_realpath = os.path.realpath(current_zip_path) if current_zip_path else None
+        companion_realpath = os.path.realpath(companion_path)
+        if current_zip_realpath != companion_realpath:
             with zipfile.ZipFile(companion_path, 'r') as companion_zf:
                 return stream_zip_member_to_temp(companion_zf, member_name, zip_lock=None, mem_id=mem_id, suffix_hint=suffix_hint)
-        finally:
-            # Restore the registry entry in case we need it again
-            _companion_zip_registry[member_name] = companion_path
 
     temp_root = canonicalize_dir_path(TEMP_DIR)
     suffix = suffix_hint or os.path.splitext(member_name)[1] or ".bin"
@@ -1280,8 +1277,13 @@ def reserve_unique_output_path(target_dir, base_name, ext):
     with filename_lock:
         while True:
             suffix = "" if counter == 0 else f"_{counter}"
-            candidate = os.path.join(target_dir, f"{base_name}{suffix}{ext}")
-            if candidate not in reserved_output_paths and not os.path.exists(candidate):
+            candidate_name = f"{base_name}{suffix}{ext}"
+            candidate = os.path.join(target_dir, candidate_name)
+            if (
+                candidate not in reserved_output_paths
+                and candidate_name not in processed_index
+                and not os.path.exists(candidate)
+            ):
                 reserved_output_paths.add(candidate)
                 return candidate
             counter += 1
@@ -1292,6 +1294,26 @@ def release_reserved_output_path(path):
         return
     with filename_lock:
         reserved_output_paths.discard(path)
+
+
+def remember_processed_output_path(path):
+    """Track newly created output names so later batches do not reuse them."""
+    if not path:
+        return
+    try:
+        size = os.path.getsize(path)
+    except (OSError, IOError):
+        return
+    with filename_lock:
+        processed_index[os.path.basename(path)] = size
+
+
+def temp_output_path_with_extension(final_output):
+    """Create a temp output path that keeps the media extension last."""
+    base, ext = os.path.splitext(final_output)
+    if ext:
+        return f"{base}.tmp.{secrets.token_hex(4)}{ext}"
+    return f"{final_output}.tmp.{secrets.token_hex(4)}"
 
 
 def atomic_copy_file(src_path, dst_path):
@@ -1306,6 +1328,26 @@ def atomic_copy_file(src_path, dst_path):
                 os.remove(temp_path)
             except OSError:
                 pass
+
+
+def normalize_overlay_image_for_ffmpeg(overlay_path):
+    """Convert overlay artwork to a static PNG before ffmpeg reads it.
+
+    Some Snapchat exports label overlay files as .png even when the bytes are
+    WebP. ffmpeg can repeatedly fail on those mislabeled WebP inputs when they
+    are looped over video, so we decode the first frame through Pillow.
+    """
+    normalized_path = f"{overlay_path}.ffmpeg_overlay.{secrets.token_hex(4)}.png"
+    with Image.open(overlay_path) as overlay_img:
+        try:
+            overlay_img.seek(0)
+        except EOFError:
+            pass
+        overlay_frame = overlay_img.convert("RGBA")
+        overlay_frame.save(normalized_path, "PNG")
+        overlay_frame.close()
+    return normalized_path
+
 
 
 def atomic_write_stream_to_file(write_func, dst_path):
@@ -1822,6 +1864,8 @@ zip_sid_index = {}
 zip_datetime_media_index = {}
 zip_date_media_index = {}
 zip_claimed_members = set()
+# Maps top-level Snapchat overlay stem -> {"main": [...], "overlay": [...]}.
+zip_overlay_sibling_index = {}
 # Maps ZIP member path → companion ZIP file path (for multi-part Snapchat exports)
 _companion_zip_registry = {}
 zip_match_lock = threading.Lock()
@@ -1921,6 +1965,38 @@ def media_kind_from_zip_extension(filename):
     return "Video" if ext in (".mp4", ".mov", ".m4v") else "Image"
 
 
+TOP_LEVEL_OVERLAY_MEMBER_RE = re.compile(
+    r'^(?P<stem>\d{4}-\d{2}-\d{2}_[A-F0-9-]{36})-(?P<role>main|overlay)\.[^.]+$',
+    re.IGNORECASE
+)
+
+
+def parse_top_level_overlay_member(member_name):
+    base_name = os.path.basename(member_name or "")
+    match = TOP_LEVEL_OVERLAY_MEMBER_RE.match(base_name)
+    if not match:
+        return None
+    return {
+        "stem": match.group("stem").upper(),
+        "role": match.group("role").lower()
+    }
+
+
+def find_overlay_sibling_for_main(member_name):
+    parsed = parse_top_level_overlay_member(member_name)
+    if not parsed or parsed["role"] != "main":
+        return None
+    overlays = sorted(set(zip_overlay_sibling_index.get(parsed["stem"], {}).get("overlay", [])))
+    if len(overlays) == 1:
+        return overlays[0]
+    if len(overlays) > 1:
+        print(
+            f"   [WARNING] Multiple overlay siblings found for {os.path.basename(member_name)}; saving main media only.",
+            flush=True
+        )
+    return None
+
+
 def zip_info_datetime_key(info):
     try:
         dt = datetime(*info.date_time[:6])
@@ -1968,7 +2044,7 @@ def claim_zip_member_for_blank_download_url(date_str, media_type):
     return None
 
 def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
-    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index, zip_claimed_members, _companion_zip_registry
+    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index, zip_claimed_members, zip_overlay_sibling_index, _companion_zip_registry
     if clear:
         print("Building file index directly from ZIP...", flush=True)
         file_size_index = {}
@@ -1977,6 +2053,7 @@ def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
         zip_datetime_media_index = {}
         zip_date_media_index = {}
         zip_claimed_members = set()
+        zip_overlay_sibling_index = {}
         _companion_zip_registry = {}
     
     count = 0
@@ -2001,6 +2078,10 @@ def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
         base_name = os.path.basename(info.filename)
         if base_name:
             zip_name_index.setdefault(base_name, []).append(info.filename)
+            sibling = parse_top_level_overlay_member(info.filename)
+            if sibling:
+                sibling_entry = zip_overlay_sibling_index.setdefault(sibling["stem"], {"main": [], "overlay": []})
+                sibling_entry[sibling["role"]].append(info.filename)
             sid_match = re.search(r'_([A-F0-9-]{36})-main\.', base_name, re.IGNORECASE)
             if sid_match:
                 sid = sid_match.group(1).upper()
@@ -2024,6 +2105,9 @@ def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
     for index in (zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index):
         for names in index.values():
             names.sort()
+    for sibling_entry in zip_overlay_sibling_index.values():
+        sibling_entry["main"].sort()
+        sibling_entry["overlay"].sort()
 
     if clear:
         print(f"ZIP Index built. Found {count} files.", flush=True)
@@ -2073,6 +2157,84 @@ def _build_companion_zip_indexes(primary_zip_path):
     print(f"Combined index ready. {total_added} additional files from {len(companions)} companion ZIP(s).", flush=True)
 
 
+def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_epoch=None, media_type=None):
+    """Merge a top-level Snapchat -main file with its exact -overlay sibling.
+
+    If the overlay merge fails, save the main media so the memory is still recovered.
+    """
+    final_output = output_path
+    temp_output = temp_output_path_with_extension(final_output)
+    main_ext = os.path.splitext(main_path)[1].lower()
+    output_ext = os.path.splitext(final_output)[1].lower()
+    is_video = normalize_media_kind(media_type) == "Video" or main_ext in (".mp4", ".mov", ".m4v") or output_ext in (".mp4", ".mov", ".m4v")
+    normalized_overlay = None
+
+    try:
+        if is_video:
+            normalized_overlay = normalize_overlay_image_for_ffmpeg(overlay_path)
+            cmd = [
+                FFMPEG_PATH, '-y',
+                '-i', main_path,
+                '-loop', '1',
+                '-i', normalized_overlay,
+                '-filter_complex', '[1:v][0:v]scale2ref[ov][base];[base][ov]overlay=0:0:shortest=1',
+                '-c:a', 'copy',
+                '-shortest',
+                temp_output
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            os.replace(temp_output, final_output)
+            result_msg = "Success (Video Overlay Merge)"
+        else:
+            with Image.open(main_path) as main_img:
+                with Image.open(overlay_path) as overlay_img:
+                    main_img = main_img.convert("RGBA")
+                    overlay_img = overlay_img.convert("RGBA")
+                    if main_img.size != overlay_img.size:
+                        overlay_img = overlay_img.resize(main_img.size, Image.Resampling.LANCZOS)
+                    combined = Image.alpha_composite(main_img, overlay_img)
+                    combined = combined.convert("RGB")
+                    combined.save(temp_output, "JPEG")
+                    combined.close()
+                    del combined
+            os.replace(temp_output, final_output)
+            result_msg = "Success (Image Overlay Merge)"
+    except Exception as e:
+        if os.path.exists(temp_output):
+            try:
+                os.remove(temp_output)
+            except OSError:
+                pass
+        atomic_copy_file(main_path, final_output)
+        result_msg = f"Success (Overlay Merge Failed - Main Saved: {str(e)})"
+    finally:
+        if normalized_overlay and os.path.exists(normalized_overlay):
+            try:
+                os.remove(normalized_overlay)
+            except OSError:
+                pass
+
+    if ts_epoch:
+        try:
+            os.utime(final_output, (ts_epoch, ts_epoch))
+        except (OSError, IOError):
+            pass
+
+    try:
+        if os.path.getsize(final_output) <= 0:
+            raise ValueError("Processed file is empty")
+    except OSError as e:
+        raise ValueError(f"Could not stat processed file: {e}")
+
+    remember_processed_output_path(final_output)
+    return {
+        "status": "Success",
+        "reason": result_msg,
+        "file": os.path.basename(final_output),
+        "output_path": final_output
+    }
+
+
 def process_zip(zip_path, output_path, ts_epoch=None):
     zip_name = os.path.basename(zip_path)
     extract_dir = os.path.join(TEMP_DIR, zip_name + "_extract")
@@ -2110,14 +2272,18 @@ def process_zip(zip_path, output_path, ts_epoch=None):
 
             result_msg = ""
             if overlay_file:
-                temp_output = f"{final_output}.tmp.{secrets.token_hex(4)}"
+                temp_output = temp_output_path_with_extension(final_output)
+                normalized_overlay = None
                 try:
+                    normalized_overlay = normalize_overlay_image_for_ffmpeg(overlay_file)
                     cmd = [
                         FFMPEG_PATH, '-y',
                         '-i', main_file,
-                        '-i', overlay_file,
-                        '-filter_complex', "[0:v][1:v]overlay=0:0",
+                        '-loop', '1',
+                        '-i', normalized_overlay,
+                        '-filter_complex', "[1:v][0:v]scale2ref[ov][base];[base][ov]overlay=0:0:shortest=1",
                         '-c:a', 'copy',
+                        '-shortest',
                         temp_output  # Write to temp first
                     ]
                     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -2133,6 +2299,12 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                     # Fallback still uses atomic write
                     atomic_copy_file(main_file, final_output)
                     result_msg = "Success (Video Extract - No Overlay)"
+                finally:
+                    if normalized_overlay and os.path.exists(normalized_overlay):
+                        try:
+                            os.remove(normalized_overlay)
+                        except OSError:
+                            pass
             else:
                 atomic_copy_file(main_file, final_output)
                 result_msg = "Success (Video Extract)"
@@ -2149,6 +2321,7 @@ def process_zip(zip_path, output_path, ts_epoch=None):
             except OSError as e:
                 return {"status": "Error", "reason": f"Could not stat processed file: {e}", "file": os.path.basename(final_output)}
 
+            remember_processed_output_path(final_output)
             return {
                 "status": "Success",
                 "reason": result_msg,
@@ -2202,6 +2375,7 @@ def process_zip(zip_path, output_path, ts_epoch=None):
             except OSError as e:
                 return {"status": "Error", "reason": f"Could not stat processed file: {e}", "file": os.path.basename(final_output)}
 
+            remember_processed_output_path(final_output)
             return {
                 "status": "Success",
                 "reason": result_msg,
@@ -2473,8 +2647,10 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
 
     # ZIP mode optimization:
     # Copy ZIP member bytes to temp_processing under lock, then release lock for all heavy work.
+    zip_member_name = None
     if zip_file and not os.path.isabs(local_path):
         member_name = local_path
+        zip_member_name = member_name
         suffix_hint = os.path.splitext(local_filename)[1] if local_filename and '.' in local_filename else '.bin'
         try:
             local_path, _ = stream_zip_member_to_temp(
@@ -2568,6 +2744,55 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
 
             return res
 
+        if zip_file and zip_member_name:
+            overlay_member = find_overlay_sibling_for_main(zip_member_name)
+            if overlay_member:
+                overlay_temp_path = None
+                output_path = reserve_unique_output_path(target_dir, base_name, ext)
+                reserved_output = output_path
+                try:
+                    overlay_suffix = os.path.splitext(overlay_member)[1] or ".bin"
+                    overlay_temp_path, _ = stream_zip_member_to_temp(
+                        zip_file=zip_file,
+                        member_name=overlay_member,
+                        zip_lock=zip_lock,
+                        mem_id=f"{mem_id}_overlay",
+                        suffix_hint=overlay_suffix
+                    )
+                    res = process_top_level_overlay_sibling(local_path, overlay_temp_path, output_path, ts_epoch, media_type)
+                    res['id'] = mem_id
+
+                    if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
+                        try:
+                            os.remove(local_path)
+                        except (OSError, IOError):
+                            pass
+                    if overlay_temp_path and os.path.exists(overlay_temp_path):
+                        try:
+                            os.remove(overlay_temp_path)
+                        except (OSError, IOError):
+                            pass
+
+                    return res
+                except Exception as e:
+                    print(
+                        f"   [WARNING] Could not merge overlay sibling for {os.path.basename(zip_member_name)}: {e}. Saving main media only.",
+                        flush=True
+                    )
+                    release_reserved_output_path(reserved_output)
+                    reserved_output = None
+                    if output_path and os.path.exists(output_path):
+                        try:
+                            os.remove(output_path)
+                        except OSError:
+                            pass
+                    output_path = None
+                    if overlay_temp_path and os.path.exists(overlay_temp_path):
+                        try:
+                            os.remove(overlay_temp_path)
+                        except (OSError, IOError):
+                            pass
+
         # Non-overlay file path: reserve then atomic write
         output_path = reserve_unique_output_path(target_dir, base_name, ext)
         reserved_output = output_path
@@ -2585,6 +2810,8 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
                 raise ValueError("Processed file is empty")
         except OSError as e:
             raise ValueError(f"Could not stat processed file: {e}")
+
+        remember_processed_output_path(output_path)
 
         if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
             try:
