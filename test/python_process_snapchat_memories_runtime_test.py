@@ -514,8 +514,17 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             self.assertEqual(int(target_path.stat().st_mtime), int(expected))
 
 
-class BuildFileIndexCompanionModeTest(unittest.TestCase):
-    """Tests for additive companion-ZIP indexing."""
+class BuildFileIndexCompanionModeTests(unittest.TestCase):
+    """Tests for build_file_index_from_zip registry behavior (clear and additive modes)."""
+
+    def tearDown(self):
+        psm._companion_zip_registry = {}
+        psm.file_size_index = {}
+        psm.zip_name_index = {}
+        psm.zip_sid_index = {}
+        psm.zip_datetime_media_index = {}
+        psm.zip_date_media_index = {}
+        psm.zip_claimed_members = set()
 
     def _make_zip(self, members):
         """Return a BytesIO ZipFile containing the given {member_path: bytes} dict."""
