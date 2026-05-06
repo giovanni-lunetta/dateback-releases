@@ -2352,6 +2352,55 @@ ipcMain.handle('discover-zip-set', async (event, { expand = false } = {}) => {
     };
 });
 
+// Move a set of Snapchat ZIPs into a new organized folder
+ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = {}) => {
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
+    if (unauthorizedResponse) return unauthorizedResponse;
+
+    if (!Array.isArray(zipPaths) || zipPaths.length === 0) {
+        return { success: false, error: 'zipPaths must be a non-empty array' };
+    }
+    if (typeof destFolderName !== 'string' || !destFolderName.trim()) {
+        return { success: false, error: 'destFolderName is required' };
+    }
+
+    const homeDir = app.getPath('home');
+    const picturesDir = path.join(homeDir, 'Pictures');
+    const destFolder = path.join(picturesDir, 'SnapchatMemories', destFolderName.trim());
+
+    // Security: destination must be inside Pictures/SnapchatMemories
+    const canonical = getCanonicalPath(destFolder);
+    const canonicalPictures = getCanonicalPath(picturesDir);
+    if (!canonical.startsWith(canonicalPictures + path.sep)) {
+        return { success: false, error: 'Destination must be inside Pictures folder' };
+    }
+
+    try {
+        fs.mkdirSync(destFolder, { recursive: true });
+    } catch (e) {
+        return { success: false, error: `Could not create folder: ${e.message}` };
+    }
+
+    approveDirectoryForPurpose(canonical, 'zip');
+
+    const PRIMARY_RE = /^mydata~\d+\.zip$/i;
+    let primaryPath = null;
+
+    for (const src of zipPaths) {
+        const srcCanonical = getCanonicalPath(src);
+        const base = path.basename(src);
+        const dest = path.join(destFolder, base);
+        try {
+            fs.renameSync(srcCanonical, dest);
+            if (PRIMARY_RE.test(base)) primaryPath = dest;
+        } catch (e) {
+            return { success: false, error: `Could not move ${base}: ${e.message}` };
+        }
+    }
+
+    return { success: true, primaryPath, folderPath: destFolder, movedCount: zipPaths.length };
+});
+
 // Open folder dialog for purpose-specific folder selection
 ipcMain.handle('select-folder', async (event, purpose = 'output') => {
     const unauthorizedResponse = enforceAuthorizedSender(event, null);
