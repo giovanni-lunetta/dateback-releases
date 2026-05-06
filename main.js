@@ -2414,19 +2414,28 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
         }
     }
 
+    const movedPairs = []; // Track { dest, src } for rollback
     for (const src of zipPaths) {
         const srcCanonical = getCanonicalPath(src);
         const base = path.basename(src);
         const dest = path.join(destFolder, base);
         try {
             fs.renameSync(srcCanonical, dest);
+            movedPairs.push({ dest, src: srcCanonical });
             if (PRIMARY_RE.test(base)) primaryPath = dest;
         } catch (e) {
-            return { success: false, error: `Could not move ${base}: ${e.message}` };
+            // Attempt rollback of already-moved files
+            for (const { dest: movedDest, src: origSrc } of movedPairs) {
+                try { fs.renameSync(movedDest, origSrc); } catch (_) { /* best effort */ }
+            }
+            return {
+                success: false,
+                error: `Could not move ${base}: ${e.message}. ${movedPairs.length} file(s) were moved back.`
+            };
         }
     }
 
-    return { success: true, primaryPath, folderPath: destFolder, movedCount: zipPaths.length };
+    return { success: true, primaryPath, folderPath: destFolder, movedCount: movedPairs.length };
 });
 
 // Open folder dialog for purpose-specific folder selection
