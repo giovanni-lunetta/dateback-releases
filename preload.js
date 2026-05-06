@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld('api', {
     // File dialogs
     selectZip: () => ipcRenderer.invoke('select-zip'),
     findZip: () => ipcRenderer.invoke('find-zip'),
+    discoverZipSet: (expand) => ipcRenderer.invoke('discover-zip-set', { expand: !!expand }),
+    organizeZipSet: (zipPaths, destFolderName) => ipcRenderer.invoke('organize-zip-set', {
+        zipPaths: Array.isArray(zipPaths) ? zipPaths : [],
+        destFolderName: typeof destFolderName === 'string' ? destFolderName.trim() : '',
+    }),
     selectFolder: (purpose) => ipcRenderer.invoke('select-folder', normalizeFolderPurpose(purpose)),
     openFolder: (path) => ipcRenderer.invoke('open-folder', requireString(path, 'Folder path')),
     openUrl: (url) => ipcRenderer.invoke('open-url', requireString(url, 'URL')),
