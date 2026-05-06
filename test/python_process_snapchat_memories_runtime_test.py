@@ -728,5 +728,52 @@ class CompanionFoundEventTests(unittest.TestCase):
             self.assertIn('mydata~1234-2.zip', event['companions'])
 
 
+class ComputeZipSetFingerprintTests(unittest.TestCase):
+    """Tests for compute_zip_set_fingerprint."""
+
+    def _write_zip(self, path, members):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with zipfile.ZipFile(path, 'w') as zf:
+            for name, data in members.items():
+                zf.writestr(name, data)
+
+    def tearDown(self):
+        psm._companion_zip_registry = {}
+        psm.file_size_index = {}
+        psm.zip_name_index = {}
+        psm.zip_sid_index = {}
+        psm.zip_datetime_media_index = {}
+        psm.zip_date_media_index = {}
+        psm.zip_claimed_members = set()
+
+    def test_fingerprint_includes_companions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            companion = os.path.join(tmpdir, 'mydata~1234-2.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            self._write_zip(companion, {'media/b.jpg': b'b'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+            with zipfile.ZipFile(companion) as zf:
+                psm.build_file_index_from_zip(zf, clear=False, source_zip_path=companion)
+            fp = psm.compute_zip_set_fingerprint(primary)
+            self.assertIn('mydata~1234.zip', fp)
+            self.assertIn('mydata~1234-2.zip', fp)
+
+    def test_fingerprint_changes_when_companion_added(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+            fp_before = psm.compute_zip_set_fingerprint(primary)
+            companion = os.path.join(tmpdir, 'mydata~1234-2.zip')
+            self._write_zip(companion, {'media/b.jpg': b'b'})
+            with zipfile.ZipFile(companion) as zf:
+                psm.build_file_index_from_zip(zf, clear=False, source_zip_path=companion)
+            fp_after = psm.compute_zip_set_fingerprint(primary)
+            self.assertNotEqual(fp_before, fp_after)
+
+
 if __name__ == "__main__":
     unittest.main()

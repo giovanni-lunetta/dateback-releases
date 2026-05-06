@@ -1633,6 +1633,22 @@ def compute_zip_fingerprint(zip_path):
     except OSError:
         return None
 
+def compute_zip_set_fingerprint(primary_zip_path):
+    """Fingerprint the full ZIP set (primary + companions) for resume correctness.
+
+    Returns a string that changes if any ZIP in the set is added, removed, or modified.
+    """
+    paths = set(_companion_zip_registry.values())
+    paths.add(primary_zip_path)
+    parts = []
+    for p in sorted(paths):
+        try:
+            st = os.stat(p)
+            parts.append(f"{os.path.basename(p)}|{st.st_size}|{int(st.st_mtime)}")
+        except OSError:
+            parts.append(f"{os.path.basename(p)}|MISSING")
+    return ";".join(parts)
+
 def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, output_root=None):
     global JSON_PATH, DOWNLOADS_DIR, OUTPUT_DIR, TEMP_DIR, CORRUPTED_DIR, REPORT_FILE, RAW_DL_NAME, PROCESSING_ROOT
     JSON_PATH = json_path
@@ -2621,7 +2637,7 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
 
 def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, json_data=None, pause_batches=False,
          trust_manifest=False, zip_fingerprint=None, auto_upload=False, destination_dir=None, cache_gb=5.0,
-         cache_low_gb=3.0, upload_mode='copy', staging_dir=None, max_upload_retries=20):
+         cache_low_gb=3.0, upload_mode='copy', staging_dir=None, max_upload_retries=20, primary_zip_path=None):
     # Declare global variable at the top of the function
     global ORIGINAL_TOTAL_MEMORIES, AUTO_UPLOAD_ENABLED, AUTO_DESTINATION_DIR, AUTO_CACHE_GB
     global AUTO_CACHE_LOW_GB, AUTO_UPLOAD_MODE, AUTO_STAGING_DIR, AUTO_MAX_UPLOAD_RETRIES
@@ -2826,7 +2842,11 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             _build_companion_zip_indexes(zip_file.filename)
     else:
         build_file_index(DOWNLOADS_DIR)
-        
+
+    # Compute companion-aware ZIP set fingerprint after indexes are built
+    if primary_zip_path and zip_fingerprint is None:
+        zip_fingerprint = compute_zip_set_fingerprint(primary_zip_path)
+
     # Output Directory Setup
     print("Clearing output directory configuration...")
     
@@ -3634,8 +3654,7 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
 
             # set_config: processed_dir is where files go, output_root is where temp/corrupted/report go
             set_config("IN_MEMORY", "ZIP_STREAM", processed_dir, raw_dl_name=raw_dl_name, output_root=output_root)
-            
-            zip_fingerprint = compute_zip_fingerprint(zip_path)
+
             # Call main with zip context and pre-loaded data
             resolved_staging_dir = (
                 os.path.abspath(staging_dir)
@@ -3650,7 +3669,8 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
                 json_data=json_content,
                 pause_batches=pause_batches,
                 trust_manifest=trust_manifest,
-                zip_fingerprint=zip_fingerprint,
+                zip_fingerprint=None,
+                primary_zip_path=zip_path,
                 auto_upload=auto_upload,
                 destination_dir=destination_dir,
                 cache_gb=cache_gb,
