@@ -2740,9 +2740,6 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
 
     if manifest:
         manifest_processed_count = manifest.get("processed_count")
-        manifest_zip = manifest.get("zip_fingerprint")
-        if manifest_zip and zip_fingerprint and manifest_zip != zip_fingerprint and (trust_manifest or auto_upload):
-            raise ValueError("ZIP export does not match previous run. Please choose Verify Files or Start Fresh.")
 
     if trust_manifest or auto_upload:
         mode_label = "Resume mode: Skip Files Already Processed" if trust_manifest else "Auto Upload mode: Using manifest resume state"
@@ -2846,6 +2843,12 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # Compute companion-aware ZIP set fingerprint after indexes are built
     if primary_zip_path and zip_fingerprint is None:
         zip_fingerprint = compute_zip_set_fingerprint(primary_zip_path)
+
+    # Manifest ZIP mismatch check — must run AFTER fingerprint is computed
+    if manifest:
+        manifest_zip = manifest.get("zip_fingerprint")
+        if manifest_zip and zip_fingerprint and manifest_zip != zip_fingerprint and (trust_manifest or auto_upload):
+            raise ValueError("ZIP export does not match previous run. Please choose Verify Files or Start Fresh.")
 
     # Output Directory Setup
     print("Clearing output directory configuration...")
