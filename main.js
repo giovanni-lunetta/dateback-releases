@@ -2381,7 +2381,7 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
         return { success: false, error: `Could not create folder: ${e.message}` };
     }
 
-    approveDirectoryForPurpose(canonical, 'zip');
+    approveDirectoryForPurpose(canonical, 'output');
 
     const PRIMARY_RE = /^mydata~\d+\.zip$/i;
     const VALID_ZIP_RE = /^mydata~\d+(-\d+)?\.zip$/i;
