@@ -53,13 +53,14 @@
                 <div id="drop-zone" class="drop-zone">
                     <div class="drop-zone-content">
                         <span class="drop-icon">📁</span>
-                        <p class="drop-text">Drag & drop your ZIP file here</p>
+                        <p class="drop-text">Drag & Drop your Data Folder or ZIP file here</p>
                         <p class="drop-subtext">or click to browse</p>
                     </div>
+                    <div id="zip-discovery-status" class="zip-discovery-status hidden">
+                        <span class="drop-icon">🔍</span>
+                        <span id="zip-discovery-text">Searching for Snapchat ZIP files…</span>
+                    </div>
                     <input type="text" id="zip-path" class="text-input hidden" readonly>
-                </div>
-                <div id="zip-discovery-status" class="zip-discovery-status hidden">
-                    <span id="zip-discovery-text">Searching for Snapchat ZIP files…</span>
                 </div>
                 <div class="zip-selected-stack">
                     <div id="file-selected" class="file-selected hidden">
@@ -72,10 +73,12 @@
                         <button id="btn-validation-help" class="btn btn-small btn-warning hidden">What do I do?</button>
                     </div>
                 </div>
-                <!-- Auto-Search Button (Outside drop zone to prevent event bubbling) -->
-                <button id="btn-find-zip" class="btn btn-secondary btn-zip-auto-find">
-                    🔍 Find My Zip Automatically
-                </button>
+                <!-- Action Buttons (Outside drop zone to prevent event bubbling) -->
+                <div id="zip-action-buttons" class="zip-action-buttons">
+                    <button id="btn-find-zip" class="btn btn-secondary btn-zip-auto-find">
+                        🔍 Find My Zip Automatically
+                    </button>
+                </div>
             </section>
 
             <!-- Step 2: Processing Mode -->

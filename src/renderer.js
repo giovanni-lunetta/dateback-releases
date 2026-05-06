@@ -1822,7 +1822,12 @@ function updateOpenFolderButton(folderPath, zipCount) {
         await window.api.openFolder(folderPath);
     });
 
-    btnFindZip.insertAdjacentElement('afterend', btn);
+    const container = document.getElementById('zip-action-buttons');
+    if (container) {
+        container.appendChild(btn);
+    } else {
+        btnFindZip.insertAdjacentElement('afterend', btn);
+    }
 }
 
 // Initialize
@@ -1857,6 +1862,7 @@ async function init() {
 
 // Click to browse
 dropZone.addEventListener('click', async () => {
+    if (isZipDiscovering) return;
     const paths = await window.api.selectZipOrFolder();
     if (!paths || paths.length === 0) return;
 
@@ -1928,6 +1934,7 @@ dropZone.addEventListener('drop', async (e) => {
     e.preventDefault();
     e.stopPropagation();
     dropZone.classList.remove('drag-over');
+    if (isZipDiscovering) return;
 
     const files = e.dataTransfer.files;
     if (files.length === 0) return;

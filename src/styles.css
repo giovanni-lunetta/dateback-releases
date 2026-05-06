@@ -1395,6 +1395,19 @@ textarea {
     margin: 0;
 }
 
+.zip-action-buttons {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.zip-action-buttons > .btn-zip-auto-find {
+    flex: 1;
+    margin-top: 0 !important;
+    align-self: auto;
+}
+
 #btn-find-zip,
 .btn-zip-auto-find {
     width: auto !important;
@@ -1415,6 +1428,31 @@ textarea {
     background: rgba(106, 137, 167, 0.13);
     border-color: rgba(136, 189, 242, 0.3);
     color: var(--text-main);
+}
+
+.zip-discovery-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 72px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    opacity: 0.85;
+}
+
+.zip-discovery-status.hidden {
+    display: none;
+}
+
+.drop-zone.searching {
+    cursor: default;
+    pointer-events: none;
+}
+
+.drop-zone.searching .drop-zone-content {
+    display: none;
 }
 
 .zip-selected-stack {

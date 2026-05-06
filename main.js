@@ -2369,6 +2369,11 @@ ipcMain.handle('discover-zip-set', async (event, { expand = false, folderPath = 
 
     const needsOrganizing = SENSITIVE_ROOTS.has(seedFolder);
 
+    // Pre-approve the seedFolder so "Open ZIP Folder" works without a separate picker step
+    if (!needsOrganizing) {
+        approveDirectoryForPurpose(getCanonicalPath(seedFolder), 'output');
+    }
+
     return {
         success: true,
         primaryPath,
