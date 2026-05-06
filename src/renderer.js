@@ -1857,9 +1857,37 @@ async function init() {
 
 // Click to browse
 dropZone.addEventListener('click', async () => {
-    const zipPath = await window.api.selectZip();
-    if (zipPath) {
-        await setFilePath(zipPath);
+    const paths = await window.api.selectZipOrFolder();
+    if (!paths || paths.length === 0) return;
+
+    if (paths.length === 1) {
+        const p = paths[0];
+        if (p.toLowerCase().endsWith('.zip')) {
+            await setFilePath(p);
+        } else {
+            // Selected a folder
+            zipDiscoveryHandled = false;
+            zipDiscoveryPromise = null;
+            zipDiscoveryResult = null;
+            const result = await startZipDiscovery(false, p);
+            if (!result || !result.success) {
+                showMessage('No Snapchat ZIPs found', 'DateBack could not find any Snapchat export ZIP files in that folder.', 'Try selecting a specific mydata~*.zip file instead.');
+            } else {
+                await processZipDiscoveryResult(result);
+            }
+        }
+    } else {
+        // Multiple files selected — discover in the parent folder of the first
+        const parentFolder = paths[0].substring(0, paths[0].lastIndexOf('/'));
+        zipDiscoveryHandled = false;
+        zipDiscoveryPromise = null;
+        zipDiscoveryResult = null;
+        const result = await startZipDiscovery(false, parentFolder);
+        if (!result || !result.success) {
+            showMessage('No Snapchat ZIPs found', 'DateBack could not find any Snapchat export ZIP files in that folder.', 'Try selecting a specific mydata~*.zip file instead.');
+        } else {
+            await processZipDiscoveryResult(result);
+        }
     }
 });
 
@@ -1904,30 +1932,43 @@ dropZone.addEventListener('drop', async (e) => {
     const files = e.dataTransfer.files;
     if (files.length === 0) return;
 
+    if (files.length > 1) {
+        // Multiple files dropped — discover in the parent folder of the first file
+        const firstPath = window.api.getPathForFile(files[0]);
+        if (!firstPath) return;
+        const parentFolder = firstPath.substring(0, firstPath.lastIndexOf('/'));
+        zipDiscoveryHandled = false;
+        zipDiscoveryPromise = null;
+        zipDiscoveryResult = null;
+        const result = await startZipDiscovery(false, parentFolder);
+        if (!result || !result.success) {
+            showMessage('No Snapchat ZIPs found', 'DateBack could not find any Snapchat export ZIP files in that folder.', 'Try dropping a specific mydata~*.zip file instead.');
+        } else {
+            await processZipDiscoveryResult(result);
+        }
+        return;
+    }
+
     const file = files[0];
-    if (file.name.endsWith('.zip')) {
-        await setFilePath(file.path);
-    } else if (file.path) {
+    const filePath = window.api.getPathForFile(file);
+    if (!filePath) {
+        showMessage('Wrong file type', 'Drop your downloaded Snapchat ZIP file here.', 'DateBack cannot process this file type in this step.');
+        return;
+    }
+
+    if (file.name.toLowerCase().endsWith('.zip')) {
+        await setFilePath(filePath);
+    } else {
         // Dropped a folder — scan it for Snapchat ZIPs
         zipDiscoveryHandled = false;
         zipDiscoveryPromise = null;
         zipDiscoveryResult = null;
-        const result = await startZipDiscovery(false, file.path);
+        const result = await startZipDiscovery(false, filePath);
         if (!result || !result.success) {
-            showMessage(
-                'No Snapchat ZIPs found',
-                'DateBack could not find any Snapchat export ZIP files in that folder.',
-                'Try dropping a specific mydata~*.zip file instead.'
-            );
+            showMessage('No Snapchat ZIPs found', 'DateBack could not find any Snapchat export ZIP files in that folder.', 'Try dropping a specific mydata~*.zip file instead.');
         } else {
             await processZipDiscoveryResult(result);
         }
-    } else {
-        showMessage(
-            'Wrong file type',
-            'Drop your downloaded Snapchat ZIP file here.',
-            'DateBack cannot process this file type in this step.'
-        );
     }
 });
 

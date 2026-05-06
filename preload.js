@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const progressListeners = new Set();
 const logListeners = new Set();
@@ -50,6 +50,8 @@ function normalizeFolderPurpose(value) {
 contextBridge.exposeInMainWorld('api', {
     // File dialogs
     selectZip: () => ipcRenderer.invoke('select-zip'),
+    selectZipOrFolder: () => ipcRenderer.invoke('select-zip-or-folder'),
+    getPathForFile: (file) => webUtils.getPathForFile(file),
     findZip: () => ipcRenderer.invoke('find-zip'),
     discoverZipSet: (expand, folderPath) => ipcRenderer.invoke('discover-zip-set', { expand: !!expand, folderPath: folderPath || null }),
     organizeZipSet: (zipPaths, destFolderName) => ipcRenderer.invoke('organize-zip-set', {

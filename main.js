@@ -2232,6 +2232,18 @@ ipcMain.handle('select-zip', async (event) => {
     return result.filePaths[0] || null;
 });
 
+// Open a dialog that accepts a folder, a single ZIP, or multiple ZIPs
+ipcMain.handle('select-zip-or-folder', async (event) => {
+    if (!validateSender(event)) {
+        return null;
+    }
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openFile', 'openDirectory', 'multiSelections'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths;
+});
+
 // Auto-search for mydata~*.zip files
 ipcMain.handle('find-zip', async (event) => {
     if (!validateSender(event)) {
