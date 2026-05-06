@@ -2038,7 +2038,11 @@ def _build_companion_zip_indexes(primary_zip_path):
     if not companions:
         return
 
-    print(f"Found {len(companions)} companion ZIP(s) — building combined index...", flush=True)
+    print(json.dumps({
+        "type": "companion_found",
+        "companion_count": len(companions),
+        "companions": [os.path.basename(c) for c in companions]
+    }), flush=True)
     total_added = 0
     for companion_path in companions:
         try:

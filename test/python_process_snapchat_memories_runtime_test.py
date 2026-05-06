@@ -693,5 +693,40 @@ class StreamZipMemberCompanionRoutingTests(unittest.TestCase):
                 )
 
 
+class CompanionFoundEventTests(unittest.TestCase):
+    """Tests that _build_companion_zip_indexes emits a JSON companion_found event."""
+
+    def _write_zip(self, path, members):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with zipfile.ZipFile(path, 'w') as zf:
+            for name, data in members.items():
+                zf.writestr(name, data)
+
+    def tearDown(self):
+        psm._companion_zip_registry = {}
+        psm.file_size_index = {}
+        psm.zip_name_index = {}
+        psm.zip_sid_index = {}
+        psm.zip_datetime_media_index = {}
+        psm.zip_date_media_index = {}
+        psm.zip_claimed_members = set()
+
+    def test_emits_json_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~1234-2.zip'), {'media/b.jpg': b'b'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+            with contextlib.redirect_stdout(io.StringIO()) as captured:
+                psm._build_companion_zip_indexes(primary)
+            output = captured.getvalue().strip()
+            first_line = output.split('\n')[0]
+            event = json.loads(first_line)
+            self.assertEqual(event['type'], 'companion_found')
+            self.assertEqual(event['companion_count'], 1)
+            self.assertIn('mydata~1234-2.zip', event['companions'])
+
+
 if __name__ == "__main__":
     unittest.main()
