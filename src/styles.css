@@ -1402,7 +1402,8 @@ textarea {
     margin-top: 8px;
 }
 
-.zip-action-buttons > .btn-zip-auto-find {
+.zip-action-buttons > .btn-zip-auto-find,
+.zip-action-buttons > #btn-find-zip {
     flex: 1 1 0 !important;
     width: 0 !important;
     min-width: 0;
