@@ -2272,6 +2272,86 @@ ipcMain.handle('find-zip', async (event) => {
     }
 });
 
+// Discover all ZIPs from the same Snapchat export
+ipcMain.handle('discover-zip-set', async (event, { expand = false } = {}) => {
+    if (!validateSender(event)) {
+        return { success: false, error: 'Unauthorized sender' };
+    }
+
+    const homeDir = app.getPath('home');
+    const downloadsDir = app.getPath('downloads');
+    const desktopDir = path.join(homeDir, 'Desktop');
+
+    const SENSITIVE_ROOTS = new Set([
+        downloadsDir,
+        desktopDir,
+        path.join(homeDir, 'Documents'),
+        path.join(homeDir, 'Pictures'),
+    ]);
+
+    const PRIMARY_RE = /^mydata~(\d+)\.zip$/i;
+
+    let primaryFiles = [];
+    try {
+        const { glob } = require('glob');
+        const pattern = expand
+            ? `${homeDir}/**/mydata~*.zip`
+            : `${downloadsDir}/mydata~*.zip`;
+        const opts = {
+            maxDepth: expand ? 5 : 1,
+            ignore: ['**/node_modules/**', '**/Library/**', '**/.Trash/**'],
+            nocase: true,
+        };
+        const found = await glob(pattern, opts);
+        for (const f of found) {
+            const base = path.basename(f);
+            if (PRIMARY_RE.test(base)) {
+                primaryFiles.push(f);
+            }
+        }
+    } catch (e) {
+        console.warn('discover-zip-set scan error:', e.message);
+    }
+
+    if (primaryFiles.length === 0) {
+        return { success: false, error: 'No Snapchat export ZIP found' };
+    }
+
+    // Pick the most recently modified primary
+    primaryFiles.sort((a, b) => fs.statSync(b).mtime - fs.statSync(a).mtime);
+    const primaryPath = primaryFiles[0];
+    const seedFolder = path.dirname(primaryPath);
+    const stem = path.basename(primaryPath, '.zip'); // e.g. mydata~1234
+
+    // Find companions: same folder, same stem, -N.zip suffix
+    const escapedStem = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const COMPANION_RE = new RegExp(`^${escapedStem}-\\d+\\.zip$`, 'i');
+    let companionPaths = [];
+    try {
+        const entries = fs.readdirSync(seedFolder);
+        for (const entry of entries) {
+            if (!COMPANION_RE.test(entry)) continue;
+            const full = path.join(seedFolder, entry);
+            const st = fs.lstatSync(full);
+            if (st.isFile()) companionPaths.push(full);
+        }
+        companionPaths.sort();
+    } catch (e) {
+        console.warn('discover-zip-set companion scan error:', e.message);
+    }
+
+    const needsOrganizing = SENSITIVE_ROOTS.has(seedFolder);
+
+    return {
+        success: true,
+        primaryPath,
+        companionPaths,
+        totalCount: 1 + companionPaths.length,
+        seedFolder,
+        needsOrganizing,
+    };
+});
+
 // Open folder dialog for purpose-specific folder selection
 ipcMain.handle('select-folder', async (event, purpose = 'output') => {
     const unauthorizedResponse = enforceAuthorizedSender(event, null);
@@ -2380,23 +2460,8 @@ ipcMain.handle('get-defaults', async (event) => {
     const homeDir = app.getPath('home');
     const downloadsDir = app.getPath('downloads');
 
-    // Try to find mydata*.zip in Downloads
-    const fs = require('fs');
+    // ZIP discovery is now handled by 'discover-zip-set'; get-defaults no longer auto-sets the ZIP.
     let defaultZip = null;
-    try {
-        const files = fs.readdirSync(downloadsDir);
-        const zipFiles = files.filter(f => f.startsWith('mydata') && f.endsWith('.zip'));
-        if (zipFiles.length > 0) {
-            // Get newest
-            zipFiles.sort((a, b) => {
-                return fs.statSync(path.join(downloadsDir, b)).mtime -
-                    fs.statSync(path.join(downloadsDir, a)).mtime;
-            });
-            defaultZip = path.join(downloadsDir, zipFiles[0]);
-        }
-    } catch (e) {
-        console.warn('Could not scan Downloads for mydata ZIP:', e.message);
-    }
 
     return {
         zipPath: defaultZip,
