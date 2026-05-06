@@ -514,5 +514,51 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             self.assertEqual(int(target_path.stat().st_mtime), int(expected))
 
 
+class BuildFileIndexCompanionModeTest(unittest.TestCase):
+    """Tests for additive companion-ZIP indexing."""
+
+    def _make_zip(self, members):
+        """Return a BytesIO ZipFile containing the given {member_path: bytes} dict."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            for name, data in members.items():
+                zf.writestr(name, data)
+        buf.seek(0)
+        return buf
+
+    def test_clear_true_resets_registry(self):
+        """clear=True should wipe _companion_zip_registry before indexing."""
+        buf = self._make_zip({'media/snap1.jpg': b'x'})
+        with zipfile.ZipFile(buf) as zf:
+            psm.build_file_index_from_zip(zf, clear=True, source_zip_path='/fake/primary.zip')
+        self.assertIn('media/snap1.jpg', psm._companion_zip_registry)
+        # Second clear=True call should wipe the first registration
+        buf2 = self._make_zip({'media/snap2.jpg': b'y'})
+        with zipfile.ZipFile(buf2) as zf2:
+            psm.build_file_index_from_zip(zf2, clear=True, source_zip_path='/fake/other.zip')
+        self.assertNotIn('media/snap1.jpg', psm._companion_zip_registry)
+        self.assertIn('media/snap2.jpg', psm._companion_zip_registry)
+
+    def test_clear_false_additive(self):
+        """clear=False should ADD entries to existing index without wiping it."""
+        buf1 = self._make_zip({'media/snap1.jpg': b'a'})
+        with zipfile.ZipFile(buf1) as zf1:
+            psm.build_file_index_from_zip(zf1, clear=True, source_zip_path='/fake/primary.zip')
+        buf2 = self._make_zip({'media/snap2.jpg': b'b'})
+        with zipfile.ZipFile(buf2) as zf2:
+            psm.build_file_index_from_zip(zf2, clear=False, source_zip_path='/fake/companion-2.zip')
+        self.assertIn('media/snap1.jpg', psm._companion_zip_registry)
+        self.assertIn('media/snap2.jpg', psm._companion_zip_registry)
+        self.assertEqual(psm._companion_zip_registry['media/snap1.jpg'], '/fake/primary.zip')
+        self.assertEqual(psm._companion_zip_registry['media/snap2.jpg'], '/fake/companion-2.zip')
+
+    def test_no_source_zip_path_skips_registry(self):
+        """When source_zip_path is None, entries should NOT appear in registry."""
+        buf = self._make_zip({'media/snap3.jpg': b'c'})
+        with zipfile.ZipFile(buf) as zf:
+            psm.build_file_index_from_zip(zf, clear=True, source_zip_path=None)
+        self.assertNotIn('media/snap3.jpg', psm._companion_zip_registry)
+
+
 if __name__ == "__main__":
     unittest.main()
