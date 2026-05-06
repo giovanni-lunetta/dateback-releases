@@ -2384,7 +2384,35 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
     approveDirectoryForPurpose(canonical, 'zip');
 
     const PRIMARY_RE = /^mydata~\d+\.zip$/i;
+    const VALID_ZIP_RE = /^mydata~\d+(-\d+)?\.zip$/i;
     let primaryPath = null;
+
+    // Validate all source paths before moving anything
+    for (const src of zipPaths) {
+        if (typeof src !== 'string' || !src.trim()) {
+            return { success: false, error: 'Invalid ZIP path: must be a non-empty string' };
+        }
+        const base = path.basename(src);
+        if (!VALID_ZIP_RE.test(base)) {
+            return { success: false, error: `Invalid ZIP filename: ${base}` };
+        }
+        const srcCanonical = getCanonicalPath(src);
+        if (!srcCanonical.startsWith(homeDir + path.sep)) {
+            return { success: false, error: `ZIP path must be inside home directory: ${base}` };
+        }
+        if (isSensitiveRoot(srcCanonical)) {
+            return { success: false, error: `Refusing to move from sensitive root: ${base}` };
+        }
+        let lstat;
+        try {
+            lstat = fs.lstatSync(srcCanonical);
+        } catch (e) {
+            return { success: false, error: `ZIP file not found: ${base}` };
+        }
+        if (!lstat.isFile()) {
+            return { success: false, error: `Not a regular file: ${base}` };
+        }
+    }
 
     for (const src of zipPaths) {
         const srcCanonical = getCanonicalPath(src);
