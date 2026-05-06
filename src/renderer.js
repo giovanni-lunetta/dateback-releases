@@ -115,6 +115,15 @@ const messageModalText = document.getElementById('message-modal-text');
 const messageModalSubtext = document.getElementById('message-modal-subtext');
 const btnMessageOk = document.getElementById('btn-message-ok');
 
+// Multi-ZIP Discovery elements
+const zipDiscoveryStatus = document.getElementById('zip-discovery-status');
+const zipDiscoveryText = document.getElementById('zip-discovery-text');
+const multiZipModal = document.getElementById('multi-zip-modal');
+const multiZipModalTitle = document.getElementById('multi-zip-modal-title');
+const multiZipModalText = document.getElementById('multi-zip-modal-text');
+const multiZipModalSubtext = document.getElementById('multi-zip-modal-subtext');
+const multiZipModalButtons = document.getElementById('multi-zip-modal-buttons');
+
 // State
 let isProcessing = false;
 let currentOutputDir = '';
@@ -131,6 +140,9 @@ let lastStorageEstimate = null;
 let lastStorageEstimateLogAt = 0;
 let lastStorageEstimateLogKind = null;
 let storageMode = 'NONE';
+let zipDiscoveryPromise = null;   // Resolves to discover-zip-set result
+let zipDiscoveryResult = null;    // Cached result once resolved
+let isZipDiscovering = false;
 
 function getEffectiveOutputDir() {
     return (outputPathInput && outputPathInput.value.trim()) || currentOutputDir || '';
@@ -1621,26 +1633,213 @@ function clearFilePath() {
     if (btnFindZip) {
         btnFindZip.disabled = false;
     }
+    const existingOpenBtn = document.getElementById('btn-open-zip-folder');
+    if (existingOpenBtn) existingOpenBtn.remove();
     updateStartButtonState();
+}
+
+function startZipDiscovery() {
+    if (zipDiscoveryPromise) return zipDiscoveryPromise;
+    isZipDiscovering = true;
+    zipDiscoveryStatus.classList.remove('hidden');
+    zipDiscoveryText.textContent = 'Searching for Snapchat ZIP files…';
+    dropZone.classList.add('searching');
+    btnFindZip.disabled = true;
+
+    zipDiscoveryPromise = window.api.discoverZipSet(false).then(result => {
+        isZipDiscovering = false;
+        zipDiscoveryResult = result;
+        return result;
+    }).catch(err => {
+        isZipDiscovering = false;
+        zipDiscoveryResult = { success: false, error: err.message };
+        return zipDiscoveryResult;
+    });
+    return zipDiscoveryPromise;
+}
+
+async function processZipDiscoveryResult(result) {
+    zipDiscoveryStatus.classList.add('hidden');
+    dropZone.classList.remove('searching');
+    btnFindZip.disabled = false;
+
+    if (!result || !result.success) {
+        return;
+    }
+
+    if (result.totalCount === 1) {
+        await setFilePath(result.primaryPath);
+        return;
+    }
+
+    await showMultiZipCountConfirmation(result);
+}
+
+function showMultiZipModal(title, text, subtext, buttons) {
+    multiZipModalTitle.textContent = title;
+    multiZipModalText.textContent = text;
+    multiZipModalSubtext.textContent = subtext || '';
+    multiZipModalButtons.innerHTML = '';
+    for (const { label, style, onClick } of buttons) {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.className = `btn ${style}`;
+        btn.addEventListener('click', () => {
+            multiZipModal.classList.add('hidden');
+            onClick();
+        });
+        multiZipModalButtons.appendChild(btn);
+    }
+    multiZipModal.classList.remove('hidden');
+}
+
+async function showMultiZipCountConfirmation(discoveryResult) {
+    const { totalCount, primaryPath, companionPaths, seedFolder, needsOrganizing } = discoveryResult;
+    const allPaths = [primaryPath, ...companionPaths];
+
+    return new Promise(resolve => {
+        showMultiZipModal(
+            'Snapchat ZIPs Found',
+            `DateBack found ${totalCount} Snapchat ZIP file${totalCount !== 1 ? 's' : ''} from the same export.`,
+            'Is this the correct number you downloaded from Snapchat?',
+            [
+                {
+                    label: "Yes, that's right",
+                    style: 'btn-primary',
+                    onClick: async () => {
+                        await handleZipSetConfirmed(allPaths, primaryPath, seedFolder, needsOrganizing);
+                        resolve();
+                    }
+                },
+                {
+                    label: 'Retry Search',
+                    style: 'btn-secondary',
+                    onClick: async () => {
+                        zipDiscoveryPromise = null;
+                        zipDiscoveryResult = null;
+                        const result = await startZipDiscovery();
+                        await processZipDiscoveryResult(result);
+                        resolve();
+                    }
+                },
+                {
+                    label: 'Retry & Expand Search',
+                    style: 'btn-secondary',
+                    onClick: async () => {
+                        zipDiscoveryPromise = null;
+                        zipDiscoveryResult = null;
+                        isZipDiscovering = true;
+                        zipDiscoveryStatus.classList.remove('hidden');
+                        zipDiscoveryText.textContent = 'Expanding search across your home folder…';
+                        dropZone.classList.add('searching');
+                        zipDiscoveryPromise = window.api.discoverZipSet(true).then(r => {
+                            isZipDiscovering = false;
+                            zipDiscoveryResult = r;
+                            return r;
+                        });
+                        const result = await zipDiscoveryPromise;
+                        await processZipDiscoveryResult(result);
+                        resolve();
+                    }
+                },
+                {
+                    label: 'Go to Home',
+                    style: 'btn-secondary',
+                    onClick: () => {
+                        zipDiscoveryStatus.classList.add('hidden');
+                        dropZone.classList.remove('searching');
+                        resolve();
+                    }
+                }
+            ]
+        );
+    });
+}
+
+async function handleZipSetConfirmed(allPaths, primaryPath, seedFolder, needsOrganizing) {
+    if (!needsOrganizing) {
+        await setFilePath(primaryPath);
+        updateOpenFolderButton(seedFolder, allPaths.length);
+        return;
+    }
+    await showZipOrganizeConfirmation(allPaths, primaryPath);
+}
+
+async function showZipOrganizeConfirmation(allPaths, primaryPath) {
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const folderName = `Snapchat Zip Files ${dateStr}`;
+
+    return new Promise(resolve => {
+        showMultiZipModal(
+            'Organize ZIP Files',
+            `DateBack will move your ${allPaths.length} ZIP files into a folder:`,
+            `"${folderName}" in Pictures/SnapchatMemories/`,
+            [
+                {
+                    label: 'Move and Continue',
+                    style: 'btn-primary',
+                    onClick: async () => {
+                        const result = await window.api.organizeZipSet(allPaths, folderName);
+                        if (result.success) {
+                            await setFilePath(result.primaryPath);
+                            updateOpenFolderButton(result.folderPath, allPaths.length);
+                        } else {
+                            showMessage(
+                                'Could not move files',
+                                result.error || 'Unknown error',
+                                'You can still select your ZIP manually.'
+                            );
+                        }
+                        resolve();
+                    }
+                },
+                {
+                    label: "Skip — I'll manage them myself",
+                    style: 'btn-secondary',
+                    onClick: async () => {
+                        await setFilePath(primaryPath);
+                        resolve();
+                    }
+                }
+            ]
+        );
+    });
+}
+
+function updateOpenFolderButton(folderPath, zipCount) {
+    const existing = document.getElementById('btn-open-zip-folder');
+    if (existing) existing.remove();
+
+    if (!folderPath || zipCount <= 1) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'btn-open-zip-folder';
+    btn.className = 'btn btn-secondary btn-zip-auto-find';
+    btn.textContent = `📂 Open ZIP Folder (${zipCount} files)`;
+    btn.addEventListener('click', async () => {
+        await window.api.openFolder(folderPath);
+    });
+
+    btnFindZip.insertAdjacentElement('afterend', btn);
 }
 
 // Initialize
 async function init() {
-    // Get default paths
     const defaults = await window.api.getDefaults();
-    if (defaults.zipPath) {
-        await setFilePath(defaults.zipPath);
-    }
     if (defaults.outputDir) {
         setOutputDirState(defaults.outputDir);
     } else {
         syncWorkingRootDisplays();
     }
 
-    // Show instructions modal only on first launch
     const hasSeenInstructions = localStorage.getItem('hasSeenInstructions');
-    if (!hasSeenInstructions) {
+    if (hasSeenInstructions) {
+        const discoveryResult = await startZipDiscovery();
+        await processZipDiscoveryResult(discoveryResult);
+    } else {
         instructionsModal.classList.remove('hidden');
+        startZipDiscovery();
     }
 
     updateAutoUploadUiState();
@@ -2905,12 +3104,13 @@ btnOpenSnapchat.addEventListener('click', () => {
 });
 
 // Close Instructions Modal
-btnCloseModal.addEventListener('click', () => {
+btnCloseModal.addEventListener('click', async () => {
     instructionsModal.classList.add('hidden');
-    // Only save "don't show again" if checkbox is checked
     if (dontShowAgainCheckbox.checked) {
         localStorage.setItem('hasSeenInstructions', 'true');
     }
+    const result = zipDiscoveryResult || await zipDiscoveryPromise;
+    await processZipDiscoveryResult(result);
 });
 
 // Show Instructions Button (in header)
