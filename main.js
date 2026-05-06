@@ -2364,19 +2364,38 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
         return { success: false, error: 'destFolderName is required' };
     }
 
+    const requestedFolderName = destFolderName.trim();
+    if (
+        path.isAbsolute(requestedFolderName) ||
+        requestedFolderName === '.' ||
+        requestedFolderName === '..' ||
+        requestedFolderName.includes('/') ||
+        requestedFolderName.includes('\\')
+    ) {
+        return { success: false, error: 'Destination folder name must be a single folder inside Pictures/SnapchatMemories' };
+    }
+
     const homeDir = app.getPath('home');
+    const canonicalHome = getCanonicalPath(homeDir);
     const picturesDir = path.join(homeDir, 'Pictures');
-    const destFolder = path.join(picturesDir, 'SnapchatMemories', destFolderName.trim());
+    const snapchatRoot = path.join(picturesDir, 'SnapchatMemories');
+    const destFolder = path.join(snapchatRoot, requestedFolderName);
 
     // Security: destination must be inside Pictures/SnapchatMemories
-    const canonical = getCanonicalPath(destFolder);
-    const canonicalPictures = getCanonicalPath(picturesDir);
-    if (!canonical.startsWith(canonicalPictures + path.sep)) {
-        return { success: false, error: 'Destination must be inside Pictures folder' };
+    const canonicalRoot = getCanonicalPath(snapchatRoot);
+    let canonical = getCanonicalPath(destFolder);
+    if (!canonical.startsWith(canonicalRoot + path.sep)) {
+        return { success: false, error: 'Destination must be inside Pictures/SnapchatMemories' };
     }
 
     try {
+        fs.mkdirSync(snapchatRoot, { recursive: true });
         fs.mkdirSync(destFolder, { recursive: true });
+        const canonicalCreatedRoot = fs.realpathSync(snapchatRoot);
+        canonical = fs.realpathSync(destFolder);
+        if (!canonical.startsWith(canonicalCreatedRoot + path.sep)) {
+            return { success: false, error: 'Destination must be inside Pictures/SnapchatMemories' };
+        }
     } catch (e) {
         return { success: false, error: `Could not create folder: ${e.message}` };
     }
@@ -2387,7 +2406,10 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
     const VALID_ZIP_RE = /^mydata~\d+(-\d+)?\.zip$/i;
     let primaryPath = null;
 
-    // Validate all source paths before moving anything
+    const movePlans = [];
+    const plannedDestinations = new Set();
+
+    // Validate all source and destination paths before moving anything
     for (const src of zipPaths) {
         if (typeof src !== 'string' || !src.trim()) {
             return { success: false, error: 'Invalid ZIP path: must be a non-empty string' };
@@ -2397,7 +2419,7 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
             return { success: false, error: `Invalid ZIP filename: ${base}` };
         }
         const srcCanonical = getCanonicalPath(src);
-        if (!srcCanonical.startsWith(homeDir + path.sep)) {
+        if (!srcCanonical.startsWith(canonicalHome + path.sep)) {
             return { success: false, error: `ZIP path must be inside home directory: ${base}` };
         }
         if (isSensitiveRoot(srcCanonical)) {
@@ -2412,13 +2434,19 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
         if (!lstat.isFile()) {
             return { success: false, error: `Not a regular file: ${base}` };
         }
+        const dest = path.join(canonical, base);
+        if (plannedDestinations.has(dest)) {
+            return { success: false, error: `Duplicate ZIP filename in selected set: ${base}` };
+        }
+        plannedDestinations.add(dest);
+        if (fs.existsSync(dest)) {
+            return { success: false, error: `Destination ZIP already exists: ${base}` };
+        }
+        movePlans.push({ srcCanonical, base, dest });
     }
 
     const movedPairs = []; // Track { dest, src } for rollback
-    for (const src of zipPaths) {
-        const srcCanonical = getCanonicalPath(src);
-        const base = path.basename(src);
-        const dest = path.join(destFolder, base);
+    for (const { srcCanonical, base, dest } of movePlans) {
         try {
             fs.renameSync(srcCanonical, dest);
             movedPairs.push({ dest, src: srcCanonical });
@@ -2435,7 +2463,7 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
         }
     }
 
-    return { success: true, primaryPath, folderPath: destFolder, movedCount: movedPairs.length };
+    return { success: true, primaryPath, folderPath: canonical, movedCount: movedPairs.length };
 });
 
 // Open folder dialog for purpose-specific folder selection

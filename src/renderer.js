@@ -1726,6 +1726,7 @@ async function showMultiZipCountConfirmation(discoveryResult) {
                     onClick: async () => {
                         zipDiscoveryPromise = null;
                         zipDiscoveryResult = null;
+                        zipDiscoveryHandled = false;
                         const result = await startZipDiscovery();
                         await processZipDiscoveryResult(result);
                         resolve();
@@ -1737,6 +1738,7 @@ async function showMultiZipCountConfirmation(discoveryResult) {
                     onClick: async () => {
                         zipDiscoveryPromise = null;
                         zipDiscoveryResult = null;
+                        zipDiscoveryHandled = false;
                         isZipDiscovering = true;
                         zipDiscoveryStatus.classList.remove('hidden');
                         zipDiscoveryText.textContent = 'Expanding search across your home folder…';

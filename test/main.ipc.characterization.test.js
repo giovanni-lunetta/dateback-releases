@@ -24,8 +24,11 @@ function bootstrapMainForTests() {
         isPackaged: false,
         name: 'DateBack',
         getPath: (name) => {
-            if (name === 'home') return '/home/test';
-            if (name === 'downloads') return '/home/test/Downloads';
+            const testPaths = globalThis.__DATEBACK_MAIN_TEST_APP_PATHS || {};
+            const homePath = testPaths.home || '/home/test';
+            if (name === 'home') return homePath;
+            if (name === 'downloads') return testPaths.downloads || path.join(homePath, 'Downloads');
+            if (name === 'pictures') return testPaths.pictures || path.join(homePath, 'Pictures');
             return '/home/test';
         },
         getVersion: () => '0.0.0-test',
@@ -197,6 +200,14 @@ function withOverrides(overrides) {
     globalThis.__DATEBACK_MAIN_TEST_OVERRIDES = overrides;
 }
 
+function withAppHome(homeDir) {
+    globalThis.__DATEBACK_MAIN_TEST_APP_PATHS = {
+        home: homeDir,
+        downloads: path.join(homeDir, 'Downloads'),
+        pictures: path.join(homeDir, 'Pictures')
+    };
+}
+
 function mkTmpDirReal(prefix = 'dateback-test-') {
     return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
@@ -282,6 +293,7 @@ function killLeakedCaffeinateProcesses() {
 
 test.afterEach(() => {
     delete globalThis.__DATEBACK_MAIN_TEST_OVERRIDES;
+    delete globalThis.__DATEBACK_MAIN_TEST_APP_PATHS;
     setDialogOpenResult({ filePaths: [] });
     resetMessageBoxCalls();
     resetShellCalls();
@@ -901,6 +913,58 @@ test('validate-zip blocks zip-slip entries with exact error', async () => {
         error: 'ZIP contains invalid file paths (path traversal detected). Please use a legitimate Snapchat export.',
         count: 0
     });
+});
+
+test('organize-zip-set refuses to overwrite existing organized ZIPs', async () => {
+    const homeDir = mkTmpDirReal('dateback-organize-home-');
+    const sourceDir = path.join(homeDir, 'Downloads');
+    const targetDir = path.join(homeDir, 'Pictures', 'SnapchatMemories', 'Snapchat Zip Files 2026-05-06');
+    const sourceZip = path.join(sourceDir, 'mydata~1234.zip');
+    const existingZip = path.join(targetDir, 'mydata~1234.zip');
+
+    try {
+        withAppHome(homeDir);
+        fs.mkdirSync(sourceDir, { recursive: true });
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.writeFileSync(sourceZip, 'new export');
+        fs.writeFileSync(existingZip, 'existing export');
+
+        const result = await callHandler('organize-zip-set', createAuthorizedEvent(), {
+            zipPaths: [sourceZip],
+            destFolderName: 'Snapchat Zip Files 2026-05-06'
+        });
+
+        assert.equal(result.success, false);
+        assert.match(result.error, /already exists/i);
+        assert.equal(fs.readFileSync(sourceZip, 'utf8'), 'new export');
+        assert.equal(fs.readFileSync(existingZip, 'utf8'), 'existing export');
+    } finally {
+        cleanupTmp([homeDir]);
+    }
+});
+
+test('organize-zip-set rejects destination names that escape SnapchatMemories', async () => {
+    const homeDir = mkTmpDirReal('dateback-organize-home-');
+    const sourceDir = path.join(homeDir, 'Downloads');
+    const sourceZip = path.join(sourceDir, 'mydata~9876.zip');
+
+    try {
+        withAppHome(homeDir);
+        fs.mkdirSync(sourceDir, { recursive: true });
+        fs.writeFileSync(sourceZip, 'zip bytes');
+
+        const result = await callHandler('organize-zip-set', createAuthorizedEvent(), {
+            zipPaths: [sourceZip],
+            destFolderName: '../OutsideFolder'
+        });
+
+        assert.equal(result.success, false);
+        assert.match(result.error, /SnapchatMemories|folder name/i);
+        assert.equal(fs.existsSync(sourceZip), true);
+        assert.equal(fs.existsSync(path.join(homeDir, 'Pictures', 'OutsideFolder', 'mydata~9876.zip')), false);
+    } finally {
+        cleanupTmp([homeDir]);
+    }
 });
 
 test('open-folder rejects unauthorized sender', async () => {
