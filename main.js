@@ -864,6 +864,36 @@ function resolveResumeManifestForOutputDir(canonicalOutputDir) {
     };
 }
 
+function computeResumeZipSetFingerprint(primaryZipPath) {
+    if (!primaryZipPath) {
+        return null;
+    }
+
+    const zipPaths = new Set([primaryZipPath]);
+    const primaryBase = path.basename(primaryZipPath);
+    const primaryMatch = primaryBase.match(/^mydata~(\d+)\.zip$/i);
+
+    if (primaryMatch) {
+        const zipDir = path.dirname(primaryZipPath);
+        const companionRe = new RegExp(`^mydata~${primaryMatch[1]}-\\d+\\.zip$`, 'i');
+        for (const entry of fs.readdirSync(zipDir)) {
+            if (!companionRe.test(entry)) {
+                continue;
+            }
+            const companionPath = path.join(zipDir, entry);
+            const st = fs.statSync(companionPath);
+            if (st.isFile()) {
+                zipPaths.add(companionPath);
+            }
+        }
+    }
+
+    return [...zipPaths].sort().map((zipPath) => {
+        const st = fs.statSync(zipPath);
+        return `${path.basename(zipPath)}|${st.size}|${Math.floor(st.mtimeMs / 1000)}`;
+    }).join(';');
+}
+
 function getStartOverTargets(canonicalOutputDir) {
     const targets = [];
     if (!fs.existsSync(canonicalOutputDir)) {
@@ -2667,8 +2697,7 @@ ipcMain.handle('get-resume-manifest', async (event, payload = {}) => {
         let zipMatch;
         if (zipPath && data && data.zip_fingerprint) {
             try {
-                const stat = fs.statSync(zipPath);
-                const fingerprint = `${path.basename(zipPath)}|${stat.size}|${Math.floor(stat.mtimeMs / 1000)}`;
+                const fingerprint = computeResumeZipSetFingerprint(zipPath);
                 zipMatch = fingerprint === data.zip_fingerprint;
             } catch (e) {
                 zipMatch = undefined;

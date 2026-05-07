@@ -233,6 +233,19 @@ function rmTmp(targetPath) {
     }
 }
 
+function writeFileWithMtime(filePath, contents, mtimeSeconds) {
+    fs.writeFileSync(filePath, contents);
+    const mtime = new Date(mtimeSeconds * 1000);
+    fs.utimesSync(filePath, mtime, mtime);
+}
+
+function zipSetFingerprint(zipPaths) {
+    return [...zipPaths].sort().map((zipPath) => {
+        const st = fs.statSync(zipPath);
+        return `${path.basename(zipPath)}|${st.size}|${Math.floor(st.mtimeMs / 1000)}`;
+    }).join(';');
+}
+
 function cleanupTmp(paths) {
     for (const targetPath of paths) {
         rmTmp(targetPath);
@@ -1117,6 +1130,84 @@ test('get-resume-manifest accepts parent fallback manifest only when it is owned
         assert.equal(result.zipMatch, undefined);
     } finally {
         cleanupTmp([parentDir]);
+    }
+});
+
+test('get-resume-manifest returns zipMatch true for matching primary and companion ZIP fingerprint', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-manifest-zip-set-match-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const primaryZip = path.join(tmpRoot, 'mydata~1234.zip');
+    const companionZip = path.join(tmpRoot, 'mydata~1234-2.zip');
+    fs.mkdirSync(outputDir);
+    writeFileWithMtime(primaryZip, 'primary-zip', 1700000001);
+    writeFileWithMtime(companionZip, 'companion-zip', 1700000002);
+    const manifest = {
+        output_dir: outputDir,
+        processed_count: 2,
+        zip_fingerprint: zipSetFingerprint([primaryZip, companionZip])
+    };
+    fs.writeFileSync(path.join(outputDir, '.batch_progress.json'), JSON.stringify(manifest), 'utf8');
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir, zipPath: primaryZip });
+        assert.equal(result.success, true);
+        assert.deepEqual(result.manifest, manifest);
+        assert.equal(result.zipMatch, true);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
+test('get-resume-manifest returns zipMatch false when a companion ZIP changes', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-manifest-zip-set-changed-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const primaryZip = path.join(tmpRoot, 'mydata~1234.zip');
+    const companionZip = path.join(tmpRoot, 'mydata~1234-2.zip');
+    fs.mkdirSync(outputDir);
+    writeFileWithMtime(primaryZip, 'primary-zip', 1700000001);
+    writeFileWithMtime(companionZip, 'companion-zip', 1700000002);
+    const manifest = {
+        output_dir: outputDir,
+        processed_count: 2,
+        zip_fingerprint: zipSetFingerprint([primaryZip, companionZip])
+    };
+    fs.writeFileSync(path.join(outputDir, '.batch_progress.json'), JSON.stringify(manifest), 'utf8');
+    writeFileWithMtime(companionZip, 'changed-companion-zip', 1700000002);
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir, zipPath: primaryZip });
+        assert.equal(result.success, true);
+        assert.equal(result.zipMatch, false);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
+test('get-resume-manifest returns zipMatch false when a companion ZIP is missing', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-manifest-zip-set-missing-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const primaryZip = path.join(tmpRoot, 'mydata~1234.zip');
+    const companionZip = path.join(tmpRoot, 'mydata~1234-2.zip');
+    fs.mkdirSync(outputDir);
+    writeFileWithMtime(primaryZip, 'primary-zip', 1700000001);
+    writeFileWithMtime(companionZip, 'companion-zip', 1700000002);
+    const manifest = {
+        output_dir: outputDir,
+        processed_count: 2,
+        zip_fingerprint: zipSetFingerprint([primaryZip, companionZip])
+    };
+    fs.writeFileSync(path.join(outputDir, '.batch_progress.json'), JSON.stringify(manifest), 'utf8');
+    fs.unlinkSync(companionZip);
+
+    try {
+        await approveFolderSelection(outputDir);
+        const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir, zipPath: primaryZip });
+        assert.equal(result.success, true);
+        assert.equal(result.zipMatch, false);
+    } finally {
+        cleanupTmp([tmpRoot]);
     }
 });
 
