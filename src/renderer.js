@@ -4021,6 +4021,22 @@ if (linkWalkthrough) {
     });
 }
 
+const BMAC_URL = 'https://www.buymeacoffee.com/giovannilunetta';
+const linkCoffee = document.getElementById('link-coffee');
+if (linkCoffee) {
+    linkCoffee.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.api.openExternal(BMAC_URL);
+    });
+}
+const linkCoffeeSuccess = document.getElementById('link-coffee-success');
+if (linkCoffeeSuccess) {
+    linkCoffeeSuccess.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.api.openExternal(BMAC_URL);
+    });
+}
+
 // Pro Tip folder button - open working/output folder
 if (btnOpenFolderTip) {
     btnOpenFolderTip.addEventListener('click', (e) => {

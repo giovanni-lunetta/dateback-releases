@@ -2234,6 +2234,35 @@ textarea {
     text-decoration: underline;
 }
 
+.bmc-btn-wrap {
+    text-align: center;
+    margin: 8px 0 0;
+}
+
+.bmc-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #FFDD00;
+    color: #000000;
+    border-radius: 8px;
+    padding: 9px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+}
+
+.bmc-btn:hover {
+    opacity: 0.88;
+}
+
+.bmc-btn-icon {
+    font-size: 17px;
+    line-height: 1;
+}
+
 .progress-text.processing {
     animation: pulse 1.5s ease-in-out infinite;
     color: var(--text-main);

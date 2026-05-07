@@ -42,7 +42,9 @@ const ALLOWED_EXTERNAL_HOSTS = new Set([
     'dateback.app',
     'www.dateback.app',
     'accounts.snapchat.com',
-    'photos.google.com'
+    'photos.google.com',
+    'buymeacoffee.com',
+    'www.buymeacoffee.com'
 ]);
 const ALLOWED_MAILTO_RECIPIENTS = new Set(['support@dateback.app']);
 const ALLOWED_MAILTO_QUERY_KEYS = new Set(['subject', 'body']);
@@ -1656,6 +1658,13 @@ Free for personal, non-commercial use. All rights reserved.`,
                         } else {
                             dialog.showErrorBox('Not Ready', 'Logging system not initialized');
                         }
+                    }
+                },
+                { type: 'separator' },
+                {
+                    label: 'Support the Project ☕',
+                    click: () => {
+                        openExternalSafely('https://www.buymeacoffee.com/giovannilunetta');
                     }
                 },
                 { type: 'separator' },
