@@ -235,6 +235,7 @@ function buildStartRoutineContext({
         btnOpenFolder,
         currentOutputDir: '/tmp/output',
         isProcessing: false,
+        startProcessingInFlight: false,
         stoppedByUser: false,
         etaTimestamps: [],
         lastProgressCount: 0,
@@ -249,6 +250,7 @@ function buildStartRoutineContext({
     async function invoke() {
         const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
         const getEffectiveOutputDirSource = extractNamedFunctionSource(rendererSource, 'getEffectiveOutputDir');
+        const friendlyErrorHintSource = extractNamedFunctionSource(rendererSource, 'friendlyErrorHint');
         const enterNeedsAttentionStateSource = extractNamedFunctionSource(rendererSource, 'enterNeedsAttentionState');
         const applyProcessingUiStateSource = extractNamedFunctionSource(rendererSource, 'applyProcessingUiState');
         const startProcessingRoutineSource = extractNamedFunctionSource(rendererSource, 'startProcessingRoutine');
@@ -259,6 +261,7 @@ const buildStartProcessingArgsHelper = this.buildStartProcessingArgsHelper;
 const computeProcessingUiStateHelper = this.computeProcessingUiStateHelper;
 const GIB = this.GIB;
 ${getEffectiveOutputDirSource}
+${friendlyErrorHintSource}
 ${enterNeedsAttentionStateSource}
 ${applyProcessingUiStateSource}
 ${startProcessingRoutineSource}
@@ -348,4 +351,19 @@ test('startProcessingRoutine args: resume path includes resumeMode trust', async
         cacheComputation: undefined,
         resumeMode: 'trust'
     });
+});
+
+test('startProcessingRoutine has a synchronous in-flight guard before awaited validation', () => {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const startProcessingRoutineSource = extractNamedFunctionSource(rendererSource, 'startProcessingRoutine');
+    const firstAwaitIndex = startProcessingRoutineSource.indexOf('await ');
+    const guardCheckIndex = startProcessingRoutineSource.indexOf('isProcessing || startProcessingInFlight');
+    const guardSetIndex = startProcessingRoutineSource.indexOf('startProcessingInFlight = true');
+    const guardClearIndex = startProcessingRoutineSource.lastIndexOf('startProcessingInFlight = false');
+
+    assert.ok(guardCheckIndex >= 0, 'Expected startProcessingRoutine to check the in-flight guard');
+    assert.ok(guardSetIndex >= 0, 'Expected startProcessingRoutine to set the in-flight guard synchronously');
+    assert.ok(firstAwaitIndex >= 0, 'Expected startProcessingRoutine to contain awaited validation');
+    assert.ok(guardSetIndex < firstAwaitIndex, 'Expected in-flight guard to be set before any await');
+    assert.ok(guardClearIndex > guardSetIndex, 'Expected in-flight guard to be cleared after the guarded work');
 });

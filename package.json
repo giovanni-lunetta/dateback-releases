@@ -1,6 +1,6 @@
 {
     "name": "dateback",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "DateBack - Archive Memories the Right Way",
     "main": "main.js",
     "private": true,
@@ -9,12 +9,17 @@
         "test": "node --test",
         "check": "node --check main.js && node --check preload.js && node --check src/renderer.js && node --check src/renderer.helpers.js && python3 -m py_compile python/*.py",
         "test:all": "npm run check && npm test",
-        "build": "env -u ELECTRON_RUN_AS_NODE electron-builder --mac",
-        "build:mac": "env -u ELECTRON_RUN_AS_NODE electron-builder --mac"
+        "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
+        "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac"
     },
     "author": "Giovanni Lunetta",
     "license": "UNLICENSED",
+    "engines": {
+        "node": ">=20.0.0",
+        "npm": ">=10.0.0"
+    },
     "devDependencies": {
+        "dotenv": "^16.6.1",
         "electron": "^39.2.7",
         "electron-builder": "^26.0.12"
     },
@@ -29,6 +34,7 @@
         "mac": {
             "category": "public.app-category.utilities",
             "icon": "assets/DateBack.icns",
+            "identity": "GIOVANNI ANTHONY LUNETTA (ZK25MD36ZM)",
             "hardenedRuntime": true,
             "gatekeeperAssess": false,
             "entitlements": "build/entitlements.mac.plist",
@@ -69,10 +75,9 @@
         }
     },
     "dependencies": {
-        "adm-zip": "^0.5.16",
+        "adm-zip": "^0.5.17",
         "check-disk-space": "^3.4.0",
-        "dotenv": "^16.6.1",
-        "electron-updater": "^6.6.2",
-        "glob": "^13.0.0"
+        "electron-updater": "^6.8.3",
+        "glob": "^13.0.6"
     }
 }

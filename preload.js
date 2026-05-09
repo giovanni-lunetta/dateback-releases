@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 const progressListeners = new Set();
 const logListeners = new Set();
 const logsExportedListeners = new Set();
+const updateAvailableListeners = new Set();
 
 function requireString(value, label) {
     if (typeof value !== 'string') {
@@ -108,6 +109,16 @@ contextBridge.exposeInMainWorld('api', {
         return () => {
             ipcRenderer.removeListener('show-logs-exported-modal', listener);
             logsExportedListeners.delete(listener);
+        };
+    },
+    onUpdateAvailable: (callback) => {
+        if (typeof callback !== 'function') return () => { };
+        const listener = (_event, data) => callback(data);
+        updateAvailableListeners.add(listener);
+        ipcRenderer.on('update-available-notification', listener);
+        return () => {
+            ipcRenderer.removeListener('update-available-notification', listener);
+            updateAvailableListeners.delete(listener);
         };
     },
     // Cleanup functions to prevent memory leaks

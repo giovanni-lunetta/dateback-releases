@@ -7,9 +7,9 @@ test('main.js guards dotenv startup loading', () => {
     const mainPath = path.join(__dirname, '..', 'main.js');
     const source = fs.readFileSync(mainPath, 'utf8');
 
-    const guardedDotenvPattern = /try\s*{\s*require\(['"]dotenv['"]\)\.config\(\);\s*}\s*catch\s*\([^)]*\)\s*{/s;
+    const guardedDotenvPattern = /if\s*\(\s*!app\.isPackaged\s*\)\s*{\s*try\s*{\s*require\(['"]dotenv['"]\)\.config\(\);\s*}\s*catch\s*\([^)]*\)\s*{/s;
     const guardedBlock = source.match(guardedDotenvPattern);
-    assert.ok(guardedBlock, 'Expected dotenv require to be guarded by try/catch');
+    assert.ok(guardedBlock, 'Expected dotenv require to be guarded by app.isPackaged and try/catch');
 
     const sourceWithoutGuard = source.replace(guardedBlock[0], '');
     const unguardedMatches = sourceWithoutGuard.match(/require\(['"]dotenv['"]\)\.config\(\)/g) || [];

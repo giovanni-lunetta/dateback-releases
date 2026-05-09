@@ -90,7 +90,6 @@ const btnCloseNextSteps = document.getElementById('btn-close-next-steps');
 const guideTabs = document.querySelectorAll('.guide-tabs .tab');
 const tabGoogle = document.getElementById('tab-google');
 const tabIcloud = document.getElementById('tab-icloud');
-const linkGooglePhotos = document.getElementById('link-google-photos');
 const nextStepsIntro = document.getElementById('next-steps-intro');
 const guideLocalStorage = document.getElementById('guide-local-storage');
 const guideManualCloudUpload = document.getElementById('guide-manual-cloud-upload');
@@ -114,6 +113,8 @@ const messageModalTitle = document.getElementById('message-modal-title');
 const messageModalText = document.getElementById('message-modal-text');
 const messageModalSubtext = document.getElementById('message-modal-subtext');
 const btnMessageOk = document.getElementById('btn-message-ok');
+const expiredLinkModal = document.getElementById('expired-link-modal');
+const btnExpiredLinkOk = document.getElementById('btn-expired-link-ok');
 
 // Multi-ZIP Discovery elements
 const zipDiscoveryStatus = document.getElementById('zip-discovery-status');
@@ -126,6 +127,7 @@ const multiZipModalButtons = document.getElementById('multi-zip-modal-buttons');
 
 // State
 let isProcessing = false;
+let startProcessingInFlight = false;
 let currentOutputDir = '';
 let currentMemoryCount = 0;
 let hadPartialRun = false;  // Track if user stopped mid-processing
@@ -144,6 +146,37 @@ let zipDiscoveryPromise = null;   // Resolves to discover-zip-set result
 let zipDiscoveryResult = null;    // Cached result once resolved
 let isZipDiscovering = false;
 let zipDiscoveryHandled = false;  // Guard against re-processing on modal re-open
+
+// Cap the visible log at LOG_NODE_CAP messages to prevent unbounded DOM growth on long runs.
+const LOG_NODE_CAP = 1000;
+function appendToLog(text) {
+    logOutput.appendChild(document.createTextNode(text));
+    while (logOutput.childNodes.length > LOG_NODE_CAP) {
+        logOutput.removeChild(logOutput.firstChild);
+    }
+    logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+// Translate raw Node/Python error strings into user-facing hints.
+// Raw messages are always in the log section; this function provides
+// the shorter UI hint shown in the progress/status area.
+function friendlyErrorHint(rawError) {
+    if (!rawError) return 'Open the log for details. If this keeps happening, contact support.';
+    const msg = String(rawError);
+    if (msg.includes('EACCES') || msg.includes('EPERM') || msg.includes('permission denied')) {
+        return 'Permission denied — DateBack couldn\'t write to the output folder. Try choosing a folder inside your home directory.';
+    }
+    if (msg.includes('ENOENT') || msg.includes('no such file')) {
+        return 'A required file or folder was not found. Make sure your output folder still exists.';
+    }
+    if (msg.includes('ENOSPC') || msg.includes('no space left')) {
+        return 'Your disk ran out of space. Free up storage and try again.';
+    }
+    if (msg.includes('EPIPE') || msg.includes('broken pipe')) {
+        return 'The processing pipeline was interrupted. Try resuming or starting fresh.';
+    }
+    return 'Open the log for details. If this keeps happening, contact support.';
+}
 
 function getEffectiveOutputDir() {
     return (outputPathInput && outputPathInput.value.trim()) || currentOutputDir || '';
@@ -1662,12 +1695,23 @@ function startZipDiscovery(expand = false, folderPath = null) {
     return zipDiscoveryPromise;
 }
 
-async function processZipDiscoveryResult(result) {
+async function processZipDiscoveryResult(result, { fromButton = false } = {}) {
     zipDiscoveryStatus.classList.add('hidden');
     dropZone.classList.remove('searching');
     btnFindZip.disabled = false;
 
     if (!result || !result.success) {
+        const subtext = dropZone.querySelector('.drop-subtext');
+        if (subtext) {
+            subtext.textContent = "We didn't find a Snapchat export in your Downloads folder — drag yours in or try Find My Zip Automatically.";
+        }
+        if (fromButton) {
+            showMessage(
+                'No Snapchat ZIPs Found',
+                "DateBack couldn't find any Snapchat export ZIP files on your Mac.",
+                'Try dragging your mydata~*.zip file directly into the box above, or use Finder to locate it.'
+            );
+        }
         return;
     }
 
@@ -1688,7 +1732,7 @@ function showMultiZipModal(title, text, subtext, buttons) {
     multiZipModalTitle.textContent = title;
     multiZipModalText.textContent = text;
     multiZipModalSubtext.textContent = subtext || '';
-    multiZipModalButtons.innerHTML = '';
+    multiZipModalButtons.replaceChildren();
     for (const { label, style, onClick } of buttons) {
         const btn = document.createElement('button');
         btn.textContent = label;
@@ -1788,8 +1832,8 @@ async function showZipOrganizeConfirmation(allPaths, primaryPath) {
                         } else {
                             showMessage(
                                 'Could not move files',
-                                result.error || 'Unknown error',
-                                'You can still select your ZIP manually.'
+                                'DateBack could not move your ZIP files into the organized folder.',
+                                'You can still select your ZIP manually, or try again.'
                             );
                         }
                         resolve();
@@ -1897,6 +1941,14 @@ dropZone.addEventListener('click', async () => {
     }
 });
 
+dropZone.addEventListener('keydown', (e) => {
+    const isActivationKey = e.key === 'Enter' || e.key === ' ';
+    if (!isActivationKey) return;
+    e.preventDefault();
+    if (isZipDiscovering) return;
+    dropZone.click();
+});
+
 // Find My Zip button handler
 const btnFindZip = document.getElementById('btn-find-zip');
 btnFindZip.addEventListener('click', async (e) => {
@@ -1908,7 +1960,7 @@ btnFindZip.addEventListener('click', async (e) => {
     zipDiscoveryResult = null;
 
     const result = await startZipDiscovery(true);
-    await processZipDiscoveryResult(result);
+    await processZipDiscoveryResult(result, { fromButton: true });
 });
 
 // Clear file
@@ -2061,11 +2113,13 @@ function applyProcessingUiState(uiState) {
 async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
     console.log('[START] startProcessingRoutine called - isResume:', isResume, 'resumeMode:', resumeMode, 'isProcessing:', isProcessing);
 
-    if (isProcessing) {
+    if (isProcessing || startProcessingInFlight) {
         console.log('[START] Already processing, returning early');
         return;
     }
 
+    startProcessingInFlight = true;
+    try {
     const zipPath = zipPathInput.value;
     const outputDir = getEffectiveOutputDir();
     console.log('[START] zipPath:', zipPath, 'outputDir:', outputDir);
@@ -2412,7 +2466,6 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                     `;
                     progressFill.style.width = '100%';
                     progressFill.style.background = 'var(--accent-red)';
-                    hasProcessedBefore = true;
                     resumeRestartContainer.classList.add('hidden');
                     btnStart.classList.add('hidden');
                     if (typeof updateStartButtonHelper === 'function') {
@@ -2429,7 +2482,6 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                     `;
                     progressFill.style.width = '100%';
                     progressFill.classList.add('complete'); // Solid green, no animation
-                    hasProcessedBefore = true;
                     // Show the Restart button (not Start) after successful completion
                     resumeRestartContainer.classList.add('hidden');
                     btnStart.classList.add('hidden');
@@ -2490,7 +2542,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
                 // Error occurred - show Resume/Restart options (not Start)
                 enterNeedsAttentionState({
                     message: 'Processing needs attention.',
-                    hint: result.error || 'Open the log for details. If this keeps happening, contact support.',
+                    hint: friendlyErrorHint(result.error),
                     hideStart: true,
                     showResumeOptions: true
                 });
@@ -2501,7 +2553,7 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
             // Error in try/catch - show Resume/Restart options
             enterNeedsAttentionState({
                 message: 'Processing stopped unexpectedly.',
-                hint: error.message || 'Open the log for details. If this keeps happening, contact support.',
+                hint: friendlyErrorHint(error.message),
                 hideStart: true,
                 showResumeOptions: true
             });
@@ -2521,6 +2573,9 @@ async function startProcessingRoutine(isResume = false, resumeMode = 'verify') {
 
         // Note: We don't blindly show btnStart here anymore, handled in catch/success
         // If stopped by user, btnStart stays hidden and resume buttons show (handled in stop handler)
+    }
+    } finally {
+        startProcessingInFlight = false;
     }
 }
 
@@ -2602,6 +2657,7 @@ btnStart.addEventListener('click', async () => {
             }
         } catch (e) {
             console.warn('Failed to load resume manifest:', e);
+            showMessage('Could not check for previous progress', 'Starting a fresh run — your existing output folder was not affected.');
         }
     }
     await startProcessingRoutine(false);
@@ -2640,6 +2696,7 @@ btnResumeProc.addEventListener('click', async () => {
         }
     } catch (e) {
         console.error('[Resume Processing] Error loading manifest:', e);
+        showMessage('Could not load previous progress', 'Starting in verify mode — DateBack will check what\'s already been processed.');
     }
     await startProcessingRoutine(true, 'verify');
 });
@@ -2774,6 +2831,7 @@ function resetUIForNewRun() {
     hadPartialRun = false;
     lastProcessedCount = 0;
     stoppedByUser = false; // Reset stop flag
+    expiredLinkAlertShown = false;
 }
 
 // Cancel Restart
@@ -2879,8 +2937,7 @@ btnConfirmStop.addEventListener('click', async () => {
                 }
 
                 // Show warning/info log
-                logOutput.textContent += '\n⚠️ Process paused by user.\n';
-                logOutput.scrollTop = logOutput.scrollHeight;
+                appendToLog('\n⚠️ Process paused by user.\n');
             }
         }, 100); // Check every 100ms
     }
@@ -3591,8 +3648,7 @@ function handleProgressUpdate(data) {
 
     } else if (data.type === 'companion_found') {
         const count = data.companion_count || 0;
-        logOutput.textContent += `Found ${count} companion ZIP file${count !== 1 ? 's' : ''} — loading all memories…\n`;
-        logOutput.scrollTop = logOutput.scrollHeight;
+        appendToLog(`Found ${count} companion ZIP file${count !== 1 ? 's' : ''} — loading all memories…\n`);
         return;
 
     } else if (data.type === 'disk_full') {
@@ -3617,8 +3673,7 @@ window.api.onProgressUpdate(handleProgressUpdate);
 let expiredLinkAlertShown = false;
 
 window.api.onLogMessage((message) => {
-    logOutput.textContent += message + '\n';
-    logOutput.scrollTop = logOutput.scrollHeight;
+    appendToLog(message + '\n');
 
     // Detect expired link errors and show alert once
     if (message.includes('LINKS_EXPIRED') && !expiredLinkAlertShown) {
@@ -3630,21 +3685,34 @@ window.api.onLogMessage((message) => {
         revealRecoveryUi('Request a fresh Snapchat export, then restart processing.');
 
         // Show custom modal instead of alert
-        const expiredLinkModal = document.getElementById('expired-link-modal');
         expiredLinkModal.classList.remove('hidden');
 
         // Close modal on OK button click
-        const btnExpiredLinkOk = document.getElementById('btn-expired-link-ok');
-        btnExpiredLinkOk.onclick = () => {
+        btnExpiredLinkOk.addEventListener('click', () => {
             expiredLinkModal.classList.add('hidden');
-        };
+        }, { once: true });
     }
 });
 
-// Listen for logs export success
-const _logsExportedCleanup = window.api.onLogsExported((data) => {
+// Listen for logs export success (process-lifetime listener; no cleanup needed)
+window.api.onLogsExported((data) => {
     openLogsExportModal(data.filename);
 });
+
+// Show a non-intrusive banner when an update arrives during a job.
+// The banner disappears once the job ends and the main process shows the download dialog.
+const updateBanner = document.getElementById('update-banner');
+if (window.api.onUpdateAvailable) {
+    window.api.onUpdateAvailable(({ version }) => {
+        if (updateBanner) {
+            const textEl = updateBanner.querySelector('.update-banner-text');
+            if (textEl) {
+                textEl.textContent = `📦 DateBack ${version} is available — you'll be prompted to install when this job finishes.`;
+            }
+            updateBanner.classList.remove('hidden');
+        }
+    });
+}
 
 // Show success modal with stats
 let lastStats = null;
@@ -3925,13 +3993,13 @@ btnRetryCorrupted.addEventListener('click', async () => {
         } else {
             enterNeedsAttentionState({
                 message: 'Retry could not finish.',
-                hint: result.error || 'Open the log for details. If this keeps happening, contact support.'
+                hint: friendlyErrorHint(result.error)
             });
         }
     } catch (error) {
         enterNeedsAttentionState({
             message: 'Retry stopped unexpectedly.',
-            hint: error.message || 'Open the log for details. If this keeps happening, contact support.'
+            hint: friendlyErrorHint(error.message)
         });
     } finally {
         progressText.classList.remove('processing');
@@ -3973,10 +4041,25 @@ guideTabs.forEach(tab => {
     });
 });
 
-// External link handler
-linkGooglePhotos.addEventListener('click', (e) => {
-    e.preventDefault();
-    window.api.openUrl('https://photos.google.com');
+// External link handler for allowed HTTP(S) anchors.
+document.addEventListener('click', (e) => {
+    if (e.defaultPrevented) return;
+    const target = e.target;
+    if (!target || typeof target.closest !== 'function') return;
+    const anchor = target.closest('a[href]');
+    if (!anchor) return;
+
+    let url;
+    try {
+        url = new URL(anchor.getAttribute('href'), window.location.href);
+    } catch (_error) {
+        return;
+    }
+
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+        e.preventDefault();
+        window.api.openUrl(url.href);
+    }
 });
 
 // Folder links in Next Steps modal - open Output Folder
@@ -4101,13 +4184,94 @@ contactModal.addEventListener('click', (e) => {
     }
 });
 
+// ============================================
+// Focus Trap Utility
+// ============================================
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const _focusTrapStack = [];
+
+function trapFocus(modal) {
+    const focusable = Array.from(modal.querySelectorAll(FOCUSABLE_SELECTOR));
+    const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (focusable.length) focusable[0].focus();
+
+    function handler(e) {
+        if (e.key !== 'Tab') return;
+        const els = Array.from(modal.querySelectorAll(FOCUSABLE_SELECTOR));
+        if (!els.length) { e.preventDefault(); return; }
+        if (e.shiftKey) {
+            if (!modal.contains(document.activeElement) || document.activeElement === els[0]) {
+                e.preventDefault();
+                els[els.length - 1].focus();
+            }
+        } else {
+            if (!modal.contains(document.activeElement) || document.activeElement === els[els.length - 1]) {
+                e.preventDefault();
+                els[0].focus();
+            }
+        }
+    }
+    document.addEventListener('keydown', handler);
+    _focusTrapStack.push({ modal, handler, returnFocus });
+}
+
+function releaseFocus(modal) {
+    const idx = _focusTrapStack.findIndex(entry => entry.modal === modal);
+    if (idx === -1) return;
+    const [entry] = _focusTrapStack.splice(idx, 1);
+    document.removeEventListener('keydown', entry.handler);
+    if (entry.returnFocus && document.body.contains(entry.returnFocus)) {
+        entry.returnFocus.focus();
+    }
+}
+
+// Auto-wire focus trap: observe every .modal for visibility changes
+document.querySelectorAll('.modal').forEach(modal => {
+    new MutationObserver(() => {
+        const visible = !modal.classList.contains('hidden');
+        const trapped = _focusTrapStack.some(e => e.modal === modal);
+        if (visible && !trapped) trapFocus(modal);
+        else if (!visible && trapped) releaseFocus(modal);
+    }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+});
+
+// Trap focus in any modal that starts visible (instructions-modal has no hidden class on load)
+document.querySelectorAll('.modal:not(.hidden)').forEach(trapFocus);
+
 // Close modal with ESC key
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !contactModal.classList.contains('hidden')) {
+    if (e.key !== 'Escape') return;
+    if (!contactModal.classList.contains('hidden')) {
         closeContactModal();
-    }
-    if (e.key === 'Escape' && !logsExportModal.classList.contains('hidden')) {
+    } else if (!logsExportModal.classList.contains('hidden')) {
         closeLogsExportModal();
+    } else if (!instructionsModal.classList.contains('hidden')) {
+        btnCloseModal.click();
+    } else if (!successModal.classList.contains('hidden')) {
+        successModal.classList.add('hidden');
+    } else if (!nextStepsModal.classList.contains('hidden')) {
+        nextStepsModal.classList.add('hidden');
+    } else if (!stopConfirmModal.classList.contains('hidden')) {
+        btnResume.click();
+    } else if (!multiZipModal.classList.contains('hidden')) {
+        const btns = multiZipModalButtons.querySelectorAll('button');
+        if (btns.length > 0) btns[btns.length - 1].click();
+    } else if (!batteryWarningModal.classList.contains('hidden')) {
+        btnCancelBattery.click();
+    } else if (!offlineWarningModal.classList.contains('hidden')) {
+        btnCancelOffline.click();
+    } else if (!restartConfirmModal.classList.contains('hidden')) {
+        btnCancelRestart.click();
+    } else if (!resumeModeModal.classList.contains('hidden')) {
+        btnResumeCancel.click();
+    } else if (!batchPauseModal.classList.contains('hidden')) {
+        btnPauseAfterBatch.click();
+    } else if (!storageWarningModal.classList.contains('hidden')) {
+        btnStorageCancel.click();
+    } else if (!messageModal.classList.contains('hidden')) {
+        btnMessageOk.click();
+    } else if (!expiredLinkModal.classList.contains('hidden')) {
+        btnExpiredLinkOk.click();
     }
 });
 

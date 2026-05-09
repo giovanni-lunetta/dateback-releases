@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import io
+import ast
 import tempfile
 import unittest
 import zipfile
@@ -60,6 +61,12 @@ class FakeSession:
         self.calls.append({"url": url, **kwargs})
         if not self.responses:
             raise AssertionError(f"Unexpected GET call to {url}")
+        return self.responses.pop(0)
+
+    def head(self, url, **kwargs):
+        self.calls.append({"method": "HEAD", "url": url, **kwargs})
+        if not self.responses:
+            raise AssertionError(f"Unexpected HEAD call to {url}")
         return self.responses.pop(0)
 
 
@@ -261,7 +268,43 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             self.assertEqual(session.calls[0]["url"], "https://cf-st.sc-cdn.net/media")
             self.assertTrue(session.calls[0]["stream"])
             self.assertFalse(session.calls[0]["allow_redirects"])
-            self.assertEqual(response.chunk_size, 8192)
+            self.assertEqual(response.chunk_size, psm.DOWNLOAD_CHUNK_BYTES)
+
+    def test_stream_download_to_path_rejects_truncated_content_length(self):
+        response = FakeResponse(
+            chunks=[b"abc"],
+            headers={"Content-Type": "image/jpeg", "Content-Length": "6"},
+        )
+        session = FakeSession(response)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = Path(temp_dir) / "download.bin"
+            with mock.patch.object(psm, "get_requests_session", return_value=session):
+                with self.assertRaisesRegex(ValueError, "Truncated download"):
+                    psm.stream_download_to_path("https://cf-st.sc-cdn.net/media", str(target_path))
+
+    def test_get_remote_file_size_honors_retry_after_header(self):
+        throttled = FakeResponse(status_code=429, headers={"Retry-After": "3"})
+        final = FakeResponse(status_code=200, headers={"Content-Length": "123"})
+        session = FakeSession([throttled, final])
+
+        with mock.patch.object(psm, "get_requests_session", return_value=session), \
+             mock.patch.object(psm.time, "sleep") as sleep_mock:
+            size = psm.get_remote_file_size("https://cf-st.sc-cdn.net/media", retries=2)
+
+        self.assertEqual(size, 123)
+        sleep_mock.assert_called_once_with(3)
+        self.assertEqual(len(session.calls), 2)
+
+    def test_process_module_has_no_bare_except_handlers(self):
+        tree = ast.parse(Path(psm.__file__).read_text(encoding="utf-8"))
+        bare_handlers = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ExceptHandler) and node.type is None
+        ]
+
+        self.assertEqual(bare_handlers, [])
 
     def test_stream_download_to_path_follows_allowed_redirect_manually(self):
         redirect_response = FakeResponse(
@@ -367,6 +410,66 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
                 with mock.patch.object(psm, "MAX_JSON_BYTES", 4):
                     with self.assertRaisesRegex(ValueError, "memories_history.json is too large"):
                         psm.read_memories_history_json(zf, "mydata~123/json/memories_history.json")
+
+    def test_nested_overlay_role_matching_avoids_loose_main_substrings(self):
+        self.assertEqual(psm.parse_nested_overlay_role("main.jpg"), "main")
+        self.assertEqual(psm.parse_nested_overlay_role("snap-main.mp4"), "main")
+        self.assertEqual(psm.parse_nested_overlay_role("snap_overlay.png"), "overlay")
+        self.assertIsNone(psm.parse_nested_overlay_role("domain_screenshot.jpg"))
+        self.assertIsNone(psm.parse_nested_overlay_role("remaining_photo.jpg"))
+
+    def test_process_from_zip_ignores_mismatched_manifest_in_verify_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            image_id = "11111111-1111-4111-8111-111111111111"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:04:05 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                image_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-main.jpg")
+                image_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(image_info, b"image-bytes")
+
+            (output_root / ".batch_progress.json").write_text(json.dumps({
+                "last_completed_batch": 1,
+                "total_batches": 1,
+                "processed_indices": [0],
+                "processed_count": 1,
+                "zip_fingerprint": "old-export-fingerprint"
+            }), encoding="utf-8")
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root), trust_manifest=False)
+
+            self.assertEqual(stats["success"], 1)
+            self.assertEqual(stats["skipped"], 0)
+            self.assertEqual(stats["actual_files_on_disk"], 1)
+
+    def test_process_from_zip_rejects_mismatched_manifest_in_trust_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": []}))
+
+            (output_root / ".batch_progress.json").write_text(json.dumps({
+                "last_completed_batch": 1,
+                "total_batches": 1,
+                "processed_indices": [0],
+                "processed_count": 1,
+                "zip_fingerprint": "old-export-fingerprint"
+            }), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "ZIP export does not match previous run"):
+                psm.process_from_zip(str(zip_path), output_root=str(output_root), trust_manifest=True)
 
     def test_process_from_zip_uses_local_memory_files_when_download_urls_are_blank(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -490,8 +593,9 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
 
             ffmpeg_calls = []
 
-            def fake_ffmpeg(cmd, check, stdout, stderr):
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
                 ffmpeg_calls.append(cmd)
+                self.assertEqual(timeout, psm.FFMPEG_TIMEOUT_SECONDS)
                 Path(cmd[-1]).write_bytes(b"merged-video")
                 return mock.Mock(returncode=0)
 
@@ -538,7 +642,8 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
                 overlay_info.date_time = (2024, 1, 2, 3, 5, 6)
                 zf.writestr(overlay_info, self._webp_image_bytes((0, 0, 255, 128)))
 
-            def fake_ffmpeg(cmd, check, stdout, stderr):
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                self.assertEqual(timeout, psm.FFMPEG_TIMEOUT_SECONDS)
                 overlay_path = cmd[cmd.index("-i", cmd.index("-loop")) + 1]
                 self.assertEqual(Path(overlay_path).read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
                 Path(cmd[-1]).write_bytes(b"merged-video")
@@ -811,6 +916,18 @@ class BuildCompanionZipIndexesTests(unittest.TestCase):
             psm._build_companion_zip_indexes(primary)
             self.assertIn('media/b.jpg', psm._companion_zip_registry)
             self.assertIn('media/c.jpg', psm._companion_zip_registry)
+
+    def test_rejects_corrupt_numbered_companion_zip(self):
+        """A corrupt companion should fail preflight instead of silently dropping media."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            Path(os.path.join(tmpdir, 'mydata~1234-2.zip')).write_bytes(b'not a zip')
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+
+            with self.assertRaisesRegex(ValueError, "Could not read companion ZIP"):
+                psm._build_companion_zip_indexes(primary)
 
     def test_ignores_different_timestamp(self):
         """A ZIP with a different timestamp prefix must NOT be indexed as a companion."""

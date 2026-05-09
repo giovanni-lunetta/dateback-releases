@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://formspree.io">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https://formspree.io; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'none'">
     <title>DateBack</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,21 +14,26 @@
     <!-- Title Bar Drag Region (macOS) -->
     <div class="titlebar"></div>
 
+    <!-- Update notification banner (shown when a new version is available during a job) -->
+    <div id="update-banner" class="update-banner hidden" role="status" aria-live="polite">
+        <span class="update-banner-text">📦 Update available — DateBack will ask you to install when your job finishes.</span>
+    </div>
+
     <div class="container">
         <!-- Header -->
         <header class="header">
             <div class="header-top">
                 <h1>DateBack</h1>
                 <div class="header-buttons">
-                    <button id="btn-show-instructions" class="btn-help-icon" title="How to get your data">
-                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <button id="btn-show-instructions" class="btn-help-icon" aria-label="How to get your data">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                             <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5" />
                             <path d="M10 14V10M10 7V6.5" stroke="currentColor" stroke-width="1.5"
                                 stroke-linecap="round" />
                         </svg>
                     </button>
-                    <button id="btn-contact-support" class="btn-help-icon" title="Contact Support">
-                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <button id="btn-contact-support" class="btn-help-icon" aria-label="Contact support">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                             <path
                                 d="M2 6L10 11L18 6M2 6V14C2 14.5304 2.21071 15.0391 2.58579 15.4142C2.96086 15.7893 3.46957 16 4 16H16C16.5304 16 17.0391 15.7893 17.4142 15.4142C17.7893 15.0391 18 14.5304 18 14V6M2 6L10 1L18 6"
                                 stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
@@ -50,7 +55,8 @@
                         aria-label="When you download your Snapchat data, it comes as a .zip file. It is usually named mydata_ followed by numbers. Select that .zip file here."
                         data-tooltip="When you download your Snapchat data, it comes as a .zip file. It is usually named mydata_ followed by numbers. Select that .zip file here.">?</button>
                 </div>
-                <div id="drop-zone" class="drop-zone">
+                <div id="drop-zone" class="drop-zone" role="button" tabindex="0"
+                    aria-label="Select or drop your Snapchat data folder or ZIP file">
                     <div class="drop-zone-content">
                         <span class="drop-icon">📁</span>
                         <p class="drop-text">Drag & Drop your Data Folder or ZIP file here</p>
@@ -66,7 +72,7 @@
                     <div id="file-selected" class="file-selected hidden">
                         <span class="file-icon">📦</span>
                         <span id="file-name" class="file-name"></span>
-                        <button id="btn-clear-file" class="btn-clear">✕</button>
+                        <button id="btn-clear-file" class="btn-clear" aria-label="Clear selected file">✕</button>
                     </div>
                     <div id="zip-validation" class="zip-validation hidden">
                         <span id="validation-status" class="validation-status"></span>
@@ -266,7 +272,7 @@
                 </div>
             </section>
 
-            <!-- Step 5: Storage Check -->
+            <!-- Step 4: Storage Check -->
             <section id="storage-check" class="input-section phase-step storage-check-shell hidden">
                 <label id="storage-check-label" class="section-label">4. Review Storage Readiness</label>
                 <div class="storage-stats">
@@ -554,6 +560,7 @@
                 </div>
 
                 <div class="tab-content" id="tab-google">
+                    <p class="tip">ℹ️ <strong>Note:</strong> DateBack does not connect to Google Photos or share any data with Google. These steps guide you through manually uploading your organized files using the Google Photos website in your own browser.</p>
                     <h4>Option 1:</h4>
                     <ol>
                         <li>Open <a href="https://photos.google.com" id="link-google-photos">photos.google.com</a> in
@@ -637,8 +644,8 @@
             <p class="modal-message">We strongly recommend connecting to a charger before processing gigabytes of data.
             </p>
             <div class="modal-buttons">
-                <button id="btn-cancel-battery" class="btn btn-secondary">Cancel</button>
-                <button id="btn-continue-battery" class="btn btn-primary">Continue Anyway</button>
+                <button id="btn-cancel-battery" class="btn btn-primary">Cancel</button>
+                <button id="btn-continue-battery" class="btn btn-danger-outline">Continue Anyway</button>
             </div>
         </div>
     </div>
@@ -651,8 +658,8 @@
                 because files cannot upload.</p>
             <p class="modal-message">We strongly recommend connecting to Wi-Fi first.</p>
             <div class="modal-buttons">
-                <button id="btn-continue-offline" class="btn btn-primary">Continue Anyway</button>
-                <button id="btn-cancel-offline" class="btn btn-secondary">Cancel</button>
+                <button id="btn-cancel-offline" class="btn btn-primary">Cancel</button>
+                <button id="btn-continue-offline" class="btn btn-danger-outline">Continue Anyway</button>
             </div>
         </div>
     </div>
@@ -712,7 +719,7 @@
                         </svg>
                         <div class="resume-card-text">
                             <h3>Verify Files</h3>
-                            <p>Double-checks files on disk. Safer but slower.</p>
+                            <p>Use this if files were deleted or moved since the last run, or you suspect the saved progress is wrong. Safer but slower.</p>
                         </div>
                     </div>
                 </button>

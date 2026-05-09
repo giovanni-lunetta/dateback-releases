@@ -55,6 +55,7 @@ function bootstrapMainForTests() {
             };
             latestWebContents = this.webContents;
         }
+        on() { }
         loadFile() { }
         isDestroyed() { return false; }
         static getAllWindows() { return []; }
@@ -370,53 +371,83 @@ test('start-processing happy path uses organizer args and spawn options', async 
     const tmpZipPath = mkTmpFile('start.zip', 'zip');
     const spawnRecorder = makeSpawnRecorder();
     const expectedCliArgs = ['--sentinel-start'];
+    const previousSecret = process.env.DATEBACK_SECRET_SHOULD_NOT_LEAK;
+    const previousLogFlag = process.env.DATEBACK_LOG_TEST_FLAG;
+    const previousDebugFlag = process.env.DATEBACK_DEBUG_ZIP_METRICS;
+    process.env.DATEBACK_SECRET_SHOULD_NOT_LEAK = 'do-not-copy';
+    process.env.DATEBACK_LOG_TEST_FLAG = 'copy-log-var';
+    process.env.DATEBACK_DEBUG_ZIP_METRICS = '1';
 
-    withOverrides({
-        validateSender: () => true,
-        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: '/tmp/out' }),
-        resolveAndValidateAutoUploadOptions: async () => ({
-            success: true,
-            options: {
-                autoUploadEnabled: false,
-                normalizedUploadMode: 'copy',
-                resolvedCacheGb: 5,
-                resolvedCacheLowGb: 3,
-                resolvedMaxUploadRetries: 20,
-                providedStagingDir: false,
-                canonicalDestinationDir: null,
-                canonicalStagingDir: null
-            }
-        }),
-        buildOrganizerArgsForStart: () => expectedCliArgs,
-        resolveOrganizerCommand: (_isDev, args) => {
-            assert.deepEqual(args, expectedCliArgs);
-            return { command: 'dummy-organizer', args, ffmpegPath: '/ffmpeg' };
-        },
-        cleanupOrphanedProcesses: () => { },
-        spawn: spawnRecorder.spawnStub
-    });
+    try {
+        withOverrides({
+            validateSender: () => true,
+            validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: '/tmp/out' }),
+            resolveAndValidateAutoUploadOptions: async () => ({
+                success: true,
+                options: {
+                    autoUploadEnabled: false,
+                    normalizedUploadMode: 'copy',
+                    resolvedCacheGb: 5,
+                    resolvedCacheLowGb: 3,
+                    resolvedMaxUploadRetries: 20,
+                    providedStagingDir: false,
+                    canonicalDestinationDir: null,
+                    canonicalStagingDir: null
+                }
+            }),
+            buildOrganizerArgsForStart: () => expectedCliArgs,
+            resolveOrganizerCommand: (_isDev, args) => {
+                assert.deepEqual(args, expectedCliArgs);
+                return { command: 'dummy-organizer', args, ffmpegPath: '/ffmpeg' };
+            },
+            cleanupOrphanedProcesses: () => { },
+            spawn: spawnRecorder.spawnStub
+        });
 
-    const promise = callHandler('start-processing', {}, {
-        zipPath: tmpZipPath,
-        outputDir: '/tmp/out',
-        pauseBetweenBatches: false,
-        resumeMode: 'skip',
-        autoUpload: false
-    });
-    await new Promise((resolve) => setImmediate(resolve));
+        const promise = callHandler('start-processing', {}, {
+            zipPath: tmpZipPath,
+            outputDir: '/tmp/out',
+            pauseBetweenBatches: false,
+            resumeMode: 'skip',
+            autoUpload: false
+        });
+        await new Promise((resolve) => setImmediate(resolve));
 
-    const organizerCall = spawnRecorder.calls.find((c) => c.command === 'dummy-organizer');
-    assert.ok(organizerCall, `expected organizer spawn call, saw: ${JSON.stringify(spawnRecorder.calls.map(c => ({ command: c.command, args: c.args })))}`);
-    assert.deepEqual(organizerCall.args, expectedCliArgs);
-    assert.deepEqual(organizerCall.options.stdio, ['pipe', 'pipe', 'pipe']);
-    assert.equal(organizerCall.options.shell, false);
-    assert.equal(organizerCall.options.env.FFMPEG_PATH, '/ffmpeg');
+        const organizerCall = spawnRecorder.calls.find((c) => c.command === 'dummy-organizer');
+        assert.ok(organizerCall, `expected organizer spawn call, saw: ${JSON.stringify(spawnRecorder.calls.map(c => ({ command: c.command, args: c.args })))}`);
+        assert.deepEqual(organizerCall.args, expectedCliArgs);
+        assert.deepEqual(organizerCall.options.stdio, ['pipe', 'pipe', 'pipe']);
+        assert.equal(organizerCall.options.shell, false);
+        assert.equal(organizerCall.options.env.FFMPEG_PATH, '/ffmpeg');
+        assert.ok(organizerCall.options.env.PATH);
+        assert.equal(organizerCall.options.env.DATEBACK_LOG_DIR, '/tmp/dateback-test-logs');
+        assert.equal(organizerCall.options.env.DATEBACK_LOG_TEST_FLAG, 'copy-log-var');
+        assert.equal(organizerCall.options.env.DATEBACK_DEBUG_ZIP_METRICS, '1');
+        assert.equal(organizerCall.options.env.DATEBACK_SECRET_SHOULD_NOT_LEAK, undefined);
 
-    organizerCall.proc.emit('close', 0);
-    const result = await promise;
-    assert.deepEqual(result, { success: true });
+        organizerCall.proc.emit('close', 0);
+        const result = await promise;
+        assert.deepEqual(result, { success: true });
 
-    cleanupTmp([tmpZipPath]);
+        cleanupTmp([tmpZipPath]);
+    } finally {
+        if (previousSecret === undefined) {
+            delete process.env.DATEBACK_SECRET_SHOULD_NOT_LEAK;
+        } else {
+            process.env.DATEBACK_SECRET_SHOULD_NOT_LEAK = previousSecret;
+        }
+        if (previousLogFlag === undefined) {
+            delete process.env.DATEBACK_LOG_TEST_FLAG;
+        } else {
+            process.env.DATEBACK_LOG_TEST_FLAG = previousLogFlag;
+        }
+        if (previousDebugFlag === undefined) {
+            delete process.env.DATEBACK_DEBUG_ZIP_METRICS;
+        } else {
+            process.env.DATEBACK_DEBUG_ZIP_METRICS = previousDebugFlag;
+        }
+        cleanupTmp([tmpZipPath]);
+    }
 });
 
 test('start-processing rejects unapproved auto-upload destination directory', async () => {

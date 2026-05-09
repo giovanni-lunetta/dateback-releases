@@ -1,5 +1,5 @@
 ================================================================================
-DateBack v1.0.4 - Third-Party Software Notices
+DateBack v1.4.1 - Third-Party Software Notices
 ================================================================================
 
 This application incorporates third-party software. The following notices apply:
@@ -24,6 +24,12 @@ Download: https://dateback.app/licenses/ffmpeg-source.zip
 Includes: FFmpeg 8.0.1, x264, x265, and build information
 SHA256: 286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a
 
+GPL WRITTEN OFFER:
+For at least three years from distribution, DateBack will provide the complete
+corresponding source code for the bundled GPL components on request. Send
+source requests to support@dateback.app. The same source package is also
+available at the URL above.
+
 FFmpeg is distributed WITHOUT ANY WARRANTY; without even the implied warranty
 of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
 Public License for more details.
@@ -39,14 +45,20 @@ Source: https://github.com/electron/electron
 ================================================================================
 Node.js Dependencies
 ================================================================================
-All production npm dependencies use permissive licenses (MIT, ISC, Apache 2.0,
-or BlueOak-1.0.0). For a complete list, run: npm list --production
+All production npm dependencies use permissive licenses (MIT, ISC, BSD-2-Clause,
+BlueOak-1.0.0, or Python-2.0/PSF). For a complete list, run: npm list --production
 
-Key dependencies:
-- adm-zip@0.5.16 - MIT
+Direct production dependencies:
+- adm-zip@0.5.17 - MIT
 - check-disk-space@3.4.0 - MIT
-- electron-updater@6.6.2 - MIT
-- glob@13.0.0 - ISC
+- electron-updater@6.8.3 - MIT
+- glob@13.0.6 - BlueOak-1.0.0
+
+Notable transitive dependency:
+- argparse@2.0.1 - Python-2.0 (PSF) — permissive, no source-disclosure obligation
+
+Development-only dependency:
+- dotenv@16.6.1 - BSD-2-Clause (local development only; not shipped as a production dependency)
 
 ================================================================================
 Python Runtime & Packages (bundled in memory-organizer)
@@ -68,4 +80,4 @@ Requests - Apache License 2.0
 For questions or source code requests, contact:
 support@dateback.app
 
-Last Updated: January 2, 2026
+Last Updated: May 9, 2026

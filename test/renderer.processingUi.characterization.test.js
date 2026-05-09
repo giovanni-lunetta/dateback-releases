@@ -255,11 +255,13 @@ function buildProcessingUiContext({
         hasProcessedBefore: false,
         expiredLinkAlertShown: false,
         stoppedByUser: false,
-        isProcessing: false
+        isProcessing: false,
+        startProcessingInFlight: false
     };
 
     const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
     const getEffectiveOutputDirSource = extractNamedFunctionSource(rendererSource, 'getEffectiveOutputDir');
+    const friendlyErrorHintSource = extractNamedFunctionSource(rendererSource, 'friendlyErrorHint');
     const enterNeedsAttentionStateSource = extractNamedFunctionSource(rendererSource, 'enterNeedsAttentionState');
     const applyProcessingUiStateSource = extractNamedFunctionSource(rendererSource, 'applyProcessingUiState');
     const startProcessingRoutineSource = extractNamedFunctionSource(rendererSource, 'startProcessingRoutine');
@@ -270,6 +272,7 @@ const buildStartProcessingArgsHelper = this.buildStartProcessingArgsHelper;
 const computeProcessingUiStateHelper = this.computeProcessingUiStateHelper;
 const GIB = this.GIB;
 ${getEffectiveOutputDirSource}
+${friendlyErrorHintSource}
 ${enterNeedsAttentionStateSource}
 ${applyProcessingUiStateSource}
 ${startProcessingRoutineSource}

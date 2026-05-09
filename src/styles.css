@@ -71,6 +71,11 @@
     display: none !important;
 }
 
+:focus-visible {
+    outline: 3px solid rgba(136, 189, 242, 0.72);
+    outline-offset: 3px;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     background: var(--gradient-bg);
@@ -131,6 +136,24 @@ textarea {
     left: 0;
     right: 0;
     z-index: 1000;
+}
+
+.update-banner {
+    position: fixed;
+    top: 28px; /* below titlebar drag region */
+    left: 0;
+    right: 0;
+    background: var(--accent-secondary);
+    color: #fff;
+    text-align: center;
+    padding: 6px 16px;
+    font-size: 13px;
+    z-index: 900;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+
+.update-banner.hidden {
+    display: none;
 }
 
 .container {
@@ -472,7 +495,7 @@ textarea {
     border: 1px solid rgba(136, 189, 242, 0.35);
     border-radius: 10px;
     color: var(--text-main);
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 500;
     line-height: 1.4;
     padding: 10px 12px;
@@ -1340,6 +1363,11 @@ textarea {
     background: linear-gradient(135deg, rgba(106, 137, 167, 0.1) 0%, rgba(106, 137, 167, 0.18) 100%);
     transform: translateY(-2px);
     box-shadow: var(--shadow-2);
+}
+
+.drop-zone:focus-visible {
+    border-color: rgba(136, 189, 242, 0.72);
+    box-shadow: var(--shadow-2), 0 0 0 4px rgba(136, 189, 242, 0.18);
 }
 
 .drop-zone:hover::before {

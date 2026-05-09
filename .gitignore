@@ -24,5 +24,15 @@ python/dist/
 # Local package manager cache
 .npm-cache/
 
+# Signing material (never commit)
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.keychain*
+
+# Editor / tool caches
+.eslintcache
+
 # Internal working notes (do not publish)
 FAQ_TRUTH_NOTES.md

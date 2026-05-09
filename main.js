@@ -9,11 +9,13 @@ const { autoUpdater } = require('electron-updater');
 const Logger = require('./src/logger');
 const SupportLogs = require('./src/supportLogs');
 
-// Load environment variables from .env file when available.
-try {
-    require('dotenv').config();
-} catch (_dotenvError) {
-    // dotenv is optional in packaged runtime environments.
+// Load environment variables from .env file only during local development.
+if (!app.isPackaged) {
+    try {
+        require('dotenv').config();
+    } catch (_dotenvError) {
+        // dotenv is optional in development/test environments.
+    }
 }
 
 // Configure auto-updater
@@ -26,12 +28,12 @@ let mainWindow;
 let pythonProcess = null;
 let organizerProcess = null;
 let caffeinateProcess = null; // Sleep prevention process
-let intentionalStop = false; // Track if user intentionally stopped processing
 let currentValidatedOutputDir = null; // Store validated output dir for secure resume
 let approvedOutputDirs = new Set(); // Track user-approved output directories
 let approvedAutoUploadDestinationDirs = new Set(); // Track user-approved cloud destination directories
 let approvedAutoUploadStagingDirs = new Set(); // Track user-approved explicit staging directories
 let trustedRendererDocumentKey = null;
+let pendingUpdateInfo = null; // Deferred update-available info when a job is running
 const TRUSTED_RENDERER_PROTOCOLS = new Set(['file:', 'app:']);
 const DEBUG_SECURITY = String(process.env.DATEBACK_DEBUG_SECURITY || '').toLowerCase();
 const SECURITY_DEBUG_ENABLED = DEBUG_SECURITY === '1' || DEBUG_SECURITY === 'true' || DEBUG_SECURITY === 'yes' || DEBUG_SECURITY === 'on';
@@ -71,6 +73,12 @@ function setOrganizerProcess(proc) {
 function clearOrganizerProcess(proc = null) {
     if (!proc || organizerProcess === proc) {
         organizerProcess = null;
+        // If a system update arrived while the job was running, show the dialog now
+        if (pendingUpdateInfo) {
+            const info = pendingUpdateInfo;
+            pendingUpdateInfo = null;
+            setImmediate(() => showUpdateAvailableDialog(info));
+        }
     }
 }
 
@@ -84,18 +92,6 @@ function clearSessionOutputDir() {
 
 function restoreSessionOutputDir(previousDir) {
     currentValidatedOutputDir = previousDir;
-}
-
-function markIntentionalStop() {
-    intentionalStop = true;
-}
-
-function consumeIntentionalStop() {
-    if (!intentionalStop) {
-        return false;
-    }
-    intentionalStop = false;
-    return true;
 }
 
 function stopCaffeinateSafely() {
@@ -381,6 +377,9 @@ function requestOrganizerShutdown(reason) {
     if (!activeProc) {
         return;
     }
+
+    // Carry the flag on the process object so back-to-back runs can't cross-contaminate.
+    activeProc._intentionallyStopped = true;
 
     const pid = Number(activeProc.pid);
     if (Number.isInteger(pid) && pid > 0) {
@@ -1389,11 +1388,7 @@ function prepareStartOrganizerRun({
     cleanupOrphanedProcessesFn();
     const organizer = resolveOrganizerCommandFn(isDev, cliArgs);
 
-    // Prepare process environment with logging directory
-    const processEnv = {
-        ...process.env,
-        FFMPEG_PATH: organizer.ffmpegPath
-    };
+    const processEnv = buildOrganizerProcessEnv(organizer.ffmpegPath);
 
     // Add logging directory if logger is initialized
     if (logger) {
@@ -1413,13 +1408,42 @@ function prepareRetryOrganizerRun({
     resolveOrganizerCommandFn
 }) {
     const organizer = resolveOrganizerCommandFn(isDev, retryArgs);
-    return {
-        organizer,
-        processEnv: {
-            ...process.env,
-            FFMPEG_PATH: organizer.ffmpegPath
+    const processEnv = buildOrganizerProcessEnv(organizer.ffmpegPath);
+    if (logger) {
+        processEnv.DATEBACK_LOG_DIR = logger.getLogDirectory();
+    }
+    return { organizer, processEnv };
+}
+
+function buildOrganizerProcessEnv(ffmpegPath) {
+    const processEnv = {};
+    const copyIfPresent = (name) => {
+        if (typeof process.env[name] === 'string') {
+            processEnv[name] = process.env[name];
         }
     };
+
+    for (const name of ['PATH', 'Path', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG']) {
+        copyIfPresent(name);
+    }
+
+    for (const [name, value] of Object.entries(process.env)) {
+        if (typeof value !== 'string') {
+            continue;
+        }
+        if (
+            name === 'LC_ALL'
+            || name.startsWith('LC_')
+            || name === 'DATEBACK_LOG_DIR'
+            || name.startsWith('DATEBACK_LOG_')
+            || name.startsWith('DATEBACK_DEBUG')
+        ) {
+            processEnv[name] = value;
+        }
+    }
+
+    processEnv.FFMPEG_PATH = ffmpegPath;
+    return processEnv;
 }
 
 function validateZipArchive(canonicalZipPath) {
@@ -1962,10 +1986,10 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
             if (mode === 'start') {
                 // Log exit code
                 if (logger) {
-                    logger.info('Python process exited', { exitCode: code, intentionalStop });
+                    logger.info('Python process exited', { exitCode: code, intentionalStop: !!proc._intentionallyStopped });
 
                     // Track error for error report generation
-                    if (code !== 0 && !intentionalStop) {
+                    if (code !== 0 && !proc._intentionallyStopped) {
                         lastError = {
                             error: new Error(`Python process exited with code ${code}`),
                             step: 'Memory Processing',
@@ -1982,7 +2006,7 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
                 clearSessionOutputDir();
 
                 // Check if this was an intentional stop (user clicked Stop/Cancel/Pause)
-                if (consumeIntentionalStop()) {
+                if (proc._intentionallyStopped) {
                     settle({ success: true, stopped: true });
                 } else if (runtimeDiskFull) {
                     settle({
@@ -2056,6 +2080,25 @@ function createWindow() {
 
     mainWindow.loadFile('src/index.html');
 
+    // Warn before closing while Python is still running
+    mainWindow.on('close', async (event) => {
+        if (isQuitting || !organizerProcess) return;
+        event.preventDefault();
+        const { response } = await dialog.showMessageBox(mainWindow, {
+            type: 'warning',
+            title: 'Processing in Progress',
+            message: 'DateBack is still processing your memories.',
+            detail: 'Pause processing first to keep your progress safe. Closing now may lose your most recent batch.',
+            buttons: ['Keep Working', 'Close Anyway'],
+            defaultId: 0,
+            cancelId: 0
+        });
+        if (response === 1) {
+            isQuitting = true;
+            app.quit();
+        }
+    });
+
     mainWindow.webContents.once('did-finish-load', () => {
         const normalized = normalizeRendererDocumentKey(currentMainWindowUrl());
         if (normalized) {
@@ -2116,7 +2159,8 @@ function createWindow() {
 }
 
 // Auto-updater event handlers
-autoUpdater.on('update-available', (info) => {
+function showUpdateAvailableDialog(info) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     dialog.showMessageBox(mainWindow, {
         type: 'info',
         title: 'Update Available',
@@ -2129,18 +2173,27 @@ autoUpdater.on('update-available', (info) => {
         if (result.response === 0) {
             autoUpdater.downloadUpdate();
         }
-    });
+    }).catch(err => console.error('Update dialog error:', err));
+}
+
+autoUpdater.on('update-available', (info) => {
+    if (organizerProcess) {
+        // A job is running — defer the dialog and notify renderer to show banner
+        pendingUpdateInfo = info;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-available-notification', { version: info.version });
+        }
+    } else {
+        showUpdateAvailableDialog(info);
+    }
 });
 
 autoUpdater.on('update-not-available', () => {
     // Silent - don't bother users if no update
 });
 
-autoUpdater.on('download-progress', (progressObj) => {
-    // Send progress to renderer if you want a progress bar
-    if (mainWindow) {
-        mainWindow.webContents.send('download-progress', progressObj.percent);
-    }
+autoUpdater.on('download-progress', (_progressObj) => {
+    // No renderer UI for download progress; event is a no-op.
 });
 
 autoUpdater.on('update-downloaded', () => {
@@ -2156,7 +2209,7 @@ autoUpdater.on('update-downloaded', () => {
         if (result.response === 0) {
             autoUpdater.quitAndInstall();
         }
-    });
+    }).catch(err => console.error('Update-downloaded dialog error:', err));
 });
 
 autoUpdater.on('error', (err) => {
@@ -2740,7 +2793,7 @@ ipcMain.handle('stop-processing', async (event) => {
     stopCaffeinateSafely();
 
     if (pythonProcess) {
-        markIntentionalStop(); // Flag to prevent error message on process exit
+        pythonProcess._intentionallyStopped = true; // Flag to prevent error message on process exit
         const activePid = Number(pythonProcess.pid);
         if (Number.isInteger(activePid) && activePid > 0) {
             updateTrackedWorkerState(activePid, {

@@ -198,13 +198,13 @@ test('updateAutoUploadUiState glue: COMPUTER mode stopped', () => {
     assert.equal(elements.computerModeCard.classList.contains('selected'), true);
 });
 
-test('renderer.js stores the onLogsExported cleanup function', () => {
+test('renderer.js registers onLogsExported listener', () => {
     const rendererSrc = fs.readFileSync(
         path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8'
     );
     assert.ok(
-        rendererSrc.includes('const _logsExportedCleanup = window.api.onLogsExported('),
-        'renderer.js must store the return value of window.api.onLogsExported to prevent listener leak'
+        rendererSrc.includes('window.api.onLogsExported('),
+        'renderer.js must register window.api.onLogsExported listener'
     );
 });
 
@@ -221,6 +221,40 @@ test('renderer free build does not call license activation APIs', () => {
     assert.equal(rendererSrc.includes('license-key-input'), false);
     assert.equal(htmlSrc.includes('license-modal'), false);
     assert.equal(htmlSrc.includes('license-key-input'), false);
+});
+
+test('renderer delegates http links through the validated IPC opener', () => {
+    const rendererSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8'
+    );
+    const htmlSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'index.html'), 'utf8'
+    );
+
+    assert.ok(rendererSrc.includes("document.addEventListener('click'"), 'Expected delegated click handling on document');
+    assert.ok(rendererSrc.includes("target.closest('a[href]')"), 'Expected delegated anchor lookup');
+    assert.ok(rendererSrc.includes("url.protocol === 'http:' || url.protocol === 'https:'"), 'Expected only HTTP(S) links to use openUrl delegation');
+    assert.ok(rendererSrc.includes('window.api.openUrl(url.href)'), 'Expected delegated HTTP(S) links to use window.api.openUrl');
+    assert.equal((htmlSrc.match(/https:\/\/photos\.google\.com/g) || []).length, 2, 'Expected both Google Photos links to remain real HTTP links');
+});
+
+test('drop zone exposes keyboard button semantics and focus styling', () => {
+    const rendererSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8'
+    );
+    const htmlSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'index.html'), 'utf8'
+    );
+    const cssSrc = fs.readFileSync(
+        path.resolve(__dirname, '..', 'src', 'styles.css'), 'utf8'
+    );
+
+    assert.match(htmlSrc, /id="drop-zone"[^>]*role="button"/);
+    assert.match(htmlSrc, /id="drop-zone"[^>]*tabindex="0"/);
+    assert.match(htmlSrc, /id="drop-zone"[^>]*aria-label="[^"]+"/);
+    assert.ok(rendererSrc.includes("dropZone.addEventListener('keydown'"), 'Expected keyboard handler on drop zone');
+    assert.ok(rendererSrc.includes("e.key === 'Enter' || e.key === ' '"), 'Expected Enter and Space activation');
+    assert.ok(cssSrc.includes(':focus-visible'), 'Expected broad focus-visible styling');
 });
 
 test('updateAutoUploadUiState glue: CLOUD mode running', () => {

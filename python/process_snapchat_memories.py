@@ -21,8 +21,12 @@ import queue
 import hashlib
 import tempfile
 from urllib.parse import urlparse, parse_qs
+from email.utils import parsedate_to_datetime
 from collections import deque
 from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root, scan_existing_batch_roots
+
+# Reject image headers that would expand to unreasonable pixel counts when Pillow decodes them.
+Image.MAX_IMAGE_PIXELS = 200_000_000
 
 # Global Abort Flag
 ABORT_PROCESSING = threading.Event()
@@ -50,9 +54,12 @@ MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2GB per file limit
 MAX_NESTED_ZIP_EXTRACT_BYTES = MAX_DOWNLOAD_BYTES
 MAX_NESTED_ZIP_ENTRY_BYTES = MAX_DOWNLOAD_BYTES
 MAX_JSON_BYTES = 100 * 1024 * 1024
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+FFMPEG_TIMEOUT_SECONDS = 180
+MAX_RETRY_AFTER_SECONDS = 60
 
 # Configuration
-JSON_PATH = 'mydata~1766711891202/json/memories_history.json'
+JSON_PATH = None  # Must be set via set_config() before use; the hardcoded value was dead code
 DOWNLOADS_DIR = 'Memories'
 OUTPUT_DIR = 'Processed_Memories'
 TEMP_DIR = 'temp_processing'
@@ -384,6 +391,31 @@ def safe_join(root_dir, relative_name):
     return candidate
 
 
+def ensure_no_symlink_ancestor(path_value, root_dir):
+    """Refuse to write when any existing path component under root is a symlink."""
+    root_real = os.path.realpath(root_dir)
+    target_abs = os.path.abspath(path_value)
+    target_dir = target_abs if os.path.isdir(target_abs) else os.path.dirname(target_abs)
+
+    try:
+        rel_dir = os.path.relpath(target_dir, root_real)
+    except ValueError as e:
+        raise ValueError(f"Path escapes extraction root: {path_value}") from e
+
+    if rel_dir == os.curdir:
+        return
+
+    current = root_real
+    for part in rel_dir.split(os.sep):
+        if not part or part == os.curdir:
+            continue
+        if part == os.pardir:
+            raise ValueError(f"Path escapes extraction root: {path_value}")
+        current = os.path.join(current, part)
+        if os.path.lexists(current) and os.path.islink(current):
+            raise ValueError(f"Refusing to write through symlinked ZIP path: {path_value}")
+
+
 def safe_delete(path_value, root_dir):
     """
     Delete only when resolved path remains under root_dir.
@@ -480,26 +512,50 @@ def safe_extract(zf, extract_dir):
         is_dir = member_info.is_dir() or member.endswith("/")
         if is_dir:
             os.makedirs(target_path, exist_ok=True)
+            ensure_no_symlink_ancestor(target_path, extract_dir)
             continue
 
         parent_dir = os.path.dirname(target_path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
+            ensure_no_symlink_ancestor(parent_dir, extract_dir)
 
         written_for_member = 0
-        with zf.open(member_info, "r") as src, open(target_path, "wb") as dst:
-            while True:
-                chunk = src.read(1024 * 1024)
-                if not chunk:
-                    break
-                dst.write(chunk)
-                chunk_len = len(chunk)
-                written_for_member += chunk_len
-                total_written += chunk_len
-                if written_for_member > MAX_NESTED_ZIP_ENTRY_BYTES:
-                    raise ValueError(f"ZIP entry exceeds allowed extracted size: {member}")
-                if total_written > MAX_NESTED_ZIP_EXTRACT_BYTES:
-                    raise ValueError("ZIP extraction exceeds allowed total extracted size")
+        open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            open_flags |= os.O_NOFOLLOW
+        with zf.open(member_info, "r") as src:
+            fd = os.open(target_path, open_flags, 0o600)
+            try:
+                dst = os.fdopen(fd, "wb")
+            except Exception:
+                os.close(fd)
+                raise
+            with dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+                    chunk_len = len(chunk)
+                    written_for_member += chunk_len
+                    total_written += chunk_len
+                    if written_for_member > MAX_NESTED_ZIP_ENTRY_BYTES:
+                        raise ValueError(f"ZIP entry exceeds allowed extracted size: {member}")
+                    if total_written > MAX_NESTED_ZIP_EXTRACT_BYTES:
+                        raise ValueError("ZIP extraction exceeds allowed total extracted size")
+
+
+def copy_to_corrupted(local_path, local_filename):
+    """Copy a failed input to Corrupted_Memories without trusting path-bearing names."""
+    safe_name = os.path.basename(local_filename or os.path.basename(local_path) or "corrupted_media")
+    target_corrupt = safe_join(CORRUPTED_DIR, safe_name)
+    if os.path.exists(target_corrupt):
+        base, ext_name = os.path.splitext(safe_name)
+        target_corrupt = safe_join(CORRUPTED_DIR, f"{base}_{int(time.time())}{ext_name}")
+    shutil.copy2(local_path, target_corrupt)
+    print(f"Saved corrupted file to: {target_corrupt}", flush=True)
+    return target_corrupt
 
 
 def reset_zip_metrics():
@@ -1409,8 +1465,15 @@ def stream_download_to_path(download_url, temp_path, timeout=60):
 
         downloaded_bytes = 0
         content_type = (response.headers.get('Content-Type') or '').lower()
+        expected_size = None
+        content_length = response.headers.get('Content-Length')
+        if content_length:
+            try:
+                expected_size = int(content_length)
+            except (TypeError, ValueError):
+                expected_size = None
         with open(temp_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
+            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
                 if not chunk:
                     continue
                 downloaded_bytes += len(chunk)
@@ -1420,6 +1483,8 @@ def stream_download_to_path(download_url, temp_path, timeout=60):
 
         if downloaded_bytes <= 0:
             raise ValueError("Downloaded file is empty")
+        if expected_size is not None and downloaded_bytes != expected_size:
+            raise ValueError(f"Truncated download: expected {expected_size} bytes, got {downloaded_bytes}")
         if 'text/html' in content_type:
             raise ValueError(f"Unexpected content type for media download: {content_type}")
 
@@ -1763,7 +1828,7 @@ def get_remote_file_size(url, retries=5):
     """
     # SECURITY: Validate URL BEFORE any network request
     if not is_allowed_download_url(url):
-        print(f"Blocked HEAD request to disallowed URL: {url}", flush=True)
+        print(f"Blocked HEAD request to disallowed host: {urlparse(url).hostname}", flush=True)
         return None
     
     wait = 1
@@ -1780,13 +1845,36 @@ def get_remote_file_size(url, retries=5):
                 return int(size)
             elif response.status_code == 404:
                 return None # Not found, don't retry
+            elif response.status_code in (429, 503):
+                retry_after_wait = parse_retry_after_seconds(response.headers.get('Retry-After'))
+                if retry_after_wait is not None and i < retries - 1:
+                    time.sleep(retry_after_wait)
+                    continue
         except Exception as e:
             if i == retries - 1:
                 print(f"Warning: HEAD request failed after {retries} attempts: {e}", flush=True)
                 return None
+        if i < retries - 1:
             time.sleep(wait)
             wait *= 2
     return None
+
+def parse_retry_after_seconds(value):
+    if not value:
+        return None
+    try:
+        seconds = int(value)
+        return max(0, min(seconds, MAX_RETRY_AFTER_SECONDS))
+    except (TypeError, ValueError):
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        delta = (retry_at - datetime.now(retry_at.tzinfo)).total_seconds()
+        return max(0, min(int(delta), MAX_RETRY_AFTER_SECONDS))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 def check_space_and_wait(path, min_gb=None, resume_gb=None):
     """
@@ -1832,7 +1920,7 @@ def check_space_and_wait(path, min_gb=None, resume_gb=None):
                     else:
                          # Simple heartbeat
                          print(f"   ... Waiting ({poll_gb:.2f} GB / {resume_gb} GB needed) ...", flush=True)
-                except:
+                except Exception:
                     pass
         except OSError:
              # Path might not exist yet or permission error
@@ -1969,6 +2057,10 @@ TOP_LEVEL_OVERLAY_MEMBER_RE = re.compile(
     r'^(?P<stem>\d{4}-\d{2}-\d{2}_[A-F0-9-]{36})-(?P<role>main|overlay)\.[^.]+$',
     re.IGNORECASE
 )
+NESTED_OVERLAY_ROLE_RE = re.compile(
+    r'^(?:.*[-_])?(?P<role>main|overlay)\.[^.]+$',
+    re.IGNORECASE
+)
 
 
 def parse_top_level_overlay_member(member_name):
@@ -1980,6 +2072,15 @@ def parse_top_level_overlay_member(member_name):
         "stem": match.group("stem").upper(),
         "role": match.group("role").lower()
     }
+
+
+def parse_nested_overlay_role(member_name):
+    """Return main/overlay for nested overlay ZIP members without loose substring matching."""
+    base_name = os.path.basename(member_name or "")
+    match = NESTED_OVERLAY_ROLE_RE.match(base_name)
+    if not match:
+        return None
+    return match.group("role").lower()
 
 
 def find_overlay_sibling_for_main(member_name):
@@ -2147,12 +2248,15 @@ def _build_companion_zip_indexes(primary_zip_path):
     for companion_path in companions:
         try:
             with zipfile.ZipFile(companion_path, 'r') as companion_zf:
+                bad_member = companion_zf.testzip()
+                if bad_member:
+                    raise ValueError(f"CRC check failed for {bad_member}")
                 before = sum(len(v) for v in zip_name_index.values())
                 build_file_index_from_zip(companion_zf, clear=False, source_zip_path=companion_path)
                 after = sum(len(v) for v in zip_name_index.values())
                 total_added += after - before
         except Exception as e:
-            print(f"  Warning: Could not index {os.path.basename(companion_path)}: {e}", flush=True)
+            raise ValueError(f"Could not read companion ZIP {os.path.basename(companion_path)}: {e}") from e
 
     print(f"Combined index ready. {total_added} additional files from {len(companions)} companion ZIP(s).", flush=True)
 
@@ -2182,7 +2286,7 @@ def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_e
                 '-shortest',
                 temp_output
             ]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT_SECONDS)
             os.replace(temp_output, final_output)
             result_msg = "Success (Video Overlay Merge)"
         else:
@@ -2245,14 +2349,17 @@ def process_zip(zip_path, output_path, ts_epoch=None):
         with zipfile.ZipFile(zip_path, 'r') as zf:
             safe_extract(zf, extract_dir)  # Use safe extraction with path validation
 
-        files = os.listdir(extract_dir)
+        files = sorted(os.listdir(extract_dir))
         main_file = None
         overlay_file = None
         
         for f in files:
-            if 'main' in f.lower():
+            role = parse_nested_overlay_role(f)
+            if not role:
+                continue
+            if role == "main" and main_file is None:
                 main_file = os.path.join(extract_dir, f)
-            elif 'overlay' in f.lower():
+            elif role == "overlay" and overlay_file is None:
                 overlay_file = os.path.join(extract_dir, f)
 
         if not main_file:
@@ -2286,10 +2393,10 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                         '-shortest',
                         temp_output  # Write to temp first
                     ]
-                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT_SECONDS)
                     os.replace(temp_output, final_output)
                     result_msg = "Success (Video Merge)"
-                except (subprocess.CalledProcessError, FileNotFoundError):
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
                     if os.path.exists(temp_output):
                         try:
                             os.remove(temp_output)
@@ -2584,8 +2691,15 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
                      # SECURITY: Track download size to prevent disk exhaustion
                      downloaded_bytes = 0
                      content_type = (r.headers.get('Content-Type') or '').lower()
+                     expected_size = None
+                     content_length = r.headers.get('Content-Length')
+                     if content_length:
+                         try:
+                             expected_size = int(content_length)
+                         except (TypeError, ValueError):
+                             expected_size = None
                      with open(dl_path, 'wb') as f:
-                         for chunk in r.iter_content(chunk_size=8192):
+                         for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
                              if chunk:  # filter out keep-alive new chunks
                                  downloaded_bytes += len(chunk)
                                  if downloaded_bytes > MAX_DOWNLOAD_BYTES:
@@ -2596,6 +2710,8 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
                      # Guard against silently saving redirects/errors as empty files.
                      if downloaded_bytes <= 0:
                          raise ValueError("Downloaded file is empty")
+                     if expected_size is not None and downloaded_bytes != expected_size:
+                         raise ValueError(f"Truncated download: expected {expected_size} bytes, got {downloaded_bytes}")
                      if 'text/html' in content_type:
                          raise ValueError(f"Unexpected content type for media download: {content_type}")
              
@@ -2732,9 +2848,9 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
             res['id'] = mem_id
             if res['status'] == 'Error':
                 try:
-                    shutil.copy2(local_path, os.path.join(CORRUPTED_DIR, local_filename))
-                except Exception:
-                    pass
+                    copy_to_corrupted(local_path, local_filename)
+                except Exception as copy_err:
+                    print(f"Failed to copy to corrupted: {copy_err}", flush=True)
 
             if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
                 try:
@@ -2835,14 +2951,9 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
             )
         try:
             if local_path and os.path.exists(local_path):
-                target_corrupt = os.path.join(CORRUPTED_DIR, local_filename)
-                if os.path.exists(target_corrupt):
-                    base, ext_name = os.path.splitext(local_filename)
-                    target_corrupt = os.path.join(CORRUPTED_DIR, f"{base}_{int(time.time())}{ext_name}")
-                shutil.copy2(local_path, target_corrupt)
-                print(f"Saved corrupted file to: {target_corrupt}")
+                copy_to_corrupted(local_path, local_filename)
         except Exception as copy_err:
-            print(f"Failed to copy to corrupted: {copy_err}")
+            print(f"Failed to copy to corrupted: {copy_err}", flush=True)
 
         if local_path and TEMP_DIR in local_path and os.path.exists(local_path):
             try:
@@ -2958,12 +3069,15 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     if limit:
         print(f"--- PARTIAL RUN: Limiting to first {limit} memories ---", flush=True)
         memories = memories[:limit]
+
+    ORIGINAL_TOTAL_MEMORIES = len(memories)
     
     processed_indices_set = set()
     previously_processed = 0
     memories_with_index = list(enumerate(memories))
     manifest = load_batch_manifest()
     manifest_processed_count = None
+    ignore_manifest_for_zip_mismatch = False
 
     if manifest:
         manifest_processed_count = manifest.get("processed_count")
@@ -3014,7 +3128,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         if progress_callback:
             try:
                 progress_callback((-1, len(memories)))  # -1 signals "verifying" phase
-            except:
+            except Exception:
                 pass
 
         verify_existing_files, verify_scan_processed_index = scan_existing_output_files(OUTPUT_DIR)
@@ -3074,8 +3188,13 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # Manifest ZIP mismatch check — must run AFTER fingerprint is computed
     if manifest:
         manifest_zip = manifest.get("zip_fingerprint")
-        if manifest_zip and zip_fingerprint and manifest_zip != zip_fingerprint and (trust_manifest or auto_upload):
-            raise ValueError("ZIP export does not match previous run. Please choose Verify Files or Start Fresh.")
+        if manifest_zip and zip_fingerprint and manifest_zip != zip_fingerprint:
+            if trust_manifest or auto_upload:
+                raise ValueError("ZIP export does not match previous run. Please choose Verify Files or Start Fresh.")
+            print("Warning: Manifest ZIP fingerprint mismatch; ignoring saved progress and verifying files on disk.", flush=True)
+            manifest = None
+            manifest_processed_count = None
+            ignore_manifest_for_zip_mismatch = True
 
     # Output Directory Setup
     print("Clearing output directory configuration...")
@@ -3201,7 +3320,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
 
     # Check for persisted progress FIRST
     persisted_start_batch = -1
-    if not clear_output:
+    if not clear_output and not ignore_manifest_for_zip_mismatch:
         persisted_start_batch = load_batch_progress()
 
     
@@ -3334,7 +3453,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         if batch_num == start_batch and progress_callback:
              try:
                  progress_callback((total_files_organized, progress_denominator))
-             except: pass
+             except Exception:
+                 pass
 
         
         # Calculate how many files to process in this batch
@@ -3562,7 +3682,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             if os.path.exists(resume_signal_file):
                 try:
                     os.remove(resume_signal_file)
-                except:
+                except Exception:
                     pass
             
             pause_msg = json.dumps({
@@ -3873,7 +3993,7 @@ def process_from_zip(zip_path, output_root=None, limit=None, progress_callback=N
                  try:
                      ts_date = datetime.fromtimestamp(epoch_ms / 1000).strftime("%Y-%m-%d")
                      folder_suffix = ts_date
-                 except:
+                 except Exception:
                      folder_suffix = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             else:
                  folder_suffix = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

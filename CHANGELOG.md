@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-05-09
+### Fixed
+- Production readiness notices now match the current packaged dependency tree
+- GPL written-offer language is present in both bundled license documents
+- Build scripts disable hard-link packaging, and bundled helper binaries are signed before app packaging
+- Python HEAD retry handling now honors bounded `Retry-After` responses
+- Public website social metadata and sitemap priority order corrected
+- Regression coverage added for release notices, social metadata, retry handling, and bare exception handlers
+
+## [1.4.0] - 2026-05-06
+### Added
+- Multi-ZIP Snapchat export processing for companion archives such as `mydata~1234-2.zip` and `mydata~1234-3.zip`
+- Recovery for newer top-level `*-main` / `*-overlay` media pairs
+
+### Fixed
+- Companion ZIP resume checks now use ZIP-set fingerprints
+- Multi-ZIP organize operations reject destination escapes and filename collisions
+- Retry-search, overlay, and threaded companion routing edge cases corrected
+- Website release copy, changelog, privacy posture, CSP, and release tests aligned with the free/no-tracking model
+
+## [1.3.1] - 2026-05-05
+### Fixed
+- Snapchat ZIP exports with blank download URL fields now extract matching local `memories/` media files instead of silently skipping them
+- Root-level `json/memories_history.json` exports are supported
+- Rows with neither local media nor download URL are reported as missing
+
+## [1.3.0] - 2026-05-05
+### Changed
+- DateBack is now a free Mac download with no purchase, account, activation key, or Polar validation required
+- Removed license activation IPC, renderer UI, local license storage, and payment-flow dependencies
+- Website download flow now points to GitHub Releases, with optional Buy Me A Coffee support
+- Package and legal metadata updated for the proprietary free-to-use distribution model
+
+## [1.2.1] - 2026-04-18
+### Added
+- Disk-full runtime error handling with clear messages for download, staging, and destination write failures
+- Mode-aware Next Steps modal copy for Cloud Mode and Computer Mode
+
+### Changed
+- Advanced Cloud Settings panel redesigned with clearer optional controls and inline help
+
 ## [1.2.0] - 2026-03-19
 ### Added
 - Organizer worker state tracking via persistent state file — enables reliable cleanup and prevents orphaned processes on quit or restart

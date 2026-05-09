@@ -37,27 +37,36 @@ node -e "const p=require('./package.json'); console.log(p.version)"
 node -e "const p=require('./package-lock.json'); console.log(p.version, p.packages[''].version)"
 ```
 
-#### 3. Tests — must be green before building
+#### 3. Supply-chain audit + tests — must be green before building
 
 ```bash
 npm ci
+npm audit --omit=dev --audit-level=high   # must show 0 high/critical prod vulnerabilities
+pip-audit -r python/requirements.txt      # must show 0 vulnerabilities
 npm run test:all      # runs: node --check main.js + renderer files, then node --test
 ```
 
-Do not proceed if any test fails.
+Do not proceed if any step fails.
 
-#### 4. Commit the version bump
+#### 4. Update CHANGELOG.md and THIRD_PARTY_NOTICES.txt
+
+**CHANGELOG.md** — add an entry at the top for the new version. See previous entries for format.
+
+**THIRD_PARTY_NOTICES.txt** — bump the version banner on line 2 to `DateBack vX.Y.Z` and update the `Last Updated` date. Verify listed production npm deps still match `package.json`.
+
+#### 5. Commit the release
 
 ```bash
-git add package.json package-lock.json
+git add package.json package-lock.json CHANGELOG.md THIRD_PARTY_NOTICES.txt
 git commit -m "Release: vX.Y.Z"
 ```
 
-#### 5. Production build (sign + notarize)
+#### 6. Production build (sign + notarize)
 
 Load Apple credentials from `../.env` (one level up, in `DateBack_Business/`):
 
 ```bash
+unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
 source ../.env && export APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
 npm run build:mac
 ```
@@ -86,41 +95,23 @@ shasum -a 256 dist/DateBack-X.Y.Z-arm64.dmg
 
 **Place artifacts:**
 ```bash
-mkdir -p /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z
-mkdir -p /Users/giovanni-lunetta/DateBack_Business/Builds/latest
-cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/
-cp dist/latest-mac.yml /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/
-cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/DateBack_Business/Builds/latest/
-cp dist/latest-mac.yml /Users/giovanni-lunetta/DateBack_Business/Builds/latest/
+mkdir -p /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z
+mkdir -p /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest
+cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
+cp dist/latest-mac.yml /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
+cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
+cp dist/latest-mac.yml /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
 ```
 
-#### 6. QA build (internal only — do NOT upload to GitHub)
+#### 7. QA build (internal only — do NOT upload to GitHub)
 
-Use an external config file so electron-builder config overrides don't silently drop binaries.
-The QA config must always include explicit `extraResources` file mappings (not glob).
-
-Write `/tmp/dateback-qa-build.json`:
-```json
-{
-  "appId": "com.giovannilunetta.dateback.qa",
-  "productName": "DateBack QA",
-  "publish": null,
-  "mac": {
-    "target": { "target": "dmg", "arch": ["arm64"] }
-  },
-  "extraResources": [
-    { "from": "assets/bin/memory-organizer", "to": "bin/memory-organizer" },
-    { "from": "assets/bin/ffmpeg", "to": "bin/ffmpeg" }
-  ],
-  "directories": { "output": "dist-qa" },
-  "artifactName": "DateBack-X.Y.Z-QA-arm64.dmg"
-}
-```
+The QA config is checked in at `build/qa-build.json`. Do not edit it inline or recreate it in `/tmp`.
 
 Build:
 ```bash
+unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
 source ../.env && export APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
-npx electron-builder --config /tmp/dateback-qa-build.json --mac
+npx electron-builder --config build/qa-build.json --mac
 ```
 
 Output: `dist-qa/DateBack-X.Y.Z-QA-arm64.dmg`
@@ -144,10 +135,10 @@ Expected plist values:
 **Place QA artifact:**
 ```bash
 cp dist-qa/DateBack-X.Y.Z-QA-arm64.dmg \
-   /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/
+   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
 ```
 
-#### 7. Tag, push, create GitHub Release
+#### 8. Tag, push, create GitHub Release
 
 ```bash
 git tag vX.Y.Z
@@ -157,8 +148,8 @@ git push origin vX.Y.Z
 # GH_TOKEN env var must NOT be set (use keyring auth instead):
 unset GH_TOKEN
 gh release create vX.Y.Z \
-  /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-arm64.dmg \
-  /Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/latest-mac.yml \
+  /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-arm64.dmg \
+  /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/latest-mac.yml \
   --repo giovanni-lunetta/dateback-releases \
   --title "DateBack vX.Y.Z – <short title>" \
   --notes "<release notes>"
@@ -166,7 +157,7 @@ gh release create vX.Y.Z \
 
 Upload **production DMG and `latest-mac.yml` only**. Never upload the QA DMG to GitHub Releases.
 
-#### 8. Release notes doc (in-repo)
+#### 9. Release notes doc (in-repo)
 
 Create `docs/release-notes-vX.Y.Z.md` following the pattern of previous release notes (see [v1.1.3](docs/release-notes-v1.1.3.md) as the latest template).
 
@@ -179,9 +170,9 @@ git commit -m "Docs: release notes vX.Y.Z"
 git push origin main
 ```
 
-#### 9. Website changelog (DO NOT commit or push)
+#### 10. Website changelog (DO NOT commit or push)
 
-File: `/Users/giovanni-lunetta/DateBack_Business/DateBack_Website/changelog.html`
+File: `/Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/DateBack_Website/changelog.html`
 
 - Add a new `<details class="changelog-entry" open>` block at the top for the new version.
 - Change the previously-latest entry's `<details>` to remove the `open` attribute.
@@ -224,6 +215,7 @@ After every release, report:
 - [ ] Auto-update metadata asset (`latest-mac.yml`) uploaded to the GitHub Release
 - [ ] Notarization status (both builds)
 - [ ] Website changelog diff (uncommitted)
+- [ ] `memory-organizer` was built using the **stock PyInstaller bootloader** (no custom bootloader recompilation); GPL exception applies
 
 ---
 
@@ -231,11 +223,11 @@ After every release, report:
 
 | What | Path |
 |---|---|
-| App source | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/` |
-| Env vars | `/Users/giovanni-lunetta/DateBack_Business/.env` |
-| Release artifacts | `/Users/giovanni-lunetta/DateBack_Business/Builds/releases/vX.Y.Z/` |
-| Latest artifact | `/Users/giovanni-lunetta/DateBack_Business/Builds/latest/` |
-| Website repo | `/Users/giovanni-lunetta/DateBack_Business/DateBack_Website/` |
+| App source | `/Users/giovanni-lunetta/Business Ideas/DateBack_Business/DateBack_App_Source/` |
+| Env vars | `/Users/giovanni-lunetta/Business Ideas/DateBack_Business/.env` |
+| Release artifacts | `/Users/giovanni-lunetta/Business Ideas/DateBack_Business/Builds/releases/vX.Y.Z/` |
+| Latest artifact | `/Users/giovanni-lunetta/Business Ideas/DateBack_Business/Builds/latest/` |
+| Website repo | `/Users/giovanni-lunetta/Business Ideas/DateBack_Business/DateBack_Website/` |
 | GitHub remote | `giovanni-lunetta/dateback-releases` |
 | Bundle ID (prod) | `com.giovannilunetta.dateback` |
 | Bundle ID (QA) | `com.giovannilunetta.dateback.qa` |
@@ -245,6 +237,7 @@ After every release, report:
 ### Common gotchas
 
 - **`GH_TOKEN` env var** — if set, it overrides keyring auth and causes 401. Always `unset GH_TOKEN` before `gh release create`.
-- **QA binaries missing** — using `--config` with electron-builder discards `package.json` build config including `extraResources`. The QA config JSON must always re-declare the explicit `extraResources` file mappings.
+- **QA binaries missing** — `--config` with electron-builder discards the `package.json` build config including `extraResources`. The checked-in `build/qa-build.json` already re-declares the explicit `extraResources` mappings. Never remove them from that file.
 - **`dist-qa/` in working tree** — this directory is untracked/gitignored; it being present does not mean the tree is dirty for release purposes.
 - **Version in `package-lock.json`** — appears in two places: top-level `"version"` and `packages[""].version`. Both must be bumped.
+- **`assets/bin/` contains arm64-only binaries** — `ffmpeg` and `memory-organizer` in `assets/bin/` are arm64 only. The build target must stay `arch: ["arm64"]`. Before adding x86_64 or universal targets, restructure to `assets/bin/arm64/` subdirectories and update `extraResources` in both `package.json` and `build/qa-build.json` to use the `${arch}` template variable.

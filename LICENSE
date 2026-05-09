@@ -41,6 +41,12 @@ Complete source package including FFmpeg, x264, and x265:
 https://dateback.app/licenses/ffmpeg-source.zip
 SHA256: 286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a
 
+GPL WRITTEN OFFER:
+For at least three years from distribution, DateBack will provide the complete
+corresponding source code for the bundled GPL components on request. Send
+source requests to support@dateback.app. The same source package is also
+available at the URL above.
+
 The GPL v2.0 license text is included in this distribution at:
 licenses/GPL-2.0.txt
 
