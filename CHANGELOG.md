@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.3] - 2026-05-12
+### Fixed
+- Processing now shows the success modal correctly when some memories are missing (previously exited with code 1 due to `SystemExit` being caught by the broad `BaseException` handler)
+- ZIP-not-found error now shows a targeted message asking users to re-select their Snapchat export ZIP, rather than incorrectly blaming the output folder
+- "Buy Me a Coffee" button in the success modal no longer overlaps the Next Steps button
+
 ## [1.4.2] - 2026-05-12
 ### Fixed
 - Production builds now include macOS folder permission usage descriptions for automatic ZIP discovery in Downloads, Documents, and Desktop

@@ -1,88 +1,88 @@
 {
-    "name": "dateback",
-    "version": "1.4.2",
-    "description": "DateBack - Archive Memories the Right Way",
-    "main": "main.js",
-    "private": true,
-    "scripts": {
-        "start": "env -u ELECTRON_RUN_AS_NODE electron .",
-        "test": "node --test",
-        "check": "node --check main.js && node --check preload.js && node --check src/renderer.js && node --check src/renderer.helpers.js && python3 -m py_compile python/*.py",
-        "test:all": "npm run check && npm test",
-        "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
-        "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac"
+  "name": "dateback",
+  "version": "1.4.3",
+  "description": "DateBack - Archive Memories the Right Way",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
+    "test": "node --test",
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js && node --check src/renderer.helpers.js && python3 -m py_compile python/*.py",
+    "test:all": "npm run check && npm test",
+    "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
+    "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac"
+  },
+  "author": "Giovanni Lunetta",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "devDependencies": {
+    "dotenv": "^17.4.2",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.giovannilunetta.dateback",
+    "productName": "DateBack",
+    "publish": {
+      "provider": "github",
+      "owner": "giovanni-lunetta",
+      "repo": "dateback-releases"
     },
-    "author": "Giovanni Lunetta",
-    "license": "UNLICENSED",
-    "engines": {
-        "node": ">=20.0.0",
-        "npm": ">=10.0.0"
+    "mac": {
+      "category": "public.app-category.utilities",
+      "icon": "assets/DateBack.icns",
+      "identity": "GIOVANNI ANTHONY LUNETTA (ZK25MD36ZM)",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true,
+      "extendInfo": {
+        "NSDownloadsFolderUsageDescription": "DateBack searches your Downloads folder to find your Snapchat export ZIP file automatically.",
+        "NSDocumentsFolderUsageDescription": "DateBack can search your Documents folder for your Snapchat export ZIP file.",
+        "NSDesktopFolderUsageDescription": "DateBack can search your Desktop for your Snapchat export ZIP file."
+      },
+      "target": {
+        "target": "dmg",
+        "arch": [
+          "arm64"
+        ]
+      }
     },
-    "devDependencies": {
-        "dotenv": "^17.4.2",
-        "electron": "^42.0.1",
-        "electron-builder": "^26.8.1"
-    },
-    "build": {
-        "appId": "com.giovannilunetta.dateback",
-        "productName": "DateBack",
-        "publish": {
-            "provider": "github",
-            "owner": "giovanni-lunetta",
-            "repo": "dateback-releases"
-        },
-        "mac": {
-            "category": "public.app-category.utilities",
-            "icon": "assets/DateBack.icns",
-            "identity": "GIOVANNI ANTHONY LUNETTA (ZK25MD36ZM)",
-            "hardenedRuntime": true,
-            "gatekeeperAssess": false,
-            "entitlements": "build/entitlements.mac.plist",
-            "entitlementsInherit": "build/entitlements.mac.plist",
-            "notarize": true,
-            "extendInfo": {
-                "NSDownloadsFolderUsageDescription": "DateBack searches your Downloads folder to find your Snapchat export ZIP file automatically.",
-                "NSDocumentsFolderUsageDescription": "DateBack can search your Documents folder for your Snapchat export ZIP file.",
-                "NSDesktopFolderUsageDescription": "DateBack can search your Desktop for your Snapchat export ZIP file."
-            },
-            "target": {
-                "target": "dmg",
-                "arch": [
-                    "arm64"
-                ]
-            }
-        },
-        "files": [
-            "main.js",
-            "preload.js",
-            "src/**/*",
-            "assets/**/*",
-            "!assets/bin/**/*",
-            "LICENSE",
-            "licenses/**/*",
-            "THIRD_PARTY_NOTICES.txt"
-        ],
-        "extraResources": [
-            {
-                "from": "assets/bin/mac-arm64/memory-organizer",
-                "to": "bin/memory-organizer"
-            },
-            {
-                "from": "assets/bin/mac-arm64/ffmpeg",
-                "to": "bin/ffmpeg"
-            }
-        ],
-        "asarUnpack": [
-            "assets/bin/**/*"
-        ],
-        "dmg": {
-            "sign": true
-        }
-    },
-    "dependencies": {
-        "adm-zip": "^0.5.17",
-        "check-disk-space": "^3.4.0",
-        "electron-updater": "^6.8.3",
-        "glob": "^13.0.6"
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*",
+      "!assets/bin/**/*",
+      "LICENSE",
+      "licenses/**/*",
+      "THIRD_PARTY_NOTICES.txt"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/bin/mac-arm64/memory-organizer",
+        "to": "bin/memory-organizer"
+      },
+      {
+        "from": "assets/bin/mac-arm64/ffmpeg",
+        "to": "bin/ffmpeg"
+      }
+    ],
+    "asarUnpack": [
+      "assets/bin/**/*"
+    ],
+    "dmg": {
+      "sign": true
     }
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.17",
+    "check-disk-space": "^3.4.0",
+    "electron-updater": "^6.8.3",
+    "glob": "^13.0.6"
+  }
 }
