@@ -9,6 +9,7 @@
     "test": "node --test",
     "check": "node --check main.js && node --check preload.js && node --check src/renderer.js && node --check src/renderer.helpers.js && python3 -m py_compile python/*.py",
     "test:all": "npm run check && npm test",
+    "build:binary": "python3 -m PyInstaller memory-organizer.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-arm64/memory-organizer",
     "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac"
   },

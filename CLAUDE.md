@@ -61,7 +61,26 @@ git add package.json package-lock.json CHANGELOG.md THIRD_PARTY_NOTICES.txt
 git commit -m "Release: vX.Y.Z"
 ```
 
-#### 6. Production build (sign + notarize)
+#### 6. Recompile the Python binary
+
+**This must run before every QA or production build.** The bundled `memory-organizer` binary is a frozen copy of the Python source — it does not update automatically when the source changes.
+
+```bash
+npm run build:binary
+```
+
+Verify the binary was updated (timestamp should match today):
+```bash
+ls -lh assets/bin/mac-arm64/memory-organizer
+```
+
+Then commit the updated binary:
+```bash
+git add assets/bin/mac-arm64/memory-organizer
+git commit -m "Build: recompile memory-organizer for vX.Y.Z"
+```
+
+#### 7. Production build (sign + notarize)
 
 Load Apple credentials from `../.env` (one level up, in `DateBack_Business/`):
 
@@ -103,7 +122,7 @@ cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/Business\ Ideas/DateBac
 cp dist/latest-mac.yml /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
 ```
 
-#### 7. QA build (internal only — do NOT upload to GitHub)
+#### 8. QA build (internal only — do NOT upload to GitHub)
 
 The QA config is checked in at `build/qa-build.json`. Do not edit it inline or recreate it in `/tmp`.
 
@@ -138,7 +157,7 @@ cp dist-qa/DateBack-X.Y.Z-QA-arm64.dmg \
    /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
 ```
 
-#### 8. Tag, push, create GitHub Release
+#### 9. Tag, push, create GitHub Release
 
 ```bash
 git tag vX.Y.Z
@@ -157,7 +176,7 @@ gh release create vX.Y.Z \
 
 Upload **production DMG and `latest-mac.yml` only**. Never upload the QA DMG to GitHub Releases.
 
-#### 9. Release notes doc (in-repo)
+#### 10. Release notes doc (in-repo)
 
 Create `docs/release-notes-vX.Y.Z.md` following the pattern of previous release notes (see [v1.1.3](docs/release-notes-v1.1.3.md) as the latest template).
 
@@ -170,7 +189,7 @@ git commit -m "Docs: release notes vX.Y.Z"
 git push origin main
 ```
 
-#### 10. Website changelog (DO NOT commit or push)
+#### 11. Website changelog (DO NOT commit or push)
 
 File: `/Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/DateBack_Website/changelog.html`
 
