@@ -166,6 +166,9 @@ function friendlyErrorHint(rawError) {
     if (msg.includes('EACCES') || msg.includes('EPERM') || msg.includes('permission denied')) {
         return 'Permission denied — DateBack couldn\'t write to the output folder. Try choosing a folder inside your home directory.';
     }
+    if (msg.includes('Cannot access ZIP file') || msg.includes('ZIP path')) {
+        return 'The selected ZIP file could not be found. Please re-select your Snapchat export ZIP.';
+    }
     if (msg.includes('ENOENT') || msg.includes('no such file')) {
         return 'A required file or folder was not found. Make sure your output folder still exists.';
     }
