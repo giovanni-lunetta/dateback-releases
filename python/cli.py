@@ -136,6 +136,8 @@ def main():
         })
         sys.exit(1)
     except BaseException as e:
+        if isinstance(e, (SystemExit, KeyboardInterrupt)):
+            raise
         print(f"Error: {e}", file=sys.stderr)
         json_output("error", {"message": str(e)})
         sys.exit(1)
