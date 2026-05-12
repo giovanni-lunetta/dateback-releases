@@ -1,0 +1,27 @@
+{
+  "appId": "com.giovannilunetta.dateback.qa",
+  "productName": "DateBack QA",
+  "publish": null,
+  "mac": {
+    "category": "public.app-category.utilities",
+    "icon": "assets/DateBack.icns",
+    "identity": "GIOVANNI ANTHONY LUNETTA (ZK25MD36ZM)",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "notarize": true,
+    "extendInfo": {
+      "NSDownloadsFolderUsageDescription": "DateBack searches your Downloads folder to find your Snapchat export ZIP file automatically.",
+      "NSDocumentsFolderUsageDescription": "DateBack can search your Documents folder for your Snapchat export ZIP file.",
+      "NSDesktopFolderUsageDescription": "DateBack can search your Desktop for your Snapchat export ZIP file."
+    },
+    "target": { "target": "dmg", "arch": ["arm64"] }
+  },
+  "extraResources": [
+    { "from": "assets/bin/mac-arm64/memory-organizer", "to": "bin/memory-organizer" },
+    { "from": "assets/bin/mac-arm64/ffmpeg", "to": "bin/ffmpeg" }
+  ],
+  "directories": { "output": "dist-qa" },
+  "artifactName": "${productName}-${version}-QA-arm64.dmg"
+}

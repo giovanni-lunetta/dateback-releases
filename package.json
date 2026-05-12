@@ -1,6 +1,6 @@
 {
     "name": "dateback",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "description": "DateBack - Archive Memories the Right Way",
     "main": "main.js",
     "private": true,
@@ -19,9 +19,9 @@
         "npm": ">=10.0.0"
     },
     "devDependencies": {
-        "dotenv": "^16.6.1",
-        "electron": "^39.2.7",
-        "electron-builder": "^26.0.12"
+        "dotenv": "^17.4.2",
+        "electron": "^42.0.1",
+        "electron-builder": "^26.8.1"
     },
     "build": {
         "appId": "com.giovannilunetta.dateback",
@@ -40,6 +40,11 @@
             "entitlements": "build/entitlements.mac.plist",
             "entitlementsInherit": "build/entitlements.mac.plist",
             "notarize": true,
+            "extendInfo": {
+                "NSDownloadsFolderUsageDescription": "DateBack searches your Downloads folder to find your Snapchat export ZIP file automatically.",
+                "NSDocumentsFolderUsageDescription": "DateBack can search your Documents folder for your Snapchat export ZIP file.",
+                "NSDesktopFolderUsageDescription": "DateBack can search your Desktop for your Snapchat export ZIP file."
+            },
             "target": {
                 "target": "dmg",
                 "arch": [
@@ -59,11 +64,11 @@
         ],
         "extraResources": [
             {
-                "from": "assets/bin/memory-organizer",
+                "from": "assets/bin/mac-arm64/memory-organizer",
                 "to": "bin/memory-organizer"
             },
             {
-                "from": "assets/bin/ffmpeg",
+                "from": "assets/bin/mac-arm64/ffmpeg",
                 "to": "bin/ffmpeg"
             }
         ],

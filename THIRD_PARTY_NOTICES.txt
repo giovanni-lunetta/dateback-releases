@@ -1,5 +1,5 @@
 ================================================================================
-DateBack v1.4.1 - Third-Party Software Notices
+DateBack v1.4.2 - Third-Party Software Notices
 ================================================================================
 
 This application incorporates third-party software. The following notices apply:
@@ -66,10 +66,12 @@ Python Runtime & Packages (bundled in memory-organizer)
 Python - Python Software Foundation License
   Copyright (c) 2001-2025 Python Software Foundation
   https://www.python.org/
+  License Text: See licenses/PYTHON-PSF-LICENSE.txt in this application bundle
 
 Pillow (PIL Fork) - HPND License
   Copyright (c) 2010-2025 Jeffrey A. Clark (Alex) and contributors
   https://github.com/python-pillow/Pillow
+  License Text: See licenses/PILLOW-HPND-LICENSE.txt in this application bundle
 
 Requests - Apache License 2.0
   Copyright 2019 Kenneth Reitz

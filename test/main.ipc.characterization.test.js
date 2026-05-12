@@ -932,7 +932,7 @@ test('validate-zip rejects unauthorized sender', async () => {
 });
 
 test('validate-zip rejects non-zip paths with exact message', async () => {
-    const result = await callHandler('validate-zip', createAuthorizedEvent(), '/tmp/not-a-zip.txt');
+    const result = await callHandler('validate-zip', createAuthorizedEvent(), '/home/test/not-a-zip.txt');
     assert.deepEqual(result, { found: false, error: 'Selected file is not a ZIP archive.', count: 0 });
 });
 
@@ -951,12 +951,83 @@ test('validate-zip blocks zip-slip entries with exact error', async () => {
         }
     });
 
-    const result = await callHandler('validate-zip', createAuthorizedEvent(), '/tmp/mock.zip');
+    const result = await callHandler('validate-zip', createAuthorizedEvent(), '/home/test/mock.zip');
     assert.deepEqual(result, {
         found: false,
         error: 'ZIP contains invalid file paths (path traversal detected). Please use a legitimate Snapchat export.',
         count: 0
     });
+});
+
+test('validate-zip rejects unapproved ZIP paths outside the home directory', async () => {
+    const tmpZip = mkTmpFile('outside-home.zip', 'not a real zip');
+
+    try {
+        const result = await callHandler('validate-zip', createAuthorizedEvent(), tmpZip);
+        assert.deepEqual(result, {
+            found: false,
+            error: 'ZIP path is outside approved locations. Please choose it with the file picker.',
+            count: 0
+        });
+    } finally {
+        cleanupTmp([tmpZip]);
+    }
+});
+
+test('select-zip-or-folder approves selected ZIP paths outside the home directory for validation', async () => {
+    const tmpZip = mkTmpFile('selected-outside-home.zip', 'zip bytes');
+
+    withOverrides({
+        AdmZip: function MockAdmZip() {
+            return {
+                getEntries: () => ([
+                    {
+                        entryName: 'json/memories_history.json',
+                        header: { size: 24 },
+                        getData: () => Buffer.from(JSON.stringify({ 'Saved Media': [{}] }))
+                    }
+                ])
+            };
+        }
+    });
+
+    try {
+        setDialogOpenResult({ canceled: false, filePaths: [tmpZip] });
+        const selected = await callHandler('select-zip-or-folder', createAuthorizedEvent());
+        assert.deepEqual(selected, [tmpZip]);
+
+        const result = await callHandler('validate-zip', createAuthorizedEvent(), tmpZip);
+        assert.deepEqual(result, { found: true, count: 1 });
+    } finally {
+        cleanupTmp([tmpZip]);
+    }
+});
+
+test('get-disk-free-bytes rejects unapproved paths outside the home directory', async () => {
+    const tmpDir = mkTmpDirReal('dateback-disk-outside-home-');
+
+    try {
+        const result = await callHandler('get-disk-free-bytes', createAuthorizedEvent(), tmpDir);
+        assert.deepEqual(result, {
+            success: false,
+            error: 'Disk check path is outside approved locations.'
+        });
+    } finally {
+        cleanupTmp([tmpDir]);
+    }
+});
+
+test('get-disk-free-bytes allows folder-picker approved paths outside the home directory', async () => {
+    const tmpDir = mkTmpDirReal('dateback-disk-approved-');
+
+    try {
+        await approveFolderSelection(tmpDir);
+        const result = await callHandler('get-disk-free-bytes', createAuthorizedEvent(), tmpDir);
+        assert.equal(result.success, true);
+        assert.equal(typeof result.freeBytes, 'number');
+    } finally {
+        cleanupTmp([tmpDir]);
+    }
 });
 
 test('organize-zip-set refuses to overwrite existing organized ZIPs', async () => {
@@ -1102,8 +1173,17 @@ test('get-resume-manifest rejects unauthorized sender', async () => {
 });
 
 test('get-resume-manifest rejects sensitive root output directory', async () => {
-    const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir: '/home/test/Documents' });
-    assert.deepEqual(result, { success: false, error: 'Output directory is a restricted system folder.' });
+    const homeDir = mkTmpDirReal('dateback-sensitive-home-');
+    const documentsDir = path.join(homeDir, 'Documents');
+
+    try {
+        withAppHome(homeDir);
+        fs.mkdirSync(documentsDir);
+        const result = await callHandler('get-resume-manifest', createAuthorizedEvent(), { outputDir: documentsDir });
+        assert.deepEqual(result, { success: false, error: 'Output directory is a restricted system folder.' });
+    } finally {
+        cleanupTmp([homeDir]);
+    }
 });
 
 test('get-resume-manifest rejects unapproved output directory', async () => {

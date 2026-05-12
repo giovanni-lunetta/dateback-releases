@@ -50,10 +50,8 @@ function normalizeFolderPurpose(value) {
 // Expose protected methods to the renderer process
 contextBridge.exposeInMainWorld('api', {
     // File dialogs
-    selectZip: () => ipcRenderer.invoke('select-zip'),
     selectZipOrFolder: () => ipcRenderer.invoke('select-zip-or-folder'),
     getPathForFile: (file) => webUtils.getPathForFile(file),
-    findZip: () => ipcRenderer.invoke('find-zip'),
     discoverZipSet: (expand, folderPath) => ipcRenderer.invoke('discover-zip-set', { expand: !!expand, folderPath: folderPath || null }),
     organizeZipSet: (zipPaths, destFolderName) => ipcRenderer.invoke('organize-zip-set', {
         zipPaths: Array.isArray(zipPaths) ? zipPaths : [],
@@ -120,18 +118,5 @@ contextBridge.exposeInMainWorld('api', {
             ipcRenderer.removeListener('update-available-notification', listener);
             updateAvailableListeners.delete(listener);
         };
-    },
-    // Cleanup functions to prevent memory leaks
-    removeProgressListener: () => {
-        for (const listener of progressListeners) {
-            ipcRenderer.removeListener('progress-update', listener);
-        }
-        progressListeners.clear();
-    },
-    removeLogListener: () => {
-        for (const listener of logListeners) {
-            ipcRenderer.removeListener('log-message', listener);
-        }
-        logListeners.clear();
     }
 });

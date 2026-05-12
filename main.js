@@ -32,6 +32,7 @@ let currentValidatedOutputDir = null; // Store validated output dir for secure r
 let approvedOutputDirs = new Set(); // Track user-approved output directories
 let approvedAutoUploadDestinationDirs = new Set(); // Track user-approved cloud destination directories
 let approvedAutoUploadStagingDirs = new Set(); // Track user-approved explicit staging directories
+let approvedZipFiles = new Set(); // Track exact ZIP files chosen through the file picker
 let trustedRendererDocumentKey = null;
 let pendingUpdateInfo = null; // Deferred update-available info when a job is running
 const TRUSTED_RENDERER_PROTOCOLS = new Set(['file:', 'app:']);
@@ -576,6 +577,19 @@ function getCanonicalPath(filePath) {
     } catch (e) {
         // Path might not exist yet
     }
+    try {
+        const missingParts = [];
+        let probe = resolved;
+        while (probe && probe !== path.dirname(probe) && !fs.existsSync(probe)) {
+            missingParts.unshift(path.basename(probe));
+            probe = path.dirname(probe);
+        }
+        if (probe && fs.existsSync(probe)) {
+            return path.join(fs.realpathSync(probe), ...missingParts);
+        }
+    } catch (e) {
+        // Fall back to the resolved string when no existing ancestor can be canonicalized.
+    }
     return resolved;
 }
 
@@ -618,6 +632,38 @@ function getAllApprovedDirectorySets() {
 function approveDirectoryForPurpose(canonicalPath, rawPurpose) {
     const purpose = normalizeFolderSelectionPurpose(rawPurpose);
     getApprovedDirectorySetForPurpose(purpose).add(canonicalPath);
+}
+
+function approveZipFile(zipPath) {
+    try {
+        const canonicalZipPath = getCanonicalPath(zipPath);
+        if (canonicalZipPath.toLowerCase().endsWith('.zip')) {
+            approvedZipFiles.add(canonicalZipPath);
+        }
+    } catch {
+        // Ignore invalid picker results; later validation will reject them.
+    }
+}
+
+function isCanonicalInsideHome(canonicalPath) {
+    const canonicalHome = getCanonicalPath(app.getPath('home'));
+    return canonicalPath === canonicalHome || canonicalPath.startsWith(canonicalHome + path.sep);
+}
+
+function isCanonicalInsideApprovedDirectory(canonicalPath) {
+    return getAllApprovedDirectorySets().some((approvedSet) => (
+        Array.from(approvedSet).some(approvedRoot => isPathInsideDir(canonicalPath, approvedRoot))
+    ));
+}
+
+function authorizeReadPath(canonicalPath, { allowApprovedZip = false, error }) {
+    if (isCanonicalInsideHome(canonicalPath) || isCanonicalInsideApprovedDirectory(canonicalPath)) {
+        return { success: true };
+    }
+    if (allowApprovedZip && approvedZipFiles.has(canonicalPath)) {
+        return { success: true };
+    }
+    return { success: false, error };
 }
 
 function findNearestExistingPath(pathToCheck) {
@@ -692,7 +738,7 @@ function ensureCanonicalWritableDirectory(dirPath, label = 'Directory') {
 
 // Security: Deny commonly unsafe roots to prevent accidental home directory wipes
 function isSensitiveRoot(dirPath) {
-    const home = app.getPath('home');
+    const home = getCanonicalPath(app.getPath('home'));
     const sensitive = [
         home,
         path.join(home, 'Documents'),
@@ -1553,6 +1599,13 @@ ipcMain.handle('validate-zip', async (event, zipPath) => {
     try {
         const normalizedZipPath = sanitizePathInput(zipPath, 'ZIP path');
         const canonicalZipPath = getCanonicalPath(normalizedZipPath);
+        const authorization = authorizeReadPath(canonicalZipPath, {
+            allowApprovedZip: true,
+            error: 'ZIP path is outside approved locations. Please choose it with the file picker.'
+        });
+        if (!authorization.success) {
+            return { found: false, error: authorization.error, count: 0 };
+        }
         return validateZipArchive(canonicalZipPath);
     } catch (error) {
         return { found: false, error: error.message, count: 0 };
@@ -1569,6 +1622,13 @@ ipcMain.handle('get-disk-space', async (event, pathToCheck) => {
         const requestedPath = (typeof pathToCheck === 'string' && pathToCheck.trim())
             ? sanitizePathInput(pathToCheck, 'Disk check path')
             : app.getPath('home');
+        const canonicalRequestedPath = getCanonicalPath(requestedPath);
+        const authorization = authorizeReadPath(canonicalRequestedPath, {
+            error: 'Disk check path is outside approved locations.'
+        });
+        if (!authorization.success) {
+            return { success: false, error: authorization.error };
+        }
         const { freeBytes } = await getDiskFreeBytesForPath(requestedPath);
         const checkPath = findNearestExistingPath(requestedPath);
         const diskSpace = await checkDiskSpace(checkPath);
@@ -1587,6 +1647,13 @@ ipcMain.handle('get-disk-free-bytes', async (event, pathToCheck) => {
         const requestedPath = (typeof pathToCheck === 'string' && pathToCheck.trim())
             ? sanitizePathInput(pathToCheck, 'Disk check path')
             : app.getPath('home');
+        const canonicalRequestedPath = getCanonicalPath(requestedPath);
+        const authorization = authorizeReadPath(canonicalRequestedPath, {
+            error: 'Disk check path is outside approved locations.'
+        });
+        if (!authorization.success) {
+            return { success: false, error: authorization.error };
+        }
         const { freeBytes, volumePath } = await getDiskFreeBytesForPath(requestedPath);
         return { success: true, freeBytes, volumePath };
     } catch (error) {
@@ -1901,8 +1968,34 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
         let output = '';
         let stats = null;
         let runtimeDiskFull = null;
+        let lastOrganizerOutputAt = Date.now();
+        let stalledEventSent = false;
+        const watchdogMs = Number(process.env.DATEBACK_ORGANIZER_WATCHDOG_MS || (5 * 60 * 1000));
+        const watchdogTimer = mode === 'start' && Number.isFinite(watchdogMs) && watchdogMs > 0
+            ? setInterval(() => {
+                if (stalledEventSent || Date.now() - lastOrganizerOutputAt < watchdogMs) {
+                    return;
+                }
+                stalledEventSent = true;
+                if (logger) {
+                    logger.warn('Memory organizer appears stalled', { watchdogMs });
+                }
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('progress-update', {
+                        type: 'stalled',
+                        schema_version: 1,
+                        message: 'DateBack has not received worker progress recently. It is still waiting for the organizer process.'
+                    });
+                }
+            }, Math.min(watchdogMs, 60 * 1000))
+            : null;
+        if (watchdogTimer && typeof watchdogTimer.unref === 'function') {
+            watchdogTimer.unref();
+        }
 
         proc.stdout.on('data', (data) => {
+            lastOrganizerOutputAt = Date.now();
+            stalledEventSent = false;
             if (mode === 'start') {
                 const lines = data.toString().split('\n').filter(l => l.trim());
 
@@ -1962,6 +2055,8 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
         });
 
         proc.stderr.on('data', (data) => {
+            lastOrganizerOutputAt = Date.now();
+            stalledEventSent = false;
             if (mode === 'start') {
                 const stderrOutput = data.toString();
 
@@ -1983,6 +2078,9 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
         });
 
         proc.on('close', (code) => {
+            if (watchdogTimer) {
+                clearInterval(watchdogTimer);
+            }
             if (mode === 'start') {
                 // Log exit code
                 if (logger) {
@@ -2033,6 +2131,9 @@ function runOrganizerSubprocess({ organizer, env, mode, sessionOutputDir = null 
         });
 
         proc.on('error', (err) => {
+            if (watchdogTimer) {
+                clearInterval(watchdogTimer);
+            }
             if (mode === 'start') {
                 // Log spawn error
                 if (logger) {
@@ -2308,22 +2409,6 @@ app.on('window-all-closed', () => {
 
 // IPC Handlers
 
-// Open file dialog for ZIP selection
-ipcMain.handle('select-zip', async (event) => {
-    if (!validateSender(event)) {
-        return null;
-    }
-
-    const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ['openFile'],
-        filters: [
-            { name: 'ZIP Files', extensions: ['zip'] },
-            { name: 'All Files', extensions: ['*'] }
-        ]
-    });
-    return result.filePaths[0] || null;
-});
-
 // Open a dialog that accepts a folder, a single ZIP, or multiple ZIPs
 ipcMain.handle('select-zip-or-folder', async (event) => {
     if (!validateSender(event)) {
@@ -2333,47 +2418,10 @@ ipcMain.handle('select-zip-or-folder', async (event) => {
         properties: ['openFile', 'openDirectory', 'multiSelections'],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
+    for (const selectedPath of result.filePaths) {
+        approveZipFile(selectedPath);
+    }
     return result.filePaths;
-});
-
-// Auto-search for mydata~*.zip files
-ipcMain.handle('find-zip', async (event) => {
-    if (!validateSender(event)) {
-        return { success: false, error: 'Unauthorized sender' };
-    }
-
-    try {
-        const os = require('os');
-        const homeDir = os.homedir();
-        const { glob } = require('glob');
-
-        // Search for mydata~*.zip files in home directory
-        // Limit depth to avoid performance issues
-        const pattern = `${homeDir}/**/mydata~*.zip`;
-        const options = {
-            maxDepth: 5, // Limit search depth
-            ignore: ['**/node_modules/**', '**/Library/**', '**/.Trash/**'], // Skip system folders
-            nocase: true
-        };
-
-        const files = await glob(pattern, options);
-
-        if (files.length === 0) {
-            return { success: false, error: 'No mydata~*.zip files found in your home directory' };
-        }
-
-        // Return the most recent file (by modification time)
-        const filesWithStats = files.map(f => ({
-            path: f,
-            mtime: fs.statSync(f).mtime
-        }));
-
-        filesWithStats.sort((a, b) => b.mtime - a.mtime);
-
-        return { success: true, path: filesWithStats[0].path };
-    } catch (error) {
-        return { success: false, error: error.message };
-    }
 });
 
 // Discover all ZIPs from the same Snapchat export
@@ -2393,12 +2441,15 @@ ipcMain.handle('discover-zip-set', async (event, { expand = false, folderPath = 
         path.join(homeDir, 'Pictures'),
     ]);
 
+    let canonicalFolderPath = null;
+
     // Validate folderPath if provided (must be inside home dir, must exist)
     if (folderPath) {
         try {
-            const canonicalFolder = fs.realpathSync(folderPath);
+            const sanitizedFolder = sanitizePathInput(folderPath, 'Folder path');
+            canonicalFolderPath = fs.realpathSync(sanitizedFolder);
             const canonicalHome = getCanonicalPath(homeDir);
-            if (!canonicalFolder.startsWith(canonicalHome + path.sep)) {
+            if (canonicalFolderPath !== canonicalHome && !canonicalFolderPath.startsWith(canonicalHome + path.sep)) {
                 return { success: false, error: 'Folder must be inside your home directory' };
             }
         } catch (e) {
@@ -2411,13 +2462,14 @@ ipcMain.handle('discover-zip-set', async (event, { expand = false, folderPath = 
     let primaryFiles = [];
     try {
         const { glob } = require('glob');
-        const pattern = folderPath
-            ? `${folderPath}/mydata~*.zip`
-            : expand
-                ? `${homeDir}/**/mydata~*.zip`
-                : `${downloadsDir}/mydata~*.zip`;
+        const scanRoot = canonicalFolderPath || (expand ? homeDir : downloadsDir);
+        const pattern = canonicalFolderPath || !expand
+            ? 'mydata~*.zip'
+            : '**/mydata~*.zip';
         const opts = {
-            maxDepth: folderPath ? 1 : (expand ? 5 : 1),
+            cwd: scanRoot,
+            absolute: true,
+            maxDepth: canonicalFolderPath ? 1 : (expand ? 5 : 1),
             ignore: ['**/node_modules/**', '**/Library/**', '**/.Trash/**'],
             nocase: true,
         };
@@ -2430,6 +2482,9 @@ ipcMain.handle('discover-zip-set', async (event, { expand = false, folderPath = 
         }
     } catch (e) {
         console.warn('discover-zip-set scan error:', e.message);
+        if (e.code === 'EPERM' || e.code === 'EACCES') {
+            return { success: false, error: 'Permission denied — check Privacy & Security → Files and Folders in System Settings and allow DateBack to access your Downloads folder.' };
+        }
     }
 
     if (primaryFiles.length === 0) {

@@ -46,3 +46,12 @@ test('free build preload API does not expose license activation methods', () => 
     assert.equal(Object.prototype.hasOwnProperty.call(exposedApi, 'getLicenseStatus'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(exposedApi, 'clearLicense'), false);
 });
+
+test('preload API omits retired ZIP search and global listener cleanup methods', () => {
+    const { exposedApi } = loadPreloadApi();
+
+    assert.equal(Object.prototype.hasOwnProperty.call(exposedApi, 'selectZip'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(exposedApi, 'findZip'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(exposedApi, 'removeProgressListener'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(exposedApi, 'removeLogListener'), false);
+});

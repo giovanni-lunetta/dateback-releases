@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-05-12
+### Fixed
+- Production builds now include macOS folder permission usage descriptions for automatic ZIP discovery in Downloads, Documents, and Desktop
+- QA build metadata now mirrors production folder permission descriptions
+- Public website license dependency table now matches the app production dependency tree
+- Bundled helper binaries now live under an explicit `assets/bin/mac-arm64/` source path for production and QA packaging
+- ZIP validation and disk-space IPC now reject unapproved paths outside the user's home folder unless selected through the picker
+- Python worker events now include a schema version, large resume manifests use compact processed-index ranges, and ZIP magic-byte checks refuse symlinks
+- Electron and dotenv dev tooling were updated to current major versions
+
 ## [1.4.1] - 2026-05-09
 ### Fixed
 - Production readiness notices now match the current packaged dependency tree

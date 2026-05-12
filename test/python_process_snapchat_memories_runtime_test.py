@@ -176,6 +176,67 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
         self.assertEqual(second, first)
         self.assertTrue(psm.ABORT_PROCESSING.is_set())
 
+    def test_emit_processing_event_includes_schema_version(self):
+        events = []
+
+        psm.emit_processing_event(events.append, "companion_missing", message="Companion ZIPs may be missing")
+
+        self.assertEqual(events[0]["type"], "companion_missing")
+        self.assertEqual(events[0]["schema_version"], psm.NDJSON_SCHEMA_VERSION)
+
+    def test_save_batch_progress_compacts_large_processed_index_sets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            progress_file = Path(temp_dir) / ".batch_progress.json"
+            with mock.patch.object(psm, "get_batch_progress_file", return_value=str(progress_file)):
+                psm.save_batch_progress(
+                    batch_num=4,
+                    total_batches=8,
+                    total_files=5000,
+                    processed_indices=set(range(0, 2500)),
+                )
+
+            manifest = json.loads(progress_file.read_text(encoding="utf-8"))
+
+        self.assertNotIn("processed_indices", manifest)
+        self.assertEqual(manifest["processed_index_ranges"], [[0, 2499]])
+        self.assertEqual(manifest["processed_count"], 2500)
+        self.assertEqual(manifest["last_index"], 2499)
+
+    def test_expand_processed_index_manifest_supports_compacted_ranges(self):
+        expanded = psm.expand_processed_indices_from_manifest({
+            "processed_index_ranges": [[0, 2], [10, 11]]
+        })
+
+        self.assertEqual(expanded, [0, 1, 2, 10, 11])
+
+    def test_cli_top_level_handler_catches_base_exception(self):
+        cli_source = (PYTHON_DIR / "cli.py").read_text(encoding="utf-8")
+        tree = ast.parse(cli_source)
+        handlers = [
+            handler.type.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Try)
+            for handler in node.handlers
+            if isinstance(handler.type, ast.Name)
+        ]
+
+        self.assertIn("BaseException", handlers)
+
+    def test_is_zip_file_refuses_filesystem_symlinks(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink support unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "real.zip"
+            link = Path(temp_dir) / "link.zip"
+            target.write_bytes(b"PK\x03\x04payload")
+            try:
+                os.symlink(target, link)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            self.assertFalse(psm.is_zip_file(str(link)))
+
     def test_emit_runtime_disk_full_classifies_staging_scope(self):
         events = []
 

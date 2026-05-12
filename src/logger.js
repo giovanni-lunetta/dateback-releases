@@ -26,6 +26,7 @@ class Logger {
         this.writeStream = null;
         this.queue = [];
         this.isWriting = false;
+        this.currentWritePromise = null;
         this.currentLogPath = null;
         this.currentPartNumber = 1;
         this.currentFileSize = 0;
@@ -176,30 +177,36 @@ class Logger {
      */
     async processQueue() {
         if (this.isWriting || this.queue.length === 0) {
-            return;
+            return this.currentWritePromise || Promise.resolve();
         }
 
         this.isWriting = true;
+        this.currentWritePromise = (async () => {
+            try {
+                while (this.queue.length > 0) {
+                    const logLine = this.queue.shift();
+                    const lineSize = Buffer.byteLength(logLine, 'utf8');
 
-        while (this.queue.length > 0) {
-            const logLine = this.queue.shift();
-            const lineSize = Buffer.byteLength(logLine, 'utf8');
+                    // Check if we need to roll to next part
+                    if (this.currentFileSize + lineSize > MAX_LOG_FILE_SIZE) {
+                        await this.rolloverLogFile();
+                    }
 
-            // Check if we need to roll to next part
-            if (this.currentFileSize + lineSize > MAX_LOG_FILE_SIZE) {
-                await this.rolloverLogFile();
+                    // Write asynchronously
+                    await new Promise((resolve) => {
+                        this.writeStream.write(logLine, 'utf8', () => {
+                            this.currentFileSize += lineSize;
+                            resolve();
+                        });
+                    });
+                }
+            } finally {
+                this.isWriting = false;
+                this.currentWritePromise = null;
             }
+        })();
 
-            // Write asynchronously
-            await new Promise((resolve) => {
-                this.writeStream.write(logLine, 'utf8', () => {
-                    this.currentFileSize += lineSize;
-                    resolve();
-                });
-            });
-        }
-
-        this.isWriting = false;
+        return this.currentWritePromise;
     }
 
     /**

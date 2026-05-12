@@ -135,7 +135,7 @@ def main():
             "details": getattr(e, "details", {}) or {}
         })
         sys.exit(1)
-    except Exception as e:
+    except BaseException as e:
         print(f"Error: {e}", file=sys.stderr)
         json_output("error", {"message": str(e)})
         sys.exit(1)

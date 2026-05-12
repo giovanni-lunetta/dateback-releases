@@ -2,6 +2,10 @@ node_modules/
 dist/
 dist-qa/
 build/
+!build/
+!build/entitlements.mac.plist
+!build/qa-build.json
+build/memory-organizer/
 *.dmg
 
 # Environment variables (sensitive!)

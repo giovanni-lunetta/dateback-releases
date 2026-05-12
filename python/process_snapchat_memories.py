@@ -57,6 +57,8 @@ MAX_JSON_BYTES = 100 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 FFMPEG_TIMEOUT_SECONDS = 180
 MAX_RETRY_AFTER_SECONDS = 60
+NDJSON_SCHEMA_VERSION = 1
+MAX_INLINE_PROCESSED_INDICES = 1000
 
 # Configuration
 JSON_PATH = None  # Must be set via set_config() before use; the hardcoded value was dead code
@@ -257,7 +259,16 @@ def is_zip_file(file_path, zip_file=None, zip_lock=None):
                 record_zip_metrics(wait_sec=wait_sec, read_sec=read_sec, bytes_read=len(header), members=0)
         else:
             # Reading from filesystem
-            with open(file_path, 'rb') as f:
+            open_flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                open_flags |= os.O_NOFOLLOW
+            fd = os.open(file_path, open_flags)
+            try:
+                f = os.fdopen(fd, 'rb')
+            except Exception:
+                os.close(fd)
+                raise
+            with f:
                 header = f.read(4)
         
         is_zip = header == ZIP_MAGIC
@@ -775,7 +786,7 @@ def emit_processing_event(progress_callback, event_type, **fields):
     if not progress_callback:
         return
     try:
-        payload = {"type": event_type}
+        payload = {"type": event_type, "schema_version": NDJSON_SCHEMA_VERSION}
         for key, value in fields.items():
             if isinstance(value, str):
                 key_lower = key.lower()
@@ -1530,6 +1541,58 @@ def load_batch_manifest():
     return None
 
 
+def encode_processed_index_ranges(processed_indices):
+    """Compact sorted integer indices into inclusive [start, end] ranges."""
+    normalized = sorted({int(i) for i in processed_indices})
+    if not normalized:
+        return []
+
+    ranges = []
+    start = previous = normalized[0]
+    for value in normalized[1:]:
+        if value == previous + 1:
+            previous = value
+            continue
+        ranges.append([start, previous])
+        start = previous = value
+    ranges.append([start, previous])
+    return ranges
+
+
+def expand_processed_indices_from_manifest(manifest):
+    """Return processed indices from either legacy lists or compact range manifests."""
+    if not isinstance(manifest, dict):
+        return []
+
+    processed_list = manifest.get("processed_indices")
+    if isinstance(processed_list, list):
+        values = []
+        for value in processed_list:
+            try:
+                values.append(int(value))
+            except (ValueError, TypeError):
+                pass
+        return sorted(set(values))
+
+    processed_ranges = manifest.get("processed_index_ranges")
+    if isinstance(processed_ranges, list):
+        values = []
+        for item in processed_ranges:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            try:
+                start = int(item[0])
+                end = int(item[1])
+            except (ValueError, TypeError):
+                continue
+            if start < 0 or end < start:
+                continue
+            values.extend(range(start, end + 1))
+        return values
+
+    return []
+
+
 def reload_manifest_processed_count(current_value=None):
     """Refresh processed_count from the canonical manifest if it exists."""
     manifest = load_batch_manifest()
@@ -1670,7 +1733,10 @@ def save_batch_progress(
                 processed_list = sorted(processed_indices)
             else:
                 processed_list = sorted(set(processed_indices))
-            data["processed_indices"] = processed_list
+            if len(processed_list) > MAX_INLINE_PROCESSED_INDICES:
+                data["processed_index_ranges"] = encode_processed_index_ranges(processed_list)
+            else:
+                data["processed_indices"] = processed_list
             # Use actual_file_count if provided (includes duplicates), otherwise use processed_indices length
             data["processed_count"] = actual_file_count if actual_file_count is not None else len(processed_list)
             data["last_index"] = processed_list[-1] if processed_list else -1
@@ -1688,7 +1754,7 @@ def save_batch_progress(
         write_elapsed = time.perf_counter() - write_start
         total_elapsed = time.perf_counter() - overall_start
         verify_perf_log(
-            f"manifest_write prepare={serialize_elapsed:.4f}s write={write_elapsed:.4f}s total={total_elapsed:.4f}s indices={len(data.get('processed_indices', []))}"
+            f"manifest_write prepare={serialize_elapsed:.4f}s write={write_elapsed:.4f}s total={total_elapsed:.4f}s indices={data.get('processed_count', 0)}"
         )
     except Exception as e:
         print(f"Warning: Could not save batch progress: {e}", flush=True)
@@ -2241,6 +2307,7 @@ def _build_companion_zip_indexes(primary_zip_path):
 
     print(json.dumps({
         "type": "companion_found",
+        "schema_version": NDJSON_SCHEMA_VERSION,
         "companion_count": len(companions),
         "companions": [os.path.basename(c) for c in companions]
     }), flush=True)
@@ -2259,6 +2326,42 @@ def _build_companion_zip_indexes(primary_zip_path):
             raise ValueError(f"Could not read companion ZIP {os.path.basename(companion_path)}: {e}") from e
 
     print(f"Combined index ready. {total_added} additional files from {len(companions)} companion ZIP(s).", flush=True)
+
+
+def maybe_emit_companion_missing_warning(progress_callback, memories, primary_zip_path):
+    """Warn when a ZIP export looks incomplete because companion parts are absent."""
+    if not progress_callback or not primary_zip_path:
+        return
+    primary_real = os.path.realpath(primary_zip_path)
+    companion_paths = {
+        os.path.realpath(path_value)
+        for path_value in _companion_zip_registry.values()
+        if path_value and os.path.realpath(path_value) != primary_real
+    }
+    if companion_paths:
+        return
+
+    local_only_rows = 0
+    for memory in memories or []:
+        if not isinstance(memory, dict):
+            continue
+        download_link = str(memory.get("Download Link") or memory.get("download_url") or "").strip()
+        if not download_link:
+            local_only_rows += 1
+
+    indexed_media_count = len(zip_name_index)
+    if local_only_rows >= 50 and indexed_media_count < local_only_rows:
+        emit_processing_event(
+            progress_callback,
+            "companion_missing",
+            message=(
+                "This export may be missing companion ZIP files. DateBack found fewer local media files "
+                "inside the ZIP set than metadata rows without download links."
+            ),
+            local_only_rows=local_only_rows,
+            indexed_media_count=indexed_media_count,
+            primary_zip=os.path.basename(primary_zip_path),
+        )
 
 
 def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_epoch=None, media_type=None):
@@ -3093,8 +3196,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             else:
                 print("Auto Upload mode: no manifest found, starting from beginning.", flush=True)
         else:
-            processed_list = manifest.get("processed_indices")
-            if processed_list is None:
+            processed_list = expand_processed_indices_from_manifest(manifest)
+            if not processed_list:
                 last_index = manifest.get("last_index")
                 if isinstance(last_index, int) and last_index >= 0:
                     processed_list = list(range(last_index + 1))
@@ -3178,6 +3281,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         build_file_index_from_zip(zip_file)
         if hasattr(zip_file, 'filename') and zip_file.filename:
             _build_companion_zip_indexes(zip_file.filename)
+            maybe_emit_companion_missing_warning(progress_callback, memories, zip_file.filename)
     else:
         build_file_index(DOWNLOADS_DIR)
 
