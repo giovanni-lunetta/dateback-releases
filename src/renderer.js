@@ -456,6 +456,7 @@ const computeProcessingUiStateHelper = rendererHelpers.computeProcessingUiState 
         uploadModeDisabled: controlsLocked,
         diskUsageAutoDisabled: controlsLocked,
         diskUsageManualDisabled: controlsLocked,
+        btnClearFileDisabled: !!isProcessing,
         showStopButton: !!isProcessing,
         hideResumeRestartContainer: !!isProcessing
     };
@@ -2106,6 +2107,7 @@ function applyProcessingUiState(uiState) {
     uploadModeSelect.disabled = uiState.uploadModeDisabled;
     if (diskUsageAutoRadio) diskUsageAutoRadio.disabled = uiState.diskUsageAutoDisabled;
     if (diskUsageManualRadio) diskUsageManualRadio.disabled = uiState.diskUsageManualDisabled;
+    if (btnClearFile) btnClearFile.disabled = uiState.btnClearFileDisabled;
     btnStop.classList.toggle('hidden', !uiState.showStopButton);
     if (uiState.hideResumeRestartContainer) {
         resumeRestartContainer.classList.add('hidden');

@@ -137,6 +137,7 @@ function buildStartRoutineContext({
     const logOutput = createElement();
     const btnStop = createElement(['hidden']);
     const btnStart = createElement();
+    const btnClearFile = createElement();
     const btnBrowseOutput = createElement();
     const computerModeCheckbox = createElement();
     const cloudModeCheckbox = createElement();
@@ -224,6 +225,7 @@ function buildStartRoutineContext({
         logOutput,
         btnStop,
         btnStart,
+        btnClearFile,
         btnBrowseOutput,
         computerModeCheckbox,
         cloudModeCheckbox,

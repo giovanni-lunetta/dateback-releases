@@ -1573,6 +1573,12 @@ textarea {
     transform: rotate(90deg) scale(1.1);
 }
 
+.btn-clear:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 /* ==========================================
    Buttons
    ========================================== */

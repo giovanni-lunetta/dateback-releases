@@ -194,6 +194,7 @@
             uploadModeDisabled: controlsLocked,
             diskUsageAutoDisabled: controlsLocked,
             diskUsageManualDisabled: controlsLocked,
+            btnClearFileDisabled: !!isProcessing,
             showStopButton: !!isProcessing,
             hideResumeRestartContainer: !!isProcessing
         };

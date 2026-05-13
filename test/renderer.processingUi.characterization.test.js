@@ -142,6 +142,7 @@ function buildProcessingUiContext({
     logOutput.textContent = 'old logs';
     const btnStop = createElement(['hidden']);
     const btnStart = createElement();
+    const btnClearFile = createElement();
     const btnBrowseOutput = createElement();
     const computerModeCheckbox = createElement();
     const cloudModeCheckbox = createElement();
@@ -194,6 +195,7 @@ function buildProcessingUiContext({
         logOutput,
         btnStop,
         btnStart,
+        btnClearFile,
         btnBrowseOutput,
         computerModeCheckbox,
         cloudModeCheckbox,
@@ -286,6 +288,7 @@ this.__startProcessingRoutine = startProcessingRoutine;
         elements: {
             btnStart,
             btnStop,
+            btnClearFile,
             btnBrowseOutput,
             computerModeCheckbox,
             cloudModeCheckbox,
@@ -333,6 +336,7 @@ test('processing UI transition: entering running state sets expected locks/visib
     assert.equal(elements.uploadModeSelect.disabled, true);
     assert.equal(elements.diskUsageAutoRadio.disabled, true);
     assert.equal(elements.diskUsageManualRadio.disabled, true);
+    assert.equal(elements.btnClearFile.disabled, true);
     assert.equal(elements.progressFill.style.background, '');
     assert.equal(elements.progressFill.classList.contains('complete'), false);
     assert.equal(elements.progressBar.classList.contains('ready'), false);
@@ -368,6 +372,7 @@ test('processing UI transition: exiting running state restores controls and fina
     assert.equal(elements.uploadModeSelect.disabled, false);
     assert.equal(elements.diskUsageAutoRadio.disabled, false);
     assert.equal(elements.diskUsageManualRadio.disabled, false);
+    assert.equal(elements.btnClearFile.disabled, false);
     assert.equal(elements.progressText.classList.contains('processing'), false);
     assert.equal(elements.progressBar.classList.contains('ready'), true);
 
