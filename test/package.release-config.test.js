@@ -40,6 +40,51 @@ test('release configs copy binaries from explicit platform and architecture path
     }
 });
 
+test('binary policy doc explains tracked release binaries', () => {
+    const binaryPolicy = fs.readFileSync(path.join(root, 'docs', 'BINARIES.md'), 'utf8');
+
+    assert.match(binaryPolicy, /assets\/bin\/mac-arm64\/memory-organizer/);
+    assert.match(binaryPolicy, /assets\/bin\/mac-arm64\/ffmpeg/);
+    assert.match(binaryPolicy, /deterministic packaging/i);
+    assert.match(binaryPolicy, /arm64-only/i);
+    assert.match(binaryPolicy, /python3 -m PyInstaller/i);
+    assert.match(binaryPolicy, /THIRD_PARTY_NOTICES\.txt/);
+});
+
+test('gitignore keeps local agent docs and generated hygiene artifacts out of git', () => {
+    const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+
+    for (const pattern of [
+        'AGENTS.md',
+        'CLAUDE.md',
+        '.env.*',
+        '*.jsonl',
+        '*.log',
+        '__pycache__/',
+        'node_modules/',
+        '*.sqlite',
+        '*.zip',
+        '*.p12',
+        '*.p8',
+        'AuthKey_*.p8',
+        'docs/private/',
+        '!build/entitlements.mac.plist',
+        '!build/qa-build.json'
+    ]) {
+        assert.ok(gitignore.includes(pattern), `.gitignore should include ${pattern}`);
+    }
+});
+
+test('public docs avoid personal local filesystem paths', () => {
+    for (const fileName of ['README.md', 'docs/README.md', 'docs/TESTING.md', 'docs/BUILD.md', 'docs/BINARIES.md']) {
+        const source = fs.readFileSync(path.join(root, fileName), 'utf8');
+
+        assert.equal(source.includes('/Users/'), false, `${fileName} should not expose a personal absolute path`);
+        assert.equal(source.includes('DateBack_Business'), false, `${fileName} should not expose the private workspace name`);
+        assert.equal(source.includes('Business Ideas'), false, `${fileName} should not expose the private workspace path`);
+    }
+});
+
 test('dev-only build helpers are current and outside production dependencies', () => {
     assert.equal(packageJson.dependencies.dotenv, undefined);
     assert.match(packageJson.devDependencies.dotenv, /^\^17\./);

@@ -2,7 +2,7 @@
 
 This document explains the test harness and refactor safety program used in DateBack to keep behavior unchanged while improving code structure.
 
-Repo root: `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source`
+Repo root: this directory.
 
 ## Quick Start
 
@@ -24,17 +24,17 @@ The refactor program followed a strict pattern: lock behavior first with charact
 
 High-level slices implemented:
 
-- Main process safety + readability around IPC flow handling in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/main.js`
+- Main process safety + readability around IPC flow handling in `main.js`
   - call-shape locking for `start-processing` and `retry-corrupted`
   - no-hang lifecycle protections tested
-- Renderer pure-helper extraction in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.helpers.js`
+- Renderer pure-helper extraction in `src/renderer.helpers.js`
   - mode resolution
   - visibility decisions
   - storage estimation/warnings
   - start-processing args construction
   - processing UI state decisions
   - success modal copy/rows decisions
-- Renderer glue remains in `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.js`
+- Renderer glue remains in `src/renderer.js`
   - binds helper exports via global injection with fallback behavior
   - applies computed state to DOM
 
@@ -46,13 +46,13 @@ Behavior was locked by characterization tests before refactors.
 
 | Suite | File | Coverage |
 |---|---|---|
-| Main IPC characterization | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/main.ipc.characterization.test.js` | IPC handler return shapes/messages, sender auth outcomes, call-shape locks, retry/start invariants, process leak cleanup |
-| Renderer pure helper unit tests | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/renderer.helpers.test.js` | Pure function outputs in `renderer.helpers.js` |
-| Renderer UI glue characterization | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/renderer.ui.characterization.test.js` | `updateAutoUploadUiState` glue behavior, `applyVisibilityState`, `buildVisibilityInput` wiring |
-| Start args lock | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/renderer.startProcessing.characterization.test.js` | `startProcessingRoutine` payload to `window.api.startProcessing()` including resumeMode rules |
-| Storage lock | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/renderer.checkStorage.characterization.test.js` | `checkStorage` warnings and summary equivalence |
-| Success modal lock | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/renderer.successModal.characterization.test.js` | `showSuccessModal` copy/rows/order/conditional display |
-| Processing transition lock | `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/renderer.processingUi.characterization.test.js` | Running/stopped UI state transitions and control toggles |
+| Main IPC characterization | `test/main.ipc.characterization.test.js` | IPC handler return shapes/messages, sender auth outcomes, call-shape locks, retry/start invariants, process leak cleanup |
+| Renderer pure helper unit tests | `test/renderer.helpers.test.js` | Pure function outputs in `renderer.helpers.js` |
+| Renderer UI glue characterization | `test/renderer.ui.characterization.test.js` | `updateAutoUploadUiState` glue behavior, `applyVisibilityState`, `buildVisibilityInput` wiring |
+| Start args lock | `test/renderer.startProcessing.characterization.test.js` | `startProcessingRoutine` payload to `window.api.startProcessing()` including resumeMode rules |
+| Storage lock | `test/renderer.checkStorage.characterization.test.js` | `checkStorage` warnings and summary equivalence |
+| Success modal lock | `test/renderer.successModal.characterization.test.js` | `showSuccessModal` copy/rows/order/conditional display |
+| Processing transition lock | `test/renderer.processingUi.characterization.test.js` | Running/stopped UI state transitions and control toggles |
 
 ## How the Characterization Tests Work
 
@@ -60,13 +60,13 @@ Renderer characterization tests avoid browser/Electron runtime dependencies by e
 
 Pattern used:
 
-- Read `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.js` as text.
+- Read `src/renderer.js` as text.
 - Extract target function source (for example `startProcessingRoutine`, `checkStorage`, `showSuccessModal`, `updateAutoUploadUiState`) using local helpers like `extractNamedFunctionSource(...)`.
 - Create a minimal fake DOM object model:
   - elements with `classList.toggle/add/remove`
   - `textContent`, `checked`, `disabled`, `open`, etc.
 - Stub `window.api` methods (for example `startProcessing`, disk-space calls) to capture payloads and avoid OS side effects.
-- Inject helper exports from `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.helpers.js` via `globalThis.DateBackRendererHelpers`.
+- Inject helper exports from `src/renderer.helpers.js` via `globalThis.DateBackRendererHelpers`.
 - Assert exact behavior (payload keys, UI text, class toggles, row ordering) to lock equivalence.
 
 Main IPC characterization tests use controlled overrides/stubs to avoid real subprocess/network/GUI side effects and to verify exact response shapes and error strings.
@@ -75,7 +75,7 @@ Main IPC characterization tests use controlled overrides/stubs to avoid real sub
 
 ### Pure helpers
 
-`/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.helpers.js` exports:
+`src/renderer.helpers.js` exports:
 
 - `resolveStorageMode`
 - `resolveRunModeFlags`
@@ -91,7 +91,7 @@ Main IPC characterization tests use controlled overrides/stubs to avoid real sub
 
 ### Renderer binding
 
-`/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/src/renderer.js`:
+`src/renderer.js`:
 
 - Binds helpers from `globalThis.DateBackRendererHelpers`.
 - Uses in-file fallbacks when helpers are not injected.
@@ -99,7 +99,7 @@ Main IPC characterization tests use controlled overrides/stubs to avoid real sub
 
 ### Main process readability helpers
 
-`/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/main.js` includes extracted helpers:
+`main.js` includes extracted helpers:
 
 - `prepareStartOrganizerRun`
 - `prepareRetryOrganizerRun`
@@ -113,7 +113,7 @@ These keep call-shapes and runtime behavior unchanged while reducing duplication
 - Symptom: tests could pass but Node test runner did not exit.
 - Root cause: leaked `caffeinate` `ChildProcess` handles in the IPC test suite.
 - Fix: test teardown now finds/kills leaked `caffeinate` child handles in:
-  - `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source/test/main.ipc.characterization.test.js`
+  - `test/main.ipc.characterization.test.js`
 - Result: `node --test` exits cleanly.
 
 Important:
@@ -144,11 +144,10 @@ Checklist:
 
 ## Useful Commands
 
-From `/Users/giovanni-lunetta/DateBack_Business/DateBack_App_Source`:
+From `DateBack_App_Source`:
 
 - `npm run check`
 - `npm test`
 - `npm run test:all`
 - `node --test test/main.ipc.characterization.test.js`
 - `node --test test/renderer.*.test.js`
-
