@@ -1,34 +1,29 @@
-# DateBack App Source
+# DateBack
 
-DateBack is a macOS Electron desktop app for processing Snapchat Memories exports locally on a user's Mac. The renderer is sandboxed, the preload bridge exposes a narrow IPC API, and the main process spawns the bundled Python worker for ZIP parsing, metadata repair, media organization, and cloud-folder handoff.
+**Restore the original dates on your Snapchat Memories.**
 
-## Quick Start
+Snapchat exports overwrite the "Date Taken" metadata on every photo and video with the export date. DateBack fixes that — processing your export locally on your Mac, restoring the real timestamps, and organizing everything into dated folders.
 
-```bash
-npm ci
-npm start
-```
+## Download
 
-## Verification
+**[dateback.app](https://dateback.app)** — free for Mac (Apple Silicon)
 
-```bash
-npm run check
-npm test
-npm run test:all
-```
+**System requirements:** Apple Silicon Mac (M1, M2, M3, M4) · macOS 11.0 Big Sur or later
 
-## Release
+## How it works
 
-```bash
-npm run build:mac
-```
+1. Export your Snapchat data from the app or snapchat.com
+2. Open DateBack and select your export ZIP
+3. DateBack restores the original dates and saves your memories to a folder of your choice
 
-Release signing and notarization credentials are loaded from `../.env`. Never commit `.env`.
+## License
 
-## Reference Docs
+DateBack is proprietary software, free to use. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) for bundled open-source component licenses.
 
-- `AGENTS.md` - repo-specific coding, QA, and release guidance
-- `docs/TESTING.md` - test procedures
-- `docs/agent_system/DATEBACK_APP_ARCHITECTURE_AND_WORKFLOW.md` - architecture deep-dive
-- `CHANGELOG.md` - release history
-- `THIRD_PARTY_NOTICES.txt` - bundled third-party software notices
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
+## Support
+
+[support@dateback.app](mailto:support@dateback.app)
