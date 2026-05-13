@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.4] - 2026-05-13
+### Fixed
+- Bundled Python binary recompiled to include companion ZIP scanning — QA and production builds now find multi-part Snapchat exports (e.g. `mydata~XXXX-2.zip`) that the stale binary was missing
+- ZIP file clear button is now disabled during active processing to prevent accidental deselection mid-run
+
 ## [1.4.3] - 2026-05-12
 ### Fixed
 - Processing now shows the success modal correctly when some memories are missing (previously exited with code 1 due to `SystemExit` being caught by the broad `BaseException` handler)

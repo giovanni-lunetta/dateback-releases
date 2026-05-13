@@ -1,5 +1,5 @@
 ================================================================================
-DateBack v1.4.3 - Third-Party Software Notices
+DateBack v1.4.4 - Third-Party Software Notices
 ================================================================================
 
 This application incorporates third-party software. The following notices apply:
@@ -82,4 +82,4 @@ Requests - Apache License 2.0
 For questions or source code requests, contact:
 support@dateback.app
 
-Last Updated: May 9, 2026
+Last Updated: May 13, 2026
