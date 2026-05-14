@@ -115,6 +115,14 @@ git commit -m "Build: add x64 memory-organizer for vX.Y.Z"
 
 #### 6c. Build Windows binary (via GitHub Actions)
 
+**Prerequisite — `ffmpeg.exe` must exist first:**
+```bash
+ls assets/bin/win-x64/ffmpeg.exe
+```
+If missing: download the Windows x64 static build from https://www.gyan.dev/ffmpeg/builds/ ("release essentials" or "release full"), extract, place at `assets/bin/win-x64/ffmpeg.exe`, verify with `file assets/bin/win-x64/ffmpeg.exe` (must say `PE32+ executable (console) x86-64`), commit it, and update `THIRD_PARTY_NOTICES.txt` with the version string from `assets/bin/win-x64/ffmpeg.exe -version`.
+
+**Build `memory-organizer.exe`:**
+
 1. Navigate to the `dateback-releases` GitHub repo → Actions → "Build Windows Binary"
 2. Click "Run workflow" → Run
 3. Wait ~3–5 minutes for the run to complete
