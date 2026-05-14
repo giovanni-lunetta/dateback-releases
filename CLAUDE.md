@@ -151,7 +151,7 @@ npm run build:mac:arm64
 
 Output:
 - `dist/DateBack-X.Y.Z-arm64.dmg`
-- `dist/latest-mac-arm64.yml` (check after first build — may be `dist/latest-mac.yml` if electron-builder doesn't suffix it; update this doc if so)
+- `dist/latest-mac.yml` (**not** `latest-mac-arm64.yml` — electron-builder always writes `latest-mac.yml` for the first architecture built)
 
 **Verify arm64 binaries inside .app:**
 ```bash
@@ -173,6 +173,11 @@ hdiutil detach "/Volumes/DateBack X.Y.Z-arm64" -quiet
 shasum -a 256 dist/DateBack-X.Y.Z-arm64.dmg
 ```
 
+**Save the arm64 YML before x64 overwrites it:**
+```bash
+cp dist/latest-mac.yml dist/latest-mac-arm64.yml
+```
+
 ---
 
 **Build x64 DMG:**
@@ -181,8 +186,10 @@ npm run build:mac:x64
 ```
 
 Output:
-- `dist/DateBack-X.Y.Z-x64.dmg`
-- `dist/latest-mac.yml`
+- `dist/DateBack-X.Y.Z-x64.dmg` (named `DateBack-X.Y.Z.dmg` on disk — copy to releases dir as `DateBack-X.Y.Z-x64.dmg`)
+- `dist/latest-mac.yml` (overwritten with x64 + arm64 entries)
+
+**Important:** The x64 build also rebuilds the arm64 DMG (different hash from the arm64-only build). After the x64 build completes, update `dist/latest-mac-arm64.yml` to match the new arm64 DMG hash shown in `dist/latest-mac.yml`.
 
 **Verify x64 binaries inside .app:**
 ```bash
@@ -409,6 +416,7 @@ After every release, report:
 - **Version in `package-lock.json`** — appears in two places: top-level `"version"` and `packages[""].version`. Both must be bumped.
 - **Binary arch directories** — production builds use `${arch}` substitution in `extraResources` to pick `assets/bin/mac-arm64/` or `assets/bin/mac-x64/`. The QA config (`build/qa-build.json`) hardcodes `mac-arm64` paths and is always arm64-only — do not add `${arch}` to the QA config.
 
-- **YML filename check** — the first time you run `npm run build:mac:arm64`, check `dist/` for the YML filename. It should be `latest-mac-arm64.yml`. If it is still `latest-mac.yml`, update the artifact paths in Steps 7 and 9 of this document, and update the `gh release create` command accordingly.
+- **YML filename** — `npm run build:mac:arm64` always produces `dist/latest-mac.yml` (not `latest-mac-arm64.yml`). Copy it to `latest-mac-arm64.yml` immediately after the arm64 build. Then `npm run build:mac:x64` overwrites `latest-mac.yml` and also rebuilds the arm64 DMG with a different hash — update `latest-mac-arm64.yml` from the arm64 entry in the new `latest-mac.yml` before releasing.
+- **x64 build rebuilds arm64** — `npm run build:mac:x64` builds both x64 and arm64. The resulting arm64 DMG differs from the one produced by the standalone arm64 build. Always use the arm64 hash from `latest-mac.yml`'s arm64 entry (post-x64-build) when writing `latest-mac-arm64.yml`.
 
 - **x64 binary requires x86_64-mode Python** — Use `npm run build:binary:x64:rosetta` on the M-chip Mac (not plain `build:binary:x64`). The `:rosetta` script uses `arch -x86_64` with the dedicated `~/.venvs/dateback-x64` venv. Plain `python3` on the M-chip Mac produces an arm64 binary regardless of the spec's `target_arch` setting. Always verify with `file assets/bin/mac-x64/memory-organizer`.
