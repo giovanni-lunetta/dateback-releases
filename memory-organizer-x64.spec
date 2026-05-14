@@ -37,7 +37,7 @@ exe = EXE(
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch='x86_64',
+    target_arch='x86_64',  # pin to match target architecture (x86_64 for Intel Mac builds)
     codesign_identity=None,
     entitlements_file=None,
 )
