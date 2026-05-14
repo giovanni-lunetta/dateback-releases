@@ -8,9 +8,9 @@ This application incorporates third-party software. The following notices apply:
 FFmpeg
 ================================================================================
 License: GNU General Public License v2.0 or later (GPL-2.0+)
-Versions: 8.1.1 (macOS arm64) / 8.1 (macOS x64)
+Versions: 8.1.1 (macOS arm64) / 8.1 (macOS x64) / [PENDING: run assets/bin/win-x64/ffmpeg.exe -version after downloading from gyan.dev] (Windows x64)
 Copyright: (c) 2000-2026 the FFmpeg developers
-Source: https://www.martin-riedl.de (static macOS builds)
+Source: https://www.martin-riedl.de (macOS static builds) / https://www.gyan.dev/ffmpeg/builds/ (Windows static builds)
 Homepage: https://ffmpeg.org
 
 Both bundled FFmpeg binaries are configured with GPL-licensed codecs:
@@ -18,8 +18,9 @@ Both bundled FFmpeg binaries are configured with GPL-licensed codecs:
   - libx265 (HEVC/H.265 encoder) - GPL v2.0+
 
 Source Code:
-  arm64 (8.1.1): https://github.com/FFmpeg/FFmpeg (tag: n8.1.1)
-  x64   (8.1):   https://github.com/FFmpeg/FFmpeg (tag: n8.1)
+  arm64   (8.1.1):                   https://github.com/FFmpeg/FFmpeg (tag: n8.1.1)
+  x64/mac (8.1):                     https://github.com/FFmpeg/FFmpeg (tag: n8.1)
+  x64/win ([PENDING]):               https://github.com/FFmpeg/FFmpeg (tag: n[PENDING])
 License Text: See licenses/GPL-2.0.txt in this application bundle
 
 COMPLETE SOURCE PACKAGE:
