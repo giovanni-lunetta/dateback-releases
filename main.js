@@ -104,12 +104,23 @@ function stopCaffeinateSafely() {
 
 function startCaffeinateSafely() {
     try {
-        caffeinateProcess = spawnProcess('caffeinate', ['-i'], { shell: false });
+        if (process.platform === 'win32') {
+            caffeinateProcess = spawnProcess('powershell.exe', [
+                '-NoProfile', '-NonInteractive', '-Command',
+                'Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; ' +
+                'public class SleepGuard { [DllImport("kernel32.dll")] ' +
+                'public static extern uint SetThreadExecutionState(uint f); }\'; ' +
+                '[SleepGuard]::SetThreadExecutionState(0x80000001); ' +
+                'while($true){Start-Sleep 30}'
+            ], { shell: false });
+        } else {
+            caffeinateProcess = spawnProcess('caffeinate', ['-i'], { shell: false });
+        }
         caffeinateProcess.on('error', (err) => {
-            console.warn('Could not start caffeinate:', err.message);
+            console.warn('Could not start sleep prevention:', err.message);
         });
     } catch (e) {
-        console.warn('Caffeinate not available:', e.message);
+        console.warn('Sleep prevention not available:', e.message);
     }
 }
 
