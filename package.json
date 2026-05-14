@@ -15,9 +15,9 @@
     "build:binary:win": "python -m PyInstaller memory-organizer-win.spec --noconfirm",
     "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
-    "build:mac:arm64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arch arm64",
-    "build:mac:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arch x64",
-    "build:win:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --win --arch x64"
+    "build:mac:arm64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arm64",
+    "build:mac:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --x64",
+    "build:win:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --win --x64"
   },
   "author": "Giovanni Lunetta",
   "license": "UNLICENSED",
