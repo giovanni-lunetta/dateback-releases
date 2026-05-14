@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-05-14
+### Added
+- Windows 10 / 11 (x64) support: NSIS installer, bundled FFmpeg 8.1.1 and memory-organizer.exe for Windows x64
+- Intel Mac (x86_64) support: dedicated x64 DMG with bundled x86_64 FFmpeg and memory-organizer binaries
+- Sleep prevention on Windows via PowerShell `SetThreadExecutionState` to keep processing alive without screen lock
+
 ## [1.4.4] - 2026-05-13
 ### Fixed
 - Bundled Python binary recompiled to include companion ZIP scanning — QA and production builds now find multi-part Snapchat exports (e.g. `mydata~XXXX-2.zip`) that the stale binary was missing

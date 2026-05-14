@@ -7,7 +7,7 @@ const packageJson = require(path.resolve(__dirname, '..', 'package.json'));
 const root = path.resolve(__dirname, '..');
 
 test('package metadata matches the free proprietary release model', () => {
-    assert.equal(packageJson.version, '1.4.4');
+    assert.equal(packageJson.version, '1.5.0');
     assert.equal(packageJson.private, true);
     assert.equal(packageJson.license, 'UNLICENSED');
 });

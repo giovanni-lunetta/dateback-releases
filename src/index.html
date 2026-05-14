@@ -150,7 +150,7 @@
                         data-tooltip="Choose the folder where DateBack will save your processed memories. If Store on Cloud is selected, this folder is used temporarily for staging, and the cloud destination you choose below is where your memories end up.">?</button>
                 </div>
                 <div class="input-group">
-                    <input type="text" id="output-path" class="text-input" placeholder="/path/to/output" readonly>
+                    <input type="text" id="output-path" class="text-input" placeholder="No folder chosen yet" readonly>
                     <button id="btn-browse-output" class="btn btn-secondary">Change</button>
                 </div>
                 <p id="working-folder-help" class="context-helper">Choose a storage mode above to continue.</p>
@@ -469,13 +469,6 @@
                 📖 <a href="https://dateback.app/#export-guide" id="link-walkthrough">See Full Walkthrough on our Website!</a>
             </p>
 
-            <div class="bmc-btn-wrap">
-                <a href="https://www.buymeacoffee.com/giovannilunetta" id="link-coffee" class="bmc-btn">
-                    <span class="bmc-btn-icon">☕</span>
-                    <span class="bmc-btn-text">Buy me a coffee</span>
-                </a>
-            </div>
-
             <label class="checkbox-label-simple">
                 <input type="checkbox" id="dont-show-again">
                 <span class="checkbox-custom"></span>
@@ -485,6 +478,13 @@
             <button id="btn-close-modal" class="btn btn-primary btn-large">
                 I'm Ready!
             </button>
+
+            <div class="bmc-btn-wrap">
+                <a href="https://www.buymeacoffee.com/giovannilunetta" id="link-coffee" class="bmc-btn">
+                    <span class="bmc-btn-icon">☕</span>
+                    <span class="bmc-btn-text">Buy me a coffee</span>
+                </a>
+            </div>
         </div>
     </div>
 
@@ -629,7 +629,7 @@
     <div id="stop-confirm-modal" class="modal hidden">
         <div class="modal-content modal-small">
             <h2>Pause Processing?</h2>
-            <p class="modal-message">Any memories saved so far will be kept.</p>
+            <p class="modal-message">We'll save your progress so you can resume later from where you left off. Already-processed memories stay on disk.</p>
             <div class="modal-buttons">
                 <button id="btn-resume" class="btn btn-primary">Resume</button>
                 <button id="btn-confirm-stop" class="btn btn-danger-outline">Pause</button>

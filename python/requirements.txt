@@ -3,15 +3,15 @@
 # Purpose: Track exact versions for security auditing and reproducible builds
 
 # Image processing
-Pillow==12.0.0
-# CVE Status: Clean (checked 2026-01-13)
-# Previous CVEs (fixed): CVE-2024-28219, CVE-2023-50447
+Pillow==12.2.0
+# CVE Status: Clean (checked 2026-05-14)
+# Previous CVEs (fixed): CVE-2024-28219, CVE-2023-50447, CVE-2026-25990, CVE-2026-40192, CVE-2026-42308, CVE-2026-42309, CVE-2026-42310, CVE-2026-42311
 # License: HPND
 
 # HTTP client for downloading from Snapchat CDN
-requests==2.32.5
-# CVE Status: Clean (checked 2026-01-13)
-# Previous CVEs (fixed): CVE-2023-32681
+requests==2.33.0
+# CVE Status: Clean (checked 2026-05-14)
+# Previous CVEs (fixed): CVE-2023-32681, CVE-2026-25645
 # License: Apache 2.0
 
 # PyInstaller for building standalone binary
