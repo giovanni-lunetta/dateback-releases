@@ -41,9 +41,16 @@ video composition. The bundled binary is covered by the FFmpeg/GPL notice in
 `THIRD_PARTY_NOTICES.txt`; corresponding source is at
 `https://dateback.app/licenses/ffmpeg-source.zip`.
 
-The arm64 `ffmpeg` binary was obtained from evermeet.cx. The x64 binary should be
-obtained from the same source. `ffmpeg` does not change between app releases unless
-the FFmpeg version is intentionally upgraded.
+Both binaries are obtained from **https://ffmpeg.martin-riedl.de** — download the
+"Release Build" (not Snapshot) for each architecture:
+
+- **macOS (Apple Silicon/arm64)** → FFmpeg (ZIP) → `assets/bin/mac-arm64/ffmpeg`
+- **macOS (Intel/amd64)** → FFmpeg (ZIP) → `assets/bin/mac-x64/ffmpeg`
+
+`ffmpeg` does not change between app releases unless the FFmpeg version is
+intentionally upgraded. When upgrading, replace both arch binaries, update
+`THIRD_PARTY_NOTICES.txt` with the new versions, and update the source zip at
+`dateback.app/licenses/ffmpeg-source.zip`.
 
 ## QA builds
 
