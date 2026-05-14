@@ -1,0 +1,40 @@
+name: Build Windows Binary
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10 (x64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: "x64"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "Pillow==12.0.0" "requests==2.32.5" "PyInstaller==6.11.1"
+
+      - name: Build memory-organizer.exe
+        run: python -m PyInstaller memory-organizer-win.spec --noconfirm
+
+      - name: Verify binary architecture
+        run: |
+          $info = & ".\dist\memory-organizer.exe" --help 2>&1 | Out-String
+          Write-Host "Binary executed successfully"
+          $fileType = (Get-Item ".\dist\memory-organizer.exe").Extension
+          Write-Host "Extension: $fileType"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-organizer-windows-x64
+          path: dist/memory-organizer.exe
+          if-no-files-found: error
