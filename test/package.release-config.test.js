@@ -32,23 +32,29 @@ test('QA build carries the same macOS folder permission usage descriptions as pr
 test('release configs copy binaries from explicit platform and architecture paths', () => {
     const qaBuildConfig = require(path.join(root, 'build', 'qa-build.json'));
 
-    for (const config of [packageJson.build, qaBuildConfig]) {
-        assert.deepEqual(config.extraResources, [
-            { from: 'assets/bin/mac-arm64/memory-organizer', to: 'bin/memory-organizer' },
-            { from: 'assets/bin/mac-arm64/ffmpeg', to: 'bin/ffmpeg' }
-        ]);
-    }
+    // Production build uses ${arch} macro — resolves to mac-arm64 or mac-x64 per build target
+    assert.deepEqual(packageJson.build.extraResources, [
+        { from: 'assets/bin/mac-${arch}/memory-organizer', to: 'bin/memory-organizer' },
+        { from: 'assets/bin/mac-${arch}/ffmpeg', to: 'bin/ffmpeg' }
+    ]);
+
+    // QA build hardcodes arm64 — QA is always arm64-only
+    assert.deepEqual(qaBuildConfig.extraResources, [
+        { from: 'assets/bin/mac-arm64/memory-organizer', to: 'bin/memory-organizer' },
+        { from: 'assets/bin/mac-arm64/ffmpeg', to: 'bin/ffmpeg' }
+    ]);
 });
 
 test('binary policy doc explains tracked release binaries', () => {
     const binaryPolicy = fs.readFileSync(path.join(root, 'docs', 'BINARIES.md'), 'utf8');
 
-    assert.match(binaryPolicy, /assets\/bin\/mac-arm64\/memory-organizer/);
-    assert.match(binaryPolicy, /assets\/bin\/mac-arm64\/ffmpeg/);
     assert.match(binaryPolicy, /deterministic packaging/i);
-    assert.match(binaryPolicy, /arm64-only/i);
-    assert.match(binaryPolicy, /python3 -m PyInstaller/i);
+    assert.match(binaryPolicy, /mac-arm64/);
+    assert.match(binaryPolicy, /mac-x64/);
     assert.match(binaryPolicy, /THIRD_PARTY_NOTICES\.txt/);
+    assert.match(binaryPolicy, /build:binary:arm64/);
+    assert.match(binaryPolicy, /build:binary:x64/);
+    assert.match(binaryPolicy, /PyInstaller cannot cross-compile/i);
 });
 
 test('gitignore keeps local agent docs and generated hygiene artifacts out of git', () => {
