@@ -32,17 +32,40 @@ test('QA build carries the same macOS folder permission usage descriptions as pr
 test('release configs copy binaries from explicit platform and architecture paths', () => {
     const qaBuildConfig = require(path.join(root, 'build', 'qa-build.json'));
 
-    // Production build uses ${arch} macro — resolves to mac-arm64 or mac-x64 per build target
-    assert.deepEqual(packageJson.build.extraResources, [
+    // Production mac build uses ${arch} macro — resolves to mac-arm64 or mac-x64 per build target
+    assert.deepEqual(packageJson.build.mac.extraResources, [
         { from: 'assets/bin/mac-${arch}/memory-organizer', to: 'bin/memory-organizer' },
-        { from: 'assets/bin/mac-${arch}/ffmpeg', to: 'bin/ffmpeg' }
+        { from: 'assets/bin/mac-${arch}/ffmpeg',           to: 'bin/ffmpeg' }
     ]);
 
-    // QA build hardcodes arm64 — QA is always arm64-only
+    // Production win build uses explicit win-x64 paths with .exe extensions
+    assert.deepEqual(packageJson.build.win.extraResources, [
+        { from: 'assets/bin/win-x64/memory-organizer.exe', to: 'bin/memory-organizer.exe' },
+        { from: 'assets/bin/win-x64/ffmpeg.exe',           to: 'bin/ffmpeg.exe' }
+    ]);
+
+    // Top-level extraResources must be removed (moved into platform sections)
+    assert.equal(packageJson.build.extraResources, undefined);
+
+    // QA build hardcodes arm64 — QA is always arm64-only and unchanged
     assert.deepEqual(qaBuildConfig.extraResources, [
         { from: 'assets/bin/mac-arm64/memory-organizer', to: 'bin/memory-organizer' },
         { from: 'assets/bin/mac-arm64/ffmpeg', to: 'bin/ffmpeg' }
     ]);
+});
+
+test('Windows NSIS installer config targets one-click user install', () => {
+    assert.equal(packageJson.build.win.icon, 'assets/DateBack.ico');
+    assert.deepEqual(packageJson.build.win.target, { target: 'nsis', arch: ['x64'] });
+    assert.equal(packageJson.build.nsis.oneClick, true);
+    assert.equal(packageJson.build.nsis.perMachine, false);
+    assert.equal(packageJson.build.nsis.createDesktopShortcut, true);
+    assert.equal(packageJson.build.nsis.createStartMenuShortcut, true);
+});
+
+test('Windows build script and binary build script are present', () => {
+    assert.match(packageJson.scripts['build:win:x64'], /electron-builder --win --arch x64/);
+    assert.match(packageJson.scripts['build:binary:win'], /PyInstaller memory-organizer-win\.spec/);
 });
 
 test('binary policy doc explains tracked release binaries', () => {
@@ -51,9 +74,11 @@ test('binary policy doc explains tracked release binaries', () => {
     assert.match(binaryPolicy, /deterministic packaging/i);
     assert.match(binaryPolicy, /mac-arm64/);
     assert.match(binaryPolicy, /mac-x64/);
+    assert.match(binaryPolicy, /win-x64/);
     assert.match(binaryPolicy, /THIRD_PARTY_NOTICES\.txt/);
     assert.match(binaryPolicy, /build:binary:arm64/);
     assert.match(binaryPolicy, /build:binary:x64/);
+    assert.match(binaryPolicy, /build:binary:win/);
     assert.match(binaryPolicy, /PyInstaller cannot cross-compile/i);
 });
 
