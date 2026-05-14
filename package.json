@@ -65,6 +65,7 @@
     },
     "win": {
       "icon": "assets/DateBack.ico",
+      "artifactName": "${productName}-${version}-x64-win.${ext}",
       "target": {
         "target": "nsis",
         "arch": ["x64"]
