@@ -1894,8 +1894,9 @@ function resolveOrganizerCommand(isDev, baseArgs = []) {
     const binDir = isDev
         ? path.join(__dirname, 'assets', 'bin')
         : path.join(process.resourcesPath, 'bin');
-    const binaryPath = path.join(binDir, 'memory-organizer');
-    const ffmpegPath = path.join(binDir, 'ffmpeg');
+    const ext = process.platform === 'win32' ? '.exe' : '';
+    const binaryPath = path.join(binDir, `memory-organizer${ext}`);
+    const ffmpegPath = path.join(binDir, `ffmpeg${ext}`);
 
     if (isDev) {
         const devCliPath = path.join(__dirname, 'python', 'cli.py');
