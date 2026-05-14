@@ -11,6 +11,7 @@
     "test:all": "npm run check && npm test",
     "build:binary:arm64": "python3 -m PyInstaller memory-organizer.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-arm64/memory-organizer",
     "build:binary:x64": "python3 -m PyInstaller memory-organizer-x64.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-x64/memory-organizer",
+    "build:binary:x64:rosetta": "arch -x86_64 ~/.venvs/dateback-x64/bin/python3 -m PyInstaller memory-organizer-x64.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-x64/memory-organizer",
     "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac:arm64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arch arm64",
