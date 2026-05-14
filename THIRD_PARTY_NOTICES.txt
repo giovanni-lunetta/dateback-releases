@@ -8,21 +8,23 @@ This application incorporates third-party software. The following notices apply:
 FFmpeg
 ================================================================================
 License: GNU General Public License v2.0 or later (GPL-2.0+)
-Version: 8.0.1
-Copyright: (c) 2000-2025 the FFmpeg developers
+Versions: 8.1.1 (macOS arm64) / 8.1 (macOS x64)
+Copyright: (c) 2000-2026 the FFmpeg developers
+Source: https://www.martin-riedl.de (static macOS builds)
 Homepage: https://ffmpeg.org
 
-The bundled FFmpeg binary is configured with GPL-licensed codecs:
+Both bundled FFmpeg binaries are configured with GPL-licensed codecs:
   - libx264 (H.264/AVC encoder) - GPL v2.0+
   - libx265 (HEVC/H.265 encoder) - GPL v2.0+
 
-Source Code: https://github.com/FFmpeg/FFmpeg (tag: n8.0.1)
+Source Code:
+  arm64 (8.1.1): https://github.com/FFmpeg/FFmpeg (tag: n8.1.1)
+  x64   (8.1):   https://github.com/FFmpeg/FFmpeg (tag: n8.1)
 License Text: See licenses/GPL-2.0.txt in this application bundle
 
 COMPLETE SOURCE PACKAGE:
 Download: https://dateback.app/licenses/ffmpeg-source.zip
-Includes: FFmpeg 8.0.1, x264, x265, and build information
-SHA256: 286b5c13bb070eb0bd068beb6754f03e6d2ec8692b9dae063c4719456a3fc80a
+Includes: FFmpeg source and build information for the bundled versions
 
 GPL WRITTEN OFFER:
 For at least three years from distribution, DateBack will provide the complete
@@ -82,4 +84,4 @@ Requests - Apache License 2.0
 For questions or source code requests, contact:
 support@dateback.app
 
-Last Updated: May 13, 2026
+Last Updated: May 14, 2026
