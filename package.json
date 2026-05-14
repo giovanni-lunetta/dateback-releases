@@ -12,10 +12,12 @@
     "build:binary:arm64": "python3 -m PyInstaller memory-organizer.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-arm64/memory-organizer",
     "build:binary:x64": "python3 -m PyInstaller memory-organizer-x64.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-x64/memory-organizer",
     "build:binary:x64:rosetta": "arch -x86_64 ~/.venvs/dateback-x64/bin/python3 -m PyInstaller memory-organizer-x64.spec --noconfirm && cp dist/memory-organizer assets/bin/mac-x64/memory-organizer",
+    "build:binary:win": "python -m PyInstaller memory-organizer-win.spec --noconfirm",
     "build": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac:arm64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arch arm64",
-    "build:mac:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arch x64"
+    "build:mac:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arch x64",
+    "build:win:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --win --arch x64"
   },
   "author": "Giovanni Lunetta",
   "license": "UNLICENSED",
@@ -55,7 +57,28 @@
         "arch": [
           "arm64"
         ]
-      }
+      },
+      "extraResources": [
+        { "from": "assets/bin/mac-${arch}/memory-organizer", "to": "bin/memory-organizer" },
+        { "from": "assets/bin/mac-${arch}/ffmpeg",           "to": "bin/ffmpeg" }
+      ]
+    },
+    "win": {
+      "icon": "assets/DateBack.ico",
+      "target": {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      "extraResources": [
+        { "from": "assets/bin/win-x64/memory-organizer.exe", "to": "bin/memory-organizer.exe" },
+        { "from": "assets/bin/win-x64/ffmpeg.exe",           "to": "bin/ffmpeg.exe" }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "files": [
       "main.js",
@@ -66,16 +89,6 @@
       "LICENSE",
       "licenses/**/*",
       "THIRD_PARTY_NOTICES.txt"
-    ],
-    "extraResources": [
-      {
-        "from": "assets/bin/mac-${arch}/memory-organizer",
-        "to": "bin/memory-organizer"
-      },
-      {
-        "from": "assets/bin/mac-${arch}/ffmpeg",
-        "to": "bin/ffmpeg"
-      }
     ],
     "asarUnpack": [
       "assets/bin/**/*"
