@@ -52,6 +52,8 @@ always builds arm64. It is unaffected by the `${arch}` macro in `package.json`.
 
 ## Platform scope
 
-Production builds target `arm64` (Apple Silicon) and `x64` (Intel Mac). Add a
-new `mac-<arch>/` directory and explicit release-config mapping before introducing any
-additional target.
+Production builds target `arm64` (Apple Silicon) and `x64` (Intel Mac) via the
+explicit `npm run build:mac:arm64` and `npm run build:mac:x64` scripts. The
+release workflow in `CLAUDE.md` documents how both DMGs are built and published
+in a single GitHub Release. Add a new `mac-<arch>/` directory and explicit
+release-config mapping before introducing any additional target.
