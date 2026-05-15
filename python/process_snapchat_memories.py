@@ -2273,7 +2273,7 @@ def should_index_zip_member(info):
     if info.filename.endswith('/') or '__MACOSX' in info.filename:
         return False
     base_name = os.path.basename(info.filename)
-    if base_name.endswith('.py') or base_name.endswith('.json') or base_name == '.DS_Store' or base_name.startswith('.'):
+    if base_name.endswith('.py') or base_name.endswith('.json') or base_name.endswith('.html') or base_name == '.DS_Store' or base_name.startswith('.'):
         return False
     return True
 
