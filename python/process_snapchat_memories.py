@@ -1828,11 +1828,10 @@ def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, outp
     DOWNLOADS_DIR = downloads_dir
 
     if output_dir:
-        # Validate output path - prevent path traversal
-        abs_output = canonical_dir(output_dir)
         if '..' in output_dir:
             raise ValueError("Output path cannot contain '..'")
-        # Guard against deleting or writing to sensitive roots
+        # Validate against sensitive roots BEFORE creating any directories
+        pre_abs = os.path.abspath(output_dir)
         home = os.path.expanduser('~')
         sensitive = {
             os.path.abspath('/'),
@@ -1843,17 +1842,14 @@ def set_config(json_path, downloads_dir, output_dir=None, raw_dl_name=None, outp
             os.path.abspath(os.path.join(home, 'Pictures')),
             os.path.abspath(os.path.join(home, 'Library')),
         }
-        if abs_output in sensitive:
+        if pre_abs in sensitive:
             raise ValueError("Output path cannot be a sensitive root directory")
-
         # Block external drive roots (e.g., /Volumes/USB)
-        # Require subfolders to avoid permission/write issues
-        if abs_output.startswith('/Volumes/'):
-            # Count slashes: /Volumes/USB = 2 slashes (root), /Volumes/USB/folder = 3+ slashes (subfolder)
-            if abs_output.count('/') <= 2:
-                drive_name = os.path.basename(abs_output)
-                raise ValueError(f"Cannot use external drive root. Please create a subfolder (e.g., /Volumes/{drive_name}/DateBack_Output)")
-
+        if pre_abs.startswith('/Volumes/') and pre_abs.count('/') <= 2:
+            drive_name = os.path.basename(pre_abs)
+            raise ValueError(f"Cannot use external drive root. Please create a subfolder (e.g., /Volumes/{drive_name}/DateBack_Output)")
+        # Validation passed — now create/resolve the directory
+        abs_output = canonical_dir(output_dir)
         OUTPUT_DIR = abs_output
 
     if raw_dl_name:

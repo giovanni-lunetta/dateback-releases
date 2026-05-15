@@ -121,35 +121,29 @@ class SupportLogs {
      * Get last timestamp from log file (read last N lines)
      */
     async getLastTimestamp(filePath) {
-        return new Promise((resolve) => {
-            const stats = fs.statSync(filePath);
-            const fileSize = stats.size;
-
-            // Read last 4KB (enough for ~40 log lines)
-            const readSize = Math.min(4096, fileSize);
+        try {
+            const { size } = await fs.promises.stat(filePath);
+            const readSize = Math.min(4096, size);
             const buffer = Buffer.alloc(readSize);
-
-            const fd = fs.openSync(filePath, 'r');
-            fs.readSync(fd, buffer, 0, readSize, fileSize - readSize);
-            fs.closeSync(fd);
-
-            const content = buffer.toString('utf8');
-            const lines = content.split('\n').filter(l => l.trim()).reverse();
-
-            // Find first valid JSON line from end
+            const fh = await fs.promises.open(filePath, 'r');
+            try {
+                await fh.read(buffer, 0, readSize, size - readSize);
+            } finally {
+                await fh.close();
+            }
+            const lines = buffer.toString('utf8').split('\n').filter(l => l.trim()).reverse();
             for (const line of lines) {
                 try {
                     const entry = JSON.parse(line.trim());
-                    if (entry.timestamp) {
-                        return resolve(entry.timestamp);
-                    }
-                } catch (e) {
-                    // Skip invalid JSON
+                    if (entry.timestamp) return entry.timestamp;
+                } catch {
+                    // skip invalid JSON
                 }
             }
-
-            resolve(null);
-        });
+            return null;
+        } catch {
+            return null;
+        }
     }
 
     /**

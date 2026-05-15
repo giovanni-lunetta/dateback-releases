@@ -123,6 +123,14 @@ function buildSuccessModalContext() {
         configureNextStepsGuide: []
     };
 
+    const elementById = {
+        'success-modal-title': modalTitle,
+        'success-modal-subtitle': subtitleEl,
+        'success-modal-subtext': subtextEl,
+        'success-modal-thanks': thanksEl,
+        'btn-next-steps-guide': btnNextStepsGuide
+    };
+
     const context = {
         successModal,
         statsContainer,
@@ -137,7 +145,8 @@ function buildSuccessModalContext() {
             calls.configureNextStepsGuide.push(stats);
         },
         document: {
-            createElement: () => createElement()
+            createElement: () => createElement(),
+            getElementById: (id) => elementById[id] || null
         }
     };
 
@@ -346,10 +355,6 @@ test('showSuccessModal: CLOUD mode with errors shows warning copy and upload err
 
 test('showPartialSummaryModal: paused summary avoids completion copy and hides next steps', () => {
     const { context, elements } = buildSuccessModalContext();
-    context.document.getElementById = (id) => {
-        if (id === 'btn-next-steps-guide') return elements.btnNextStepsGuide;
-        return null;
-    };
 
     runShowPartialSummaryModal(context, 320, 900);
 

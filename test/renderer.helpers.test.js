@@ -349,10 +349,16 @@ test('processing ui state: stopped without user stop unlocks controls and hides 
     assert.equal(state.hideResumeRestartContainer, false);
 });
 
-test('renderer fallback visibility helper references isProcessing consistently', () => {
+test('renderer delegates visibility helper to rendererHelpers module without inline fallback', () => {
     const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
     assert.equal(rendererSource.includes('isProcessing: processing'), false);
-    assert.ok(rendererSource.includes('pauseAfterBatchDisabled: !computerEnabled || isProcessing'));
-    assert.ok(rendererSource.includes('disableComputerModeCheckbox: isProcessing'));
-    assert.ok(rendererSource.includes('disableCloudModeCheckbox: isProcessing'));
+    // Fallback copies of helper logic should not appear in renderer.js
+    assert.equal(rendererSource.includes('pauseAfterBatchDisabled: !computerEnabled || isProcessing'), false,
+        'renderer.js should not contain inline fallback for computeModeVisibilityState');
+    // Helpers module (renderer.helpers.js) owns the authoritative implementation
+    const helpersSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.helpers.js'), 'utf8');
+    assert.ok(helpersSource.includes('pauseAfterBatchDisabled: !computerEnabled || isProcessing'),
+        'renderer.helpers.js must contain pauseAfterBatchDisabled logic');
+    assert.ok(helpersSource.includes('disableComputerModeCheckbox: isProcessing'));
+    assert.ok(helpersSource.includes('disableCloudModeCheckbox: isProcessing'));
 });

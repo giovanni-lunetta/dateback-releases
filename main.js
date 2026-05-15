@@ -8,6 +8,7 @@ const checkDiskSpace = require('check-disk-space').default;
 const { autoUpdater } = require('electron-updater');
 const Logger = require('./src/logger');
 const SupportLogs = require('./src/supportLogs');
+const { DEFAULT_CACHE_GB, DEFAULT_CACHE_LOW_GB, DEFAULT_MAX_UPLOAD_RETRIES, MAX_ZIP_ENTRIES } = require('./src/constants');
 
 // Load environment variables from .env file only during local development.
 if (!app.isPackaged) {
@@ -58,6 +59,12 @@ let supportLogs = null;
 let lastError = null;
 let isQuitting = false;
 let lastPythonSampleLogAt = 0; // Rate limit for Python stdout sampling
+
+function respondError(message, errorType) {
+    const payload = { success: false, error: message };
+    if (errorType) payload.errorType = errorType;
+    return payload;
+}
 
 function setPythonProcess(proc) {
     pythonProcess = proc;
@@ -1180,9 +1187,9 @@ async function resolveAndValidateAutoUploadOptions(
 ) {
     const autoUploadEnabled = !!autoUpload;
     const normalizedUploadMode = uploadMode === 'move' ? 'move' : 'copy';
-    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : 5.0;
-    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : 3.0;
-    const resolvedMaxUploadRetries = Number.isFinite(Number(maxUploadRetries)) ? Number(maxUploadRetries) : 20;
+    const resolvedCacheGb = Number.isFinite(Number(cacheGb)) ? Number(cacheGb) : DEFAULT_CACHE_GB;
+    const resolvedCacheLowGb = Number.isFinite(Number(cacheLowGb)) ? Number(cacheLowGb) : DEFAULT_CACHE_LOW_GB;
+    const resolvedMaxUploadRetries = Number.isFinite(Number(maxUploadRetries)) ? Number(maxUploadRetries) : DEFAULT_MAX_UPLOAD_RETRIES;
     const providedStagingDir = typeof stagingDir === 'string' && stagingDir.trim().length > 0;
 
     let canonicalDestinationDir = null;
@@ -1520,12 +1527,11 @@ function validateZipArchive(canonicalZipPath) {
         const zipEntries = zip.getEntries();
 
         // ZIP BOMB PROTECTION
-        const MAX_ENTRIES = 100000;  // 100k files max
         const MAX_ENTRY_SIZE = 500 * 1024 * 1024;  // 500MB per file
         const MAX_TOTAL_SIZE = 50 * 1024 * 1024 * 1024;  // 50GB total uncompressed
 
         // Check entry count
-        if (zipEntries.length > MAX_ENTRIES) {
+        if (zipEntries.length > MAX_ZIP_ENTRIES) {
             return {
                 found: false,
                 error: `ZIP contains too many files (${zipEntries.length.toLocaleString()}). Maximum allowed: 100,000 files.`,
@@ -3053,8 +3059,17 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
             return;
         }
 
-        // Approve the validated output directory for open-folder actions in this session.
+        // Reset approved dirs for this run — currentValidatedOutputDir covers open-folder for the session.
+        approvedOutputDirs.clear();
+        approvedAutoUploadDestinationDirs.clear();
+        approvedAutoUploadStagingDirs.clear();
         approvedOutputDirs.add(canonicalOutputDir);
+        if (autoUploadOptions && autoUploadOptions.destinationDir) {
+            approvedAutoUploadDestinationDirs.add(autoUploadOptions.destinationDir);
+        }
+        if (autoUploadOptions && autoUploadOptions.stagingDir) {
+            approvedAutoUploadStagingDirs.add(autoUploadOptions.stagingDir);
+        }
 
         // Build CLI arguments
         // CRITICAL SECURITY: Pass the CANONICAL paths to the CLI

@@ -95,6 +95,10 @@ class Logger {
         str = str.replace(/\/Library\/[^\s]+/g, '<library-path>');
         str = str.replace(/\/private\/[^\s]+/g, '<private-path>');
 
+        // macOS temp and volume paths
+        str = str.replace(/\/var\/folders\/[^\s]+/g, '<temp-path>');
+        str = str.replace(/\/Volumes\/[^/\s]+/g, '<volume>');
+
         // Any remaining absolute path on Unix
         str = str.replace(/\/[a-zA-Z0-9_\-./]+\/(Downloads|Documents|Desktop|Pictures|Movies)/g, '~/<folder>');
 
@@ -237,6 +241,10 @@ class Logger {
      */
     async flush() {
         await this.processQueue();
+        // Drain once more in case entries were enqueued during the first drain
+        if (this.queue.length > 0) {
+            await this.processQueue();
+        }
         return new Promise((resolve) => {
             if (this.writeStream) {
                 this.writeStream.end(resolve);
