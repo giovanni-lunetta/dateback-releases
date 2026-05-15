@@ -20,7 +20,7 @@ import signal
 import queue
 import hashlib
 import tempfile
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlunparse
 from email.utils import parsedate_to_datetime
 from collections import deque
 from batch_resume_logic import compute_last_completed_batch, resolve_resume_batch_state, scan_existing_batch_root, scan_existing_batch_roots
@@ -53,6 +53,8 @@ REDIRECT_ALLOWED_HOST_SUFFIXES = ALLOWED_HOST_SUFFIXES + ("cloudfront.net",)
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2GB per file limit
 MAX_NESTED_ZIP_EXTRACT_BYTES = MAX_DOWNLOAD_BYTES
 MAX_NESTED_ZIP_ENTRY_BYTES = MAX_DOWNLOAD_BYTES
+MAX_ZIP_INDEX_MEMBERS = 250_000
+MAX_ZIP_INDEX_DECLARED_BYTES = 5 * 1024 * 1024 * 1024 * 1024
 MAX_JSON_BYTES = 100 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 FFMPEG_TIMEOUT_SECONDS = 180
@@ -379,6 +381,25 @@ def canonical_dir(path_value):
     if stat.S_ISLNK(st.st_mode):
         raise ValueError(f"Symbolic links are not allowed for directory roots: {abs_path}")
     return os.path.realpath(abs_path)
+
+
+def ensure_batch_directory(batch_dir):
+    """Create or validate a Batch_* directory without following a symlink entry."""
+    abs_path = os.path.abspath(batch_dir)
+    batch_name = os.path.basename(abs_path)
+    if batch_name.startswith("Batch_") and os.path.lexists(abs_path) and os.path.islink(abs_path):
+        raise ValueError(f"Refusing symlinked Batch_ directory: {abs_path}")
+
+    os.makedirs(abs_path, exist_ok=True)
+    try:
+        st = os.lstat(abs_path)
+    except OSError as error:
+        raise ValueError(f"Could not inspect Batch_ directory: {abs_path} ({error})") from error
+    if stat.S_ISLNK(st.st_mode):
+        raise ValueError(f"Refusing symlinked Batch_ directory: {abs_path}")
+    if not stat.S_ISDIR(st.st_mode):
+        raise ValueError(f"Batch path is not a directory: {abs_path}")
+    return abs_path
 
 
 def safe_join(root_dir, relative_name):
@@ -1559,22 +1580,42 @@ def encode_processed_index_ranges(processed_indices):
     return ranges
 
 
-def expand_processed_indices_from_manifest(manifest):
+def _manifest_index_within_bound(value, max_count):
+    try:
+        index = int(value)
+    except (ValueError, TypeError):
+        return None
+    if index < 0:
+        return None
+    if max_count is not None and index >= max_count:
+        return None
+    return index
+
+
+def expand_processed_indices_from_manifest(manifest, max_count=None, include_last_index=False):
     """Return processed indices from either legacy lists or compact range manifests."""
     if not isinstance(manifest, dict):
         return []
+
+    bounded_count = None
+    if max_count is not None:
+        try:
+            bounded_count = max(0, int(max_count))
+        except (ValueError, TypeError):
+            bounded_count = None
 
     processed_list = manifest.get("processed_indices")
     if isinstance(processed_list, list):
         values = []
         for value in processed_list:
-            try:
-                values.append(int(value))
-            except (ValueError, TypeError):
-                pass
+            index = _manifest_index_within_bound(value, bounded_count)
+            if index is not None:
+                values.append(index)
         return sorted(set(values))
 
     processed_ranges = manifest.get("processed_index_ranges")
+    if processed_ranges is None:
+        processed_ranges = manifest.get("processed_indices_ranges")
     if isinstance(processed_ranges, list):
         values = []
         for item in processed_ranges:
@@ -1587,8 +1628,19 @@ def expand_processed_indices_from_manifest(manifest):
                 continue
             if start < 0 or end < start:
                 continue
+            if bounded_count is not None:
+                if start >= bounded_count:
+                    continue
+                end = min(end, bounded_count - 1)
             values.extend(range(start, end + 1))
         return values
+
+    if include_last_index:
+        last_index = _manifest_index_within_bound(manifest.get("last_index"), None)
+        if last_index is not None:
+            if bounded_count is not None:
+                last_index = min(last_index, bounded_count - 1)
+            return list(range(last_index + 1)) if last_index >= 0 else []
 
     return []
 
@@ -1697,8 +1749,7 @@ def resolve_auto_upload_retry_batch_dir(staging_dir, destination_dir, upload_led
         next_batch_num = batch_scan["next_available_batch"] + 1
         output_dir = os.path.join(staging_dir, f"Batch_{next_batch_num:02d}")
 
-    os.makedirs(output_dir, exist_ok=True)
-    return output_dir
+    return ensure_batch_directory(output_dir)
 
 def save_batch_progress(
     batch_num,
@@ -2018,6 +2069,8 @@ zip_claimed_members = set()
 zip_overlay_sibling_index = {}
 # Maps ZIP member path → companion ZIP file path (for multi-part Snapchat exports)
 _companion_zip_registry = {}
+# Maps normalized ZIP member path → source ZIP path/label for duplicate detection.
+_zip_member_sources = {}
 zip_match_lock = threading.Lock()
 # Global processed index: filename -> size
 processed_index = {}
@@ -2206,8 +2259,48 @@ def claim_zip_member_for_blank_download_url(date_str, media_type):
 
     return None
 
+
+def normalized_zip_member_path(member_name):
+    normalized = os.path.normpath(str(member_name or "").replace("\\", "/"))
+    return normalized.replace("\\", "/")
+
+
+def should_index_zip_member(info):
+    if info.is_dir():
+        return False
+    if zipinfo_is_symlink(info):
+        return False
+    if info.filename.endswith('/') or '__MACOSX' in info.filename:
+        return False
+    base_name = os.path.basename(info.filename)
+    if base_name.endswith('.py') or base_name.endswith('.json') or base_name == '.DS_Store' or base_name.startswith('.'):
+        return False
+    return True
+
+
+def validate_zip_index_resource_caps(zip_file_obj, source_label):
+    """Validate central-directory metadata without reading every member body."""
+    total_declared = 0
+    member_count = 0
+    for info in zip_file_obj.infolist():
+        if info.is_dir():
+            continue
+        if zipinfo_is_symlink(info):
+            raise ValueError(f"Blocked symlink ZIP member in {source_label}: {info.filename}")
+        declared_size = int(info.file_size or 0)
+        if declared_size < 0 or declared_size > MAX_NESTED_ZIP_ENTRY_BYTES:
+            raise ValueError(f"ZIP member exceeds allowed size in {source_label}: {info.filename}")
+        total_declared += declared_size
+        if total_declared > MAX_ZIP_INDEX_DECLARED_BYTES:
+            raise ValueError(f"ZIP declared size exceeds allowed total in {source_label}")
+        member_count += 1
+        if member_count > MAX_ZIP_INDEX_MEMBERS:
+            raise ValueError(f"ZIP contains too many members in {source_label}")
+
+
 def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
-    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index, zip_claimed_members, zip_overlay_sibling_index, _companion_zip_registry
+    global file_size_index, zip_name_index, zip_sid_index, zip_datetime_media_index, zip_date_media_index
+    global zip_claimed_members, zip_overlay_sibling_index, _companion_zip_registry, _zip_member_sources
     if clear:
         print("Building file index directly from ZIP...", flush=True)
         file_size_index = {}
@@ -2218,19 +2311,24 @@ def build_file_index_from_zip(zip_file_obj, clear=True, source_zip_path=None):
         zip_claimed_members = set()
         zip_overlay_sibling_index = {}
         _companion_zip_registry = {}
+        _zip_member_sources = {}
+
+    source_label = os.path.realpath(source_zip_path or getattr(zip_file_obj, 'filename', None) or '<in-memory ZIP>')
+    validate_zip_index_resource_caps(zip_file_obj, os.path.basename(source_label))
     
     count = 0
     for info in zip_file_obj.infolist():
-        if info.is_dir(): continue
-        if zipinfo_is_symlink(info):
+        if not should_index_zip_member(info):
             continue
-        
-        # Filter unrelated files?
-        if info.filename.endswith('/') or '__MACOSX' in info.filename:
-             continue
-        base_name = os.path.basename(info.filename)
-        if base_name.endswith('.py') or base_name.endswith('.json') or base_name == '.DS_Store' or base_name.startswith('.'):
-            continue
+
+        normalized_member = normalized_zip_member_path(info.filename)
+        previous_source = _zip_member_sources.get(normalized_member)
+        if previous_source and previous_source != source_label:
+            raise ValueError(
+                f"Duplicate ZIP member path across export ZIPs: {info.filename} "
+                f"({os.path.basename(previous_source)} and {os.path.basename(source_label)})"
+            )
+        _zip_member_sources[normalized_member] = source_label
              
         size = info.file_size
         if size not in file_size_index:
@@ -2311,9 +2409,6 @@ def _build_companion_zip_indexes(primary_zip_path):
     for companion_path in companions:
         try:
             with zipfile.ZipFile(companion_path, 'r') as companion_zf:
-                bad_member = companion_zf.testzip()
-                if bad_member:
-                    raise ValueError(f"CRC check failed for {bad_member}")
                 before = sum(len(v) for v in zip_name_index.values())
                 build_file_index_from_zip(companion_zf, clear=False, source_zip_path=companion_path)
                 after = sum(len(v) for v in zip_name_index.values())
@@ -2564,7 +2659,8 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                             os.remove(temp_output)
                         except OSError:
                             pass
-                    return {"status": "Error", "reason": f"Merge failed: {str(e)}", "file": zip_name}
+                    atomic_copy_file(main_file, final_output)
+                    result_msg = f"Success (Image Extract - No Overlay: merge failed: {str(e)})"
             else:
                 atomic_copy_file(main_file, final_output)
                 result_msg = "Success (Image Extract)"
@@ -2597,6 +2693,35 @@ def process_zip(zip_path, output_path, ts_epoch=None):
         release_reserved_output_path(reserved_output)
         shutil.rmtree(extract_dir, ignore_errors=True)
 
+
+URL_FOR_REDACTION_RE = re.compile(r'https?://[^\s<>"\']+')
+SECRET_ASSIGNMENT_RE = re.compile(
+    r'(?i)\b(token|sid|signature|sig|secret|password|access_token|refresh_token|api_key|key)=([^\s&;]+)'
+)
+
+
+def redact_url_for_human_report(url):
+    """Remove query strings and fragments from URLs shown in human-readable reports."""
+    if not isinstance(url, str):
+        return url
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "[redacted]"
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return SECRET_ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}=[redacted]", url)
+    query = "[redacted]" if parsed.query else ""
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
+
+
+def redact_sensitive_text_for_human_report(value):
+    """Redact URL query strings and common secret assignments for support-facing text."""
+    if not isinstance(value, str):
+        return value
+    redacted = URL_FOR_REDACTION_RE.sub(lambda match: redact_url_for_human_report(match.group(0)), value)
+    return SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[redacted]", redacted)
+
+
 def save_error_report(mem_id, date_str, url, reason):
     """Saves a text file report for a corrupted/failed memory."""
     try:
@@ -2610,8 +2735,8 @@ def save_error_report(mem_id, date_str, url, reason):
         with open(path, "w") as f:
             f.write(f"Memory ID: {mem_id}\n")
             f.write(f"Date: {date_str}\n")
-            f.write(f"Reason: {reason}\n")
-            f.write(f"URL: {url}\n")
+            f.write(f"Reason: {redact_sensitive_text_for_human_report(reason)}\n")
+            f.write(f"URL: {redact_url_for_human_report(url)}\n")
             f.write("\nNote: You can try opening the URL in a browser to check if it's still accessible.\n")
             
     except Exception as e:
@@ -3177,6 +3302,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     manifest = load_batch_manifest()
     manifest_processed_count = None
     ignore_manifest_for_zip_mismatch = False
+    manifest_missing_processed_indices = False
 
     if manifest:
         manifest_processed_count = manifest.get("processed_count")
@@ -3192,11 +3318,11 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             else:
                 print("Auto Upload mode: no manifest found, starting from beginning.", flush=True)
         else:
-            processed_list = expand_processed_indices_from_manifest(manifest)
-            if not processed_list:
-                last_index = manifest.get("last_index")
-                if isinstance(last_index, int) and last_index >= 0:
-                    processed_list = list(range(last_index + 1))
+            processed_list = expand_processed_indices_from_manifest(
+                manifest,
+                max_count=len(memories),
+                include_last_index=True,
+            )
 
             if processed_list:
                 for i in processed_list:
@@ -3209,8 +3335,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 memories_with_index = [(i, m) for i, m in memories_with_index if i not in processed_indices_set]
                 print(f"Skipping {len(processed_indices_set)} previously processed memories.", flush=True)
             elif trust_manifest:
-                print("Warning: Manifest missing processed indices; falling back to Verify Files.", flush=True)
-                trust_manifest = False
+                manifest_missing_processed_indices = True
     else:
         print("Resume mode: Verify Files", flush=True)
 
@@ -3295,6 +3420,10 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             manifest = None
             manifest_processed_count = None
             ignore_manifest_for_zip_mismatch = True
+
+    if manifest_missing_processed_indices and trust_manifest:
+        print("Warning: Manifest missing processed indices; falling back to Verify Files.", flush=True)
+        trust_manifest = False
 
     # Output Directory Setup
     print("Clearing output directory configuration...")
@@ -3576,7 +3705,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         
         batch_name = f"Batch_{batch_num + 1:02d}"
         batch_dir = os.path.join(AUTO_STAGING_DIR, batch_name) if auto_upload else os.path.join(OUTPUT_DIR, batch_name)
-        os.makedirs(batch_dir, exist_ok=True)
+        batch_dir = ensure_batch_directory(batch_dir)
 
         # Set CURRENT_BATCH_DIR so all files are written directly to this batch folder
         global CURRENT_BATCH_DIR
@@ -4305,9 +4434,9 @@ def retry_failed_entries(
                             batch_num = int(last_batch.split('_')[1])
                             new_batch_name = f"Batch_{batch_num + 1:02d}"
                             output_dir = os.path.join(output_base_dir, new_batch_name)
-                            os.makedirs(output_dir, exist_ok=True)
+                            output_dir = ensure_batch_directory(output_dir)
                         else:
-                            output_dir = last_batch_dir
+                            output_dir = ensure_batch_directory(last_batch_dir)
                     else:
                         output_dir = output_base_dir
 

@@ -24,6 +24,18 @@ def is_countable_staged_media(path_value):
     return os.path.splitext(lower_name)[1] in STAGED_MEDIA_EXTENSIONS
 
 
+def reject_symlinked_batch_dir(batch_path):
+    """Reject an existing Batch_* path when the directory entry itself is a symlink."""
+    batch_name = os.path.basename(batch_path)
+    if not batch_name.startswith('Batch_'):
+        return
+    try:
+        if os.path.lexists(batch_path) and os.path.islink(batch_path):
+            raise ValueError(f"Refusing symlinked Batch_ directory: {batch_path}")
+    except OSError as error:
+        raise ValueError(f"Could not inspect Batch_ directory: {batch_path} ({error})") from error
+
+
 def compute_last_completed_batch(batch_num, batch_completed=True):
     """
     Persisted semantics:
@@ -64,10 +76,14 @@ def scan_existing_batch_root(batch_root, batch_size):
         if os.path.isfile(os.path.join(batch_root, name)) and is_countable_staged_media(os.path.join(batch_root, name))
     ])
 
+    batch_names = [name for name in root_entries if name.startswith('Batch_')]
+    for name in batch_names:
+        reject_symlinked_batch_dir(os.path.join(batch_root, name))
+
     batch_folders = sorted(
         [
-            name for name in root_entries
-            if name.startswith('Batch_') and os.path.isdir(os.path.join(batch_root, name))
+            name for name in batch_names
+            if os.path.isdir(os.path.join(batch_root, name))
         ],
         key=lambda name: (
             parse_batch_folder_number(name) is None,
@@ -156,9 +172,13 @@ def scan_existing_batch_roots(staging_root, destination_root, batch_size, comple
         except OSError:
             return
 
+        batch_names = [name for name in root_entries if name.startswith('Batch_')]
+        for name in batch_names:
+            reject_symlinked_batch_dir(os.path.join(batch_root, name))
+
         batch_folders = [
-            name for name in root_entries
-            if name.startswith('Batch_') and os.path.isdir(os.path.join(batch_root, name))
+            name for name in batch_names
+            if os.path.isdir(os.path.join(batch_root, name))
         ]
 
         for batch_folder in batch_folders:
@@ -180,9 +200,13 @@ def scan_existing_batch_roots(staging_root, destination_root, batch_size, comple
         except OSError:
             return
 
+        batch_names = [name for name in root_entries if name.startswith('Batch_')]
+        for name in batch_names:
+            reject_symlinked_batch_dir(os.path.join(batch_root, name))
+
         batch_folders = [
-            name for name in root_entries
-            if name.startswith('Batch_') and os.path.isdir(os.path.join(batch_root, name))
+            name for name in batch_names
+            if os.path.isdir(os.path.join(batch_root, name))
         ]
 
         for batch_folder in batch_folders:

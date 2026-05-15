@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -173,6 +174,23 @@ class BatchResumeLogicTests(unittest.TestCase):
             self.assertEqual(scan["existing_batch_files"], 1)
             self.assertEqual(scan["files_in_incomplete_batch"], 1)
 
+    def test_scan_existing_batch_root_rejects_symlinked_batch_dir(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink support unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_root = Path(temp_dir) / "staging"
+            outside_dir = Path(temp_dir) / "outside"
+            staging_root.mkdir()
+            outside_dir.mkdir()
+            try:
+                os.symlink(outside_dir, staging_root / "Batch_01")
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaisesRegex(ValueError, "symlinked Batch_"):
+                scan_existing_batch_root(str(staging_root), batch_size=500)
+
     def test_scan_existing_batch_roots_merges_staging_and_destination_batch_counts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             staging_root = Path(temp_dir) / "staging"
@@ -232,6 +250,25 @@ class BatchResumeLogicTests(unittest.TestCase):
 
             self.assertEqual(scan["existing_batch_files"], 1)
             self.assertEqual(scan["files_in_incomplete_batch"], 1)
+
+    def test_scan_existing_batch_roots_rejects_symlinked_destination_batch_dir(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink support unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging_root = Path(temp_dir) / "staging"
+            destination_root = Path(temp_dir) / "destination"
+            outside_dir = Path(temp_dir) / "outside"
+            staging_root.mkdir()
+            destination_root.mkdir()
+            outside_dir.mkdir()
+            try:
+                os.symlink(outside_dir, destination_root / "Batch_01")
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with self.assertRaisesRegex(ValueError, "symlinked Batch_"):
+                scan_existing_batch_roots(str(staging_root), str(destination_root), batch_size=500)
 
 
 if __name__ == "__main__":

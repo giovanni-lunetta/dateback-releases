@@ -54,6 +54,13 @@ test('release configs copy binaries from explicit platform and architecture path
     ]);
 });
 
+test('mac release config publishes DMG and ZIP updater artifacts for arm64 and x64', () => {
+    assert.deepEqual(packageJson.build.mac.target, [
+        { target: 'dmg', arch: ['arm64', 'x64'] },
+        { target: 'zip', arch: ['arm64', 'x64'] }
+    ]);
+});
+
 test('Windows NSIS installer config targets one-click user install', () => {
     assert.equal(packageJson.build.win.icon, 'assets/DateBack.ico');
     assert.deepEqual(packageJson.build.win.target, { target: 'nsis', arch: ['x64'] });
@@ -66,6 +73,30 @@ test('Windows NSIS installer config targets one-click user install', () => {
 test('Windows build script and binary build script are present', () => {
     assert.match(packageJson.scripts['build:win:x64'], /electron-builder --win --x64/);
     assert.match(packageJson.scripts['build:binary:win'], /PyInstaller memory-organizer-win\.spec/);
+});
+
+test('Windows worker workflow installs Python dependencies from requirements file', () => {
+    const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-win-binary.yml'), 'utf8');
+
+    assert.match(workflow, /python -m pip install -r python\/requirements\.txt/);
+    assert.doesNotMatch(workflow, /Pillow==12\.0\.0/);
+    assert.doesNotMatch(workflow, /requests==2\.32\.5/);
+});
+
+test('Windows release docs do not claim a signed installer without signing config', () => {
+    const releaseNotes = fs.readFileSync(path.join(root, 'docs', 'release-notes-v1.5.0.md'), 'utf8');
+    const winConfig = packageJson.build.win || {};
+    const hasWindowsSigningConfig = Boolean(
+        winConfig.certificateFile ||
+        winConfig.certificateSubjectName ||
+        winConfig.certificateSha1 ||
+        winConfig.signtoolOptions ||
+        packageJson.build.winSign
+    );
+
+    if (!hasWindowsSigningConfig) {
+        assert.doesNotMatch(releaseNotes, /signed NSIS installer/i);
+    }
 });
 
 test('binary policy doc explains tracked release binaries', () => {
@@ -100,7 +131,8 @@ test('gitignore keeps local agent docs and generated hygiene artifacts out of gi
         'AuthKey_*.p8',
         'docs/private/',
         '!build/entitlements.mac.plist',
-        '!build/qa-build.json'
+        '!build/qa-build.json',
+        'build/memory-organizer-x64/'
     ]) {
         assert.ok(gitignore.includes(pattern), `.gitignore should include ${pattern}`);
     }

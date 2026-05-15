@@ -9,7 +9,7 @@
 
 ### Windows 10 / 11 Support
 
-DateBack is now available for Windows 10 and 11 (x64). The Windows release ships as a signed NSIS installer (`DateBack-1.5.0-x64-win.exe`) that installs per-user with no admin rights required. It includes bundled FFmpeg 8.1.1 and the Windows memory-organizer binary — no external dependencies needed.
+DateBack is now available for Windows 10 and 11 (x64). The Windows release ships as an NSIS installer (`DateBack-1.5.0-x64-win.exe`) that installs per-user with no admin rights required. It includes bundled FFmpeg 8.1.1 and the Windows memory-organizer binary — no external dependencies needed.
 
 Windows users may see a SmartScreen prompt on first launch while the app builds download reputation. Clicking **More info → Run anyway** proceeds past it.
 

@@ -11,6 +11,7 @@ build/
 !build/entitlements.mac.plist
 !build/qa-build.json
 build/memory-organizer/
+build/memory-organizer-x64/
 *.dmg
 *.pkg
 *.app

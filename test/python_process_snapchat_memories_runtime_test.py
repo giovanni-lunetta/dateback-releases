@@ -202,6 +202,23 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
         self.assertEqual(manifest["processed_count"], 2500)
         self.assertEqual(manifest["last_index"], 2499)
 
+    def test_expand_processed_index_ranges_is_bounded_by_memory_count(self):
+        expanded = psm.expand_processed_indices_from_manifest(
+            {"processed_index_ranges": [[0, 10_000_000]]},
+            max_count=3,
+        )
+
+        self.assertEqual(expanded, [0, 1, 2])
+
+    def test_expand_legacy_last_index_is_bounded_by_memory_count(self):
+        expanded = psm.expand_processed_indices_from_manifest(
+            {"last_index": 10_000_000},
+            max_count=4,
+            include_last_index=True,
+        )
+
+        self.assertEqual(expanded, [0, 1, 2, 3])
+
     def test_expand_processed_index_manifest_supports_compacted_ranges(self):
         expanded = psm.expand_processed_indices_from_manifest({
             "processed_index_ranges": [[0, 2], [10, 11]]
@@ -879,6 +896,78 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             self.assertEqual(events[0]["message"], "Could not save resume manifest.")
             self.assertEqual(events[0]["last_error"], "disk failed")
 
+    def test_process_from_zip_rejects_symlinked_batch_dir_before_writing(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink support unavailable")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            outside_dir = Path(temp_dir) / "outside"
+            output_root.mkdir()
+            outside_dir.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            image_id = "11111111-1111-4111-8111-111111111111"
+            memories = [
+                {
+                    "Date": "2024-01-02 03:04:05 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            folder_suffix = psm.datetime.fromtimestamp(1700000000000 / 1000).strftime("%Y-%m-%d")
+            processed_dir = output_root / f"Processed_Memories_{folder_suffix}"
+            processed_dir.mkdir()
+            try:
+                os.symlink(outside_dir, processed_dir / "Batch_01")
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                image_info = zipfile.ZipInfo(f"memories/2024-01-02_{image_id}-main.jpg")
+                image_info.date_time = (2024, 1, 2, 3, 4, 4)
+                zf.writestr(image_info, b"image-bytes")
+
+            with self.assertRaisesRegex(ValueError, "symlinked Batch_"):
+                psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(list(outside_dir.iterdir()), [])
+
+    def test_process_zip_saves_main_image_when_nested_overlay_merge_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "overlay.zip"
+            output_path = Path(temp_dir) / "out" / "memory.jpg"
+            output_path.parent.mkdir()
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("main.jpg", self._image_bytes((255, 0, 0, 255)))
+                zf.writestr("overlay.jpg", b"not an image")
+
+            with mock.patch.object(psm, "TEMP_DIR", str(Path(temp_dir) / "tmp")):
+                result = psm.process_zip(str(zip_path), str(output_path))
+
+            self.assertEqual(result["status"], "Success")
+            self.assertIn("Image Extract - No Overlay", result["reason"])
+            self.assertTrue(output_path.exists())
+            with Image.open(output_path) as img:
+                self.assertEqual(img.convert("RGB").getpixel((0, 0)), (255, 0, 0))
+
+    def test_save_error_report_redacts_query_strings_from_human_readable_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            corrupted_dir = Path(temp_dir) / "corrupted"
+            sensitive_url = "https://cf-st.sc-cdn.net/media.jpg?token=secret&sid=ABC#frag"
+            reason = f"Failed while downloading {sensitive_url}"
+
+            with mock.patch.object(psm, "CORRUPTED_DIR", str(corrupted_dir)):
+                psm.save_error_report("MEM_1", "2024-01-02 03:04:05 UTC", sensitive_url, reason)
+
+            report_text = (corrupted_dir / "ERROR_MEM_1.txt").read_text(encoding="utf-8")
+            self.assertIn("https://cf-st.sc-cdn.net/media.jpg?[redacted]", report_text)
+            self.assertNotIn("token=secret", report_text)
+            self.assertNotIn("sid=ABC", report_text)
+            self.assertNotIn("#frag", report_text)
+
     def test_apply_retry_timestamp_sets_original_file_time(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             target_path = Path(temp_dir) / "retry.jpg"
@@ -902,6 +991,7 @@ class BuildFileIndexCompanionModeTests(unittest.TestCase):
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
         psm.zip_overlay_sibling_index = {}
+        psm._zip_member_sources = {}
 
     def _make_zip(self, members):
         """Return a BytesIO ZipFile containing the given {member_path: bytes} dict."""
@@ -964,6 +1054,7 @@ class BuildCompanionZipIndexesTests(unittest.TestCase):
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
         psm.zip_overlay_sibling_index = {}
+        psm._zip_member_sources = {}
 
     def test_detects_numbered_companions(self):
         """Companions mydata~TS-2.zip and mydata~TS-3.zip should be detected."""
@@ -977,6 +1068,42 @@ class BuildCompanionZipIndexesTests(unittest.TestCase):
             psm._build_companion_zip_indexes(primary)
             self.assertIn('media/b.jpg', psm._companion_zip_registry)
             self.assertIn('media/c.jpg', psm._companion_zip_registry)
+
+    def test_does_not_call_testzip_when_indexing_companions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~1234-2.zip'), {'media/b.jpg': b'b'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+
+            with mock.patch.object(psm.zipfile.ZipFile, "testzip", side_effect=AssertionError("testzip called")) as testzip_mock:
+                psm._build_companion_zip_indexes(primary)
+
+            testzip_mock.assert_not_called()
+
+    def test_rejects_companion_member_declared_over_resource_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'a'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~1234-2.zip'), {'media/b.jpg': b'123456'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+
+            with mock.patch.object(psm, "MAX_NESTED_ZIP_ENTRY_BYTES", 5):
+                with self.assertRaisesRegex(ValueError, "exceeds allowed size"):
+                    psm._build_companion_zip_indexes(primary)
+
+    def test_rejects_duplicate_member_path_across_primary_and_companion(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            primary = os.path.join(tmpdir, 'mydata~1234.zip')
+            self._write_zip(primary, {'media/a.jpg': b'primary'})
+            self._write_zip(os.path.join(tmpdir, 'mydata~1234-2.zip'), {'media/a.jpg': b'companion'})
+            with zipfile.ZipFile(primary) as zf:
+                psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
+
+            with self.assertRaisesRegex(ValueError, "Duplicate ZIP member path"):
+                psm._build_companion_zip_indexes(primary)
 
     def test_rejects_corrupt_numbered_companion_zip(self):
         """A corrupt companion should fail preflight instead of silently dropping media."""
@@ -1037,6 +1164,7 @@ class StreamZipMemberCompanionRoutingTests(unittest.TestCase):
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
         psm.zip_overlay_sibling_index = {}
+        psm._zip_member_sources = {}
 
     def test_routes_to_companion_zip(self):
         """When companion ZIP is registered, recursive call reads from it."""
@@ -1166,6 +1294,7 @@ class CompanionFoundEventTests(unittest.TestCase):
         psm.zip_date_media_index = {}
         psm.zip_claimed_members = set()
         psm.zip_overlay_sibling_index = {}
+        psm._zip_member_sources = {}
 
     def test_emits_json_event(self):
         with tempfile.TemporaryDirectory() as tmpdir:

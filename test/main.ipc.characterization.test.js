@@ -268,6 +268,10 @@ function makeSpawnRecorder() {
     };
 }
 
+function allowStartZipPath(canonicalZipPath) {
+    return () => ({ success: true, canonicalZipPath });
+}
+
 async function callHandler(handlerName, event, ...args) {
     const handler = handlers.get(handlerName);
     return handler(event, ...args);
@@ -381,6 +385,7 @@ test('start-processing happy path uses organizer args and spawn options', async 
     try {
         withOverrides({
             validateSender: () => true,
+            validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
             validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: '/tmp/out' }),
             resolveAndValidateAutoUploadOptions: async () => ({
                 success: true,
@@ -450,6 +455,46 @@ test('start-processing happy path uses organizer args and spawn options', async 
     }
 });
 
+test('start-processing rejects unapproved ZIP paths before spawning organizer', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-start-zip-auth-');
+    const outputDir = path.join(tmpRoot, 'output');
+    const unapprovedZipPath = path.join(tmpRoot, 'outside-picker.zip');
+    let organizerStarted = false;
+    fs.writeFileSync(unapprovedZipPath, 'zip');
+
+    try {
+        await approveFolderSelection(outputDir, 'output');
+        withOverrides({
+            cleanupOrphanedProcesses: () => { },
+            buildOrganizerArgsForStart: () => ['--should-not-run'],
+            resolveOrganizerCommand: () => ({
+                command: 'dummy-organizer',
+                args: ['--should-not-run'],
+                ffmpegPath: '/ffmpeg'
+            }),
+            runOrganizerSubprocess: () => {
+                organizerStarted = true;
+                return Promise.resolve({ success: true });
+            }
+        });
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: unapprovedZipPath,
+            outputDir,
+            autoUpload: false
+        });
+
+        assert.deepEqual(result, {
+            success: false,
+            error: 'ZIP path is outside approved locations. Please choose it with the file picker.',
+            errorType: 'PATH_VALIDATION'
+        });
+        assert.equal(organizerStarted, false);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
 test('start-processing rejects unapproved auto-upload destination directory', async () => {
     const tmpRoot = mkTmpDirReal('dateback-auto-destination-');
     const outputDir = path.join(tmpRoot, 'output');
@@ -458,6 +503,7 @@ test('start-processing rejects unapproved auto-upload destination directory', as
     fs.writeFileSync(tmpZipPath, 'zip');
 
     try {
+        withAppHome(tmpRoot);
         await approveFolderSelection(outputDir, 'output');
         withOverrides({
             cleanupOrphanedProcesses: () => { },
@@ -488,6 +534,38 @@ test('start-processing rejects unapproved auto-upload destination directory', as
     }
 });
 
+test('start-processing does not create unapproved auto-upload destination directory', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-auto-destination-create-');
+    const homeDir = path.join(tmpRoot, 'home');
+    const outputDir = path.join(homeDir, 'Pictures', 'SnapchatMemories');
+    const destinationDir = path.join(tmpRoot, 'destination-that-must-not-exist');
+    const tmpZipPath = path.join(homeDir, 'Downloads', 'auto-destination.zip');
+    fs.mkdirSync(path.dirname(tmpZipPath), { recursive: true });
+    fs.writeFileSync(tmpZipPath, 'zip');
+
+    try {
+        withAppHome(homeDir);
+        await approveFolderSelection(outputDir, 'output');
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: tmpZipPath,
+            outputDir,
+            autoUpload: true,
+            destinationDir,
+            cacheGb: 1,
+            cacheLowGb: 0.5,
+            uploadMode: 'copy'
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.errorType, 'PATH_VALIDATION');
+        assert.match(result.error, /Destination directory not approved/);
+        assert.equal(fs.existsSync(destinationDir), false);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
 test('start-processing rejects unapproved auto-upload staging directory', async () => {
     const tmpRoot = mkTmpDirReal('dateback-auto-staging-');
     const outputDir = path.join(tmpRoot, 'output');
@@ -497,6 +575,7 @@ test('start-processing rejects unapproved auto-upload staging directory', async 
     fs.writeFileSync(tmpZipPath, 'zip');
 
     try {
+        withAppHome(tmpRoot);
         await approveFolderSelection(outputDir, 'output');
         await approveFolderSelection(destinationDir, 'destination');
         withOverrides({
@@ -529,6 +608,41 @@ test('start-processing rejects unapproved auto-upload staging directory', async 
     }
 });
 
+test('start-processing does not create unapproved auto-upload staging directory', async () => {
+    const tmpRoot = mkTmpDirReal('dateback-auto-staging-create-');
+    const homeDir = path.join(tmpRoot, 'home');
+    const outputDir = path.join(homeDir, 'Pictures', 'SnapchatMemories');
+    const destinationDir = path.join(tmpRoot, 'destination');
+    const stagingDir = path.join(tmpRoot, 'staging-that-must-not-exist');
+    const tmpZipPath = path.join(homeDir, 'Downloads', 'auto-staging.zip');
+    fs.mkdirSync(path.dirname(tmpZipPath), { recursive: true });
+    fs.writeFileSync(tmpZipPath, 'zip');
+
+    try {
+        withAppHome(homeDir);
+        await approveFolderSelection(outputDir, 'output');
+        await approveFolderSelection(destinationDir, 'destination');
+
+        const result = await callHandler('start-processing', createAuthorizedEvent(), {
+            zipPath: tmpZipPath,
+            outputDir,
+            autoUpload: true,
+            destinationDir,
+            stagingDir,
+            cacheGb: 1,
+            cacheLowGb: 0.5,
+            uploadMode: 'copy'
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.errorType, 'PATH_VALIDATION');
+        assert.match(result.error, /Staging directory not approved/);
+        assert.equal(fs.existsSync(stagingDir), false);
+    } finally {
+        cleanupTmp([tmpRoot]);
+    }
+});
+
 test('start-processing accepts approved auto-upload destination and staging directories', async () => {
     const tmpRoot = mkTmpDirReal('dateback-auto-approved-');
     const outputDir = path.join(tmpRoot, 'output');
@@ -538,6 +652,7 @@ test('start-processing accepts approved auto-upload destination and staging dire
     fs.writeFileSync(tmpZipPath, 'zip');
 
     try {
+        withAppHome(tmpRoot);
         await approveFolderSelection(outputDir, 'output');
         await approveFolderSelection(destinationDir, 'destination');
         await approveFolderSelection(stagingDir, 'staging');
@@ -566,6 +681,28 @@ test('start-processing accepts approved auto-upload destination and staging dire
         assert.deepEqual(result, { success: true });
     } finally {
         cleanupTmp([tmpRoot]);
+    }
+});
+
+test('start-processing rejects Windows drive and share roots as output directories', async () => {
+    const homeDir = mkTmpDirReal('dateback-win-root-home-');
+    const zipPath = path.join(homeDir, 'Downloads', 'windows-root.zip');
+    fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+    fs.writeFileSync(zipPath, 'zip');
+
+    try {
+        withAppHome(homeDir);
+        for (const outputDir of ['C:\\', '\\\\server\\share']) {
+            const result = await callHandler('start-processing', createAuthorizedEvent(), {
+                zipPath,
+                outputDir,
+                autoUpload: false
+            });
+            assert.equal(result.success, false);
+            assert.match(result.error, /root|share/i);
+        }
+    } finally {
+        cleanupTmp([homeDir]);
     }
 });
 
@@ -602,6 +739,7 @@ test('start-processing forwards runtime disk_full events and returns structured 
 
     withOverrides({
         validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: '/tmp/out' }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,
@@ -678,6 +816,7 @@ test('start-processing call-shape preserves resolveOrganizerCommand and runOrgan
 
     withOverrides({
         validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,
@@ -881,6 +1020,7 @@ test('start-processing session output dir is active during run and cleared after
 
     withOverrides({
         validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,
@@ -1124,6 +1264,7 @@ test('open-folder allows the same outputDir after successful start-processing va
     const tmpOutDir = mkTmpDirReal('dateback-open-folder-approved-');
 
     withOverrides({
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,
@@ -1433,6 +1574,7 @@ test('start-processing cleanup only targets the tracked worker pid from the work
 
     withOverrides({
         validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,
@@ -1523,6 +1665,7 @@ test('start-processing cleanup ignores tracked worker state when only a generic 
 
     withOverrides({
         validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,
@@ -1606,6 +1749,7 @@ test('resume-batch happy path writes signal file in active session dir', async (
     const spawnRecorder = makeSpawnRecorder();
     withOverrides({
         validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
         validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
         resolveAndValidateAutoUploadOptions: async () => ({
             success: true,

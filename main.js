@@ -695,6 +695,40 @@ function findNearestExistingPath(pathToCheck) {
     return checkPath;
 }
 
+function isWindowsDriveRootPath(dirPath) {
+    if (typeof dirPath !== 'string') {
+        return false;
+    }
+    const normalized = dirPath.trim().replace(/\//g, '\\');
+    return /^[a-zA-Z]:\\?$/.test(normalized);
+}
+
+function isWindowsShareRootPath(dirPath) {
+    if (typeof dirPath !== 'string') {
+        return false;
+    }
+    const normalized = dirPath.trim().replace(/\//g, '\\');
+    if (!normalized.startsWith('\\\\')) {
+        return false;
+    }
+    const parts = normalized.replace(/^\\+/, '').split('\\').filter(Boolean);
+    return parts.length === 2;
+}
+
+function getSensitiveRootError(dirPath) {
+    if (isWindowsDriveRootPath(dirPath)) {
+        return 'Cannot use Windows drive root. Please create a subfolder (for example, C:\\DateBack_Output).';
+    }
+    if (isWindowsShareRootPath(dirPath)) {
+        return 'Cannot use Windows network share root. Please create a subfolder inside the share.';
+    }
+    if (typeof dirPath === 'string' && dirPath.startsWith('/Volumes/')) {
+        const driveName = path.basename(dirPath);
+        return `Cannot use external drive root. Please create a subfolder (e.g., /Volumes/${driveName}/DateBack_Output)`;
+    }
+    return 'Please select a subfolder, not the root Documents/Downloads folder.';
+}
+
 async function getDiskFreeBytesForPath(pathToCheck) {
     const checkPath = findNearestExistingPath(pathToCheck);
 
@@ -754,8 +788,31 @@ function ensureCanonicalWritableDirectory(dirPath, label = 'Directory') {
     return canonical;
 }
 
+function requireApprovedWritableDirectory(dirPath, label, approvedSet, approvalError) {
+    const normalizedPath = sanitizePathInput(dirPath, `${label} path`);
+
+    if (isSensitiveRoot(normalizedPath)) {
+        throw new Error(`${label} must be a subfolder, not a root/system folder`);
+    }
+
+    const canonicalCandidate = getCanonicalPath(normalizedPath);
+    if (!approvedSet.has(canonicalCandidate)) {
+        throw new Error(approvalError);
+    }
+
+    const canonicalWritable = ensureCanonicalWritableDirectory(normalizedPath, label);
+    if (canonicalWritable !== canonicalCandidate && !approvedSet.has(canonicalWritable)) {
+        throw new Error(`${label} validation changed after creation. Please choose it again with the folder picker.`);
+    }
+    return canonicalWritable;
+}
+
 // Security: Deny commonly unsafe roots to prevent accidental home directory wipes
 function isSensitiveRoot(dirPath) {
+    if (isWindowsDriveRootPath(dirPath) || isWindowsShareRootPath(dirPath)) {
+        return true;
+    }
+
     const home = getCanonicalPath(app.getPath('home'));
     const sensitive = [
         home,
@@ -1091,6 +1148,19 @@ function validateAndCanonicalizeOutputDir(outputDir, options = {}) {
         return { success: false, response: { success: false, error: e.message } };
     }
 
+    if (isSensitiveRoot(normalizedOutputDir)) {
+        if (sensitiveRootLog) {
+            console.error(`[SECURITY] Rejected sensitive root output directory: ${normalizedOutputDir}`);
+        }
+        return {
+            success: false,
+            response: {
+                success: false,
+                error: sensitiveRootError || getSensitiveRootError(normalizedOutputDir)
+            }
+        };
+    }
+
     const requestedOutputDir = path.resolve(normalizedOutputDir);
     if (includeSymlinkPathValidationError && fs.existsSync(requestedOutputDir)) {
         try {
@@ -1118,15 +1188,7 @@ function validateAndCanonicalizeOutputDir(outputDir, options = {}) {
             console.error(`[SECURITY] Rejected sensitive root output directory: ${canonicalOutputDir}`);
         }
 
-        let errorMsg = sensitiveRootError;
-        if (!errorMsg) {
-            if (canonicalOutputDir.startsWith('/Volumes/')) {
-                const driveName = path.basename(canonicalOutputDir);
-                errorMsg = `Cannot use external drive root. Please create a subfolder (e.g., /Volumes/${driveName}/DateBack_Output)`;
-            } else {
-                errorMsg = 'Please select a subfolder, not the root Documents/Downloads folder.';
-            }
-        }
+        const errorMsg = sensitiveRootError || getSensitiveRootError(canonicalOutputDir);
 
         return { success: false, response: { success: false, error: errorMsg } };
     }
@@ -1210,36 +1272,25 @@ async function resolveAndValidateAutoUploadOptions(
         }
 
         try {
-            canonicalDestinationDir = ensureCanonicalWritableDirectory(destinationDir.trim(), 'Destination directory');
+            canonicalDestinationDir = requireApprovedWritableDirectory(
+                destinationDir.trim(),
+                'Destination directory',
+                approvedAutoUploadDestinationDirs,
+                'Destination directory not approved. Please choose it with the folder picker.'
+            );
             const stagingCandidate = providedStagingDir
                 ? stagingDir.trim()
                 : path.join(canonicalOutputDir, '.staging');
-            canonicalStagingDir = ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
+            canonicalStagingDir = providedStagingDir
+                ? requireApprovedWritableDirectory(
+                    stagingCandidate,
+                    'Staging directory',
+                    approvedAutoUploadStagingDirs,
+                    'Staging directory not approved. Please choose it with the folder picker.'
+                )
+                : ensureCanonicalWritableDirectory(stagingCandidate, 'Staging directory');
         } catch (e) {
             return { success: false, response: { success: false, errorType: 'PATH_VALIDATION', message: e.message, error: e.message } };
-        }
-
-        if (!approvedAutoUploadDestinationDirs.has(canonicalDestinationDir)) {
-            return {
-                success: false,
-                response: {
-                    success: false,
-                    errorType: 'PATH_VALIDATION',
-                    message: 'Destination directory not approved. Please choose it with the folder picker.',
-                    error: 'Destination directory not approved. Please choose it with the folder picker.'
-                }
-            };
-        }
-        if (providedStagingDir && !approvedAutoUploadStagingDirs.has(canonicalStagingDir)) {
-            return {
-                success: false,
-                response: {
-                    success: false,
-                    errorType: 'PATH_VALIDATION',
-                    message: 'Staging directory not approved. Please choose it with the folder picker.',
-                    error: 'Staging directory not approved. Please choose it with the folder picker.'
-                }
-            };
         }
 
         if (canonicalDestinationDir === canonicalStagingDir) {
@@ -1605,6 +1656,48 @@ function validateZipArchive(canonicalZipPath) {
     } catch (error) {
         return { found: false, error: error.message, count: 0 };
     }
+}
+
+function validateZipPathForProcessing(zipPath) {
+    let normalizedZipPath;
+    let canonicalZipPath;
+
+    try {
+        normalizedZipPath = sanitizePathInput(zipPath, 'ZIP path');
+        canonicalZipPath = getCanonicalPath(normalizedZipPath);
+    } catch (error) {
+        return { success: false, response: { success: false, error: error.message } };
+    }
+
+    const authorization = authorizeReadPath(canonicalZipPath, {
+        allowApprovedZip: true,
+        error: 'ZIP path is outside approved locations. Please choose it with the file picker.'
+    });
+    if (!authorization.success) {
+        return {
+            success: false,
+            response: {
+                success: false,
+                error: authorization.error,
+                errorType: 'PATH_VALIDATION'
+            }
+        };
+    }
+
+    try {
+        const zipStat = fs.lstatSync(normalizedZipPath);
+        if (!zipStat.isFile() || zipStat.isSymbolicLink()) {
+            return { success: false, response: { success: false, error: 'ZIP path must be a regular file, not a symlink' } };
+        }
+        const realZipPath = fs.realpathSync(normalizedZipPath);
+        if (realZipPath !== canonicalZipPath) {
+            return { success: false, response: { success: false, error: 'ZIP path changed during validation' } };
+        }
+    } catch (e) {
+        return { success: false, response: { success: false, error: `Cannot access ZIP file: ${e.message}` } };
+    }
+
+    return { success: true, canonicalZipPath };
 }
 
 // Validate ZIP file
@@ -2963,6 +3056,7 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
     if (!validateSenderFn(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
+    const validateZipPathForProcessingFn = getMainDep('validateZipPathForProcessing', validateZipPathForProcessing);
     const validateOutputDirFn = getMainDep('validateAndCanonicalizeOutputDir', validateAndCanonicalizeOutputDir);
     const resolveAutoUploadOptionsFn = getMainDep('resolveAndValidateAutoUploadOptions', resolveAndValidateAutoUploadOptions);
     const buildStartArgsFn = getMainDep('buildOrganizerArgsForStart', buildOrganizerArgsForStart);
@@ -3006,6 +3100,13 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
             error: 'Choose either Store Memories on Cloud or Store Memories on Computer with Pause after batch (not both).'
         };
     }
+
+    const zipValidation = validateZipPathForProcessingFn(zipPath);
+    if (!zipValidation.success) {
+        return zipValidation.response;
+    }
+    const canonicalZipPath = zipValidation.canonicalZipPath;
+
     const autoUploadValidation = await resolveAutoUploadOptionsFn(
         { autoUpload, destinationDir, cacheGb, cacheLowGb, uploadMode, stagingDir, maxUploadRetries: undefined },
         canonicalOutputDir,
@@ -3023,41 +3124,9 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
             settled = true;
             resolve(payload);
         };
-        const failStart = (error, errorType) => {
-            const payload = { success: false, error };
-            if (errorType) payload.errorType = errorType;
-            settle(payload);
-        };
 
         // Find bundled executables
         const isDev = !app.isPackaged;
-
-        // SECURITY: Validate zipPath before passing to subprocess
-        if (!zipPath || typeof zipPath !== 'string') {
-            failStart('Invalid ZIP path provided');
-            return;
-        }
-
-        // Verify ZIP file exists and is a regular file (not symlink)
-        try {
-            const zipStat = fs.lstatSync(zipPath);
-            if (!zipStat.isFile() || zipStat.isSymbolicLink()) {
-                failStart('ZIP path must be a regular file, not a symlink');
-                return;
-            }
-        } catch (e) {
-            failStart(`Cannot access ZIP file: ${e.message}`);
-            return;
-        }
-
-        // Resolve to canonical path to prevent symlink tricks
-        const canonicalZipPath = fs.realpathSync(zipPath);
-
-        // Block paths with special characters that could cause argument injection
-        if (canonicalZipPath.includes('\n') || canonicalZipPath.includes('\0')) {
-            failStart('ZIP path contains invalid characters');
-            return;
-        }
 
         // Reset approved dirs for this run — currentValidatedOutputDir covers open-folder for the session.
         approvedOutputDirs.clear();

@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "Pillow==12.0.0" "requests==2.32.5" "PyInstaller==6.11.1"
+          python -m pip install -r python/requirements.txt
 
       - name: Build memory-organizer.exe
         run: python -m PyInstaller memory-organizer-win.spec --noconfirm
