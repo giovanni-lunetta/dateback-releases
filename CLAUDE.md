@@ -187,7 +187,8 @@ npm run build:mac:x64
 
 Output:
 - `dist/DateBack-X.Y.Z-x64.dmg` (named `DateBack-X.Y.Z.dmg` on disk — copy to releases dir as `DateBack-X.Y.Z-x64.dmg`)
-- `dist/latest-mac.yml` (overwritten with x64 + arm64 entries)
+- `dist/DateBack-X.Y.Z-mac.zip` (x64 app bundle zip — required by electron-updater for x64 auto-update)
+- `dist/latest-mac.yml` (overwritten with x64 + arm64 entries; `path:` field references `DateBack-X.Y.Z-mac.zip`)
 
 **Important:** The x64 build also rebuilds the arm64 DMG (different hash from the arm64-only build). After the x64 build completes, update `dist/latest-mac-arm64.yml` to match the new arm64 DMG hash shown in `dist/latest-mac.yml`.
 
@@ -224,11 +225,13 @@ cp dist/latest-mac-arm64.yml      /Users/giovanni-lunetta/Business\ Ideas/DateBa
 
 # x64
 cp dist/DateBack-X.Y.Z-x64.dmg   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
+cp dist/DateBack-X.Y.Z-mac.zip   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
 cp dist/latest-mac.yml            /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/
 
 # latest (both)
 cp dist/DateBack-X.Y.Z-arm64.dmg /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
 cp dist/DateBack-X.Y.Z-x64.dmg   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
+cp dist/DateBack-X.Y.Z-mac.zip   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
 cp dist/latest-mac-arm64.yml      /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
 cp dist/latest-mac.yml            /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/latest/
 ```
@@ -311,6 +314,7 @@ unset GH_TOKEN
 gh release create vX.Y.Z \
   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-arm64.dmg \
   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-x64.dmg \
+  /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-mac.zip \
   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/DateBack-X.Y.Z-x64-win.exe \
   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/latest-mac-arm64.yml \
   /Users/giovanni-lunetta/Business\ Ideas/DateBack_Business/Builds/releases/vX.Y.Z/latest-mac.yml \
@@ -383,6 +387,7 @@ After every release, report:
 - [ ] `file` evidence that x64 binaries are `Mach-O 64-bit executable x86_64`
 - [ ] SHA256 of arm64 production DMG
 - [ ] SHA256 of x64 production DMG
+- [ ] x64 mac.zip uploaded to GitHub Release (required for x64 auto-update)
 - [ ] SHA256 of `latest-mac.yml`
 - [ ] SHA256 of `latest-mac-arm64.yml`
 - [ ] SHA256 of QA DMG
@@ -421,4 +426,4 @@ After every release, report:
 
 - **x64 binary requires x86_64-mode Python** — Use `npm run build:binary:x64:rosetta` on the M-chip Mac (not plain `build:binary:x64`). The `:rosetta` script uses `arch -x86_64` with the dedicated `~/.venvs/dateback-x64` venv. Plain `python3` on the M-chip Mac produces an arm64 binary regardless of the spec's `target_arch` setting. Always verify with `file assets/bin/mac-x64/memory-organizer`.
 
-- **`latest-mac.yml` x64 auto-updater path mismatch (KNOWN ISSUE — fix in next release)** — `npm run build:mac:x64` produces `dist/latest-mac.yml` whose `path` field is `DateBack-X.Y.Z-mac.zip` and whose DMG entry is `DateBack-X.Y.Z.dmg`. Neither file is uploaded to the GitHub release (we upload `DateBack-X.Y.Z-x64.dmg` and skip the zip). This means x64 auto-update will fail for existing x64 users when a new version ships. v1.5.0 was unaffected because it was the first x64 release (no existing x64 users to update). To fix for v1.5.1+, either: (a) also upload `dist/DateBack-X.Y.Z-mac.zip` to the release so the YML's primary path resolves, or (b) add `"artifactName"` to the mac build config in `package.json` so the zip and DMG names match what the YML emits. Option (a) is simpler — just add the zip to the `gh release create` command and the `Builds/releases/vX.Y.Z/` copy step.
+- **x64 auto-update zip** — `npm run build:mac:x64` generates `dist/DateBack-X.Y.Z-mac.zip` alongside the DMG. This zip is what `latest-mac.yml`'s `path:` field references and what electron-updater downloads on Intel Macs. Always copy and upload it — it is included in the artifact copy steps and `gh release create` command above.
