@@ -64,7 +64,7 @@ test('Windows NSIS installer config targets one-click user install', () => {
 });
 
 test('Windows build script and binary build script are present', () => {
-    assert.match(packageJson.scripts['build:win:x64'], /electron-builder --win --arch x64/);
+    assert.match(packageJson.scripts['build:win:x64'], /electron-builder --win --x64/);
     assert.match(packageJson.scripts['build:binary:win'], /PyInstaller memory-organizer-win\.spec/);
 });
 
