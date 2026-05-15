@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-05-15
+### Security
+- ZIP path is now authorized against the file-picker approval set before being passed to the subprocess — paths outside the user's home directory must be explicitly chosen with the picker
+- `requireApprovedWritableDirectory`: destination and staging directories are checked against the approval set before being created, preventing unapproved directory creation
+- Batch output directories (`Batch_01`, etc.) are now created without following symlink entries; existing symlinked Batch_ directories are rejected at scan time, creation time, and retry time
+- ZIP central-directory metadata is validated before indexing: 250 000-member cap, 5 TB declared-size cap, and symlink-member blocking
+- Duplicate ZIP member paths across multi-part exports are detected and rejected at index time
+- Windows drive roots (`C:\`) and network share roots (`\\server\share`) are now explicitly blocked as output directories
+- URL query strings and common secret assignments (`token=`, `sig=`, etc.) are redacted from human-readable error reports
+
+### Fixed
+- Overlay merge failure now saves the main image instead of writing an error record — users get the photo even when the overlay cannot be composited
+- Manifest index replay is bounded by the actual number of memories in the export, preventing runaway expansion from malformed manifests
+- Approved-directory Sets are cleared and correctly repopulated (using canonical paths) at the start of each new run — fixes cloud-mode runs breaking after the first launch of a session
+- Logger `redactPath` now strips `/var/folders` and `/Volumes` paths from log output
+- Logger `flush()` performs a second drain to capture entries enqueued during the first drain pass
+- Python `set_config` validates against sensitive roots before calling `canonical_dir`/`makedirs`
+- `getLastTimestamp` in support-logs rewritten with async `fs.promises` (removes sync I/O from thread executor)
+- `btnFindZip` handler guards against re-entry while a scan is already running
+- Warning modals resolve any prior pending call before opening a new one
+
+### Changed
+- Mac release artifacts now include arm64 and x64 DMG + ZIP targets in a single build pass
+- Windows GitHub Actions workflow installs Python dependencies from `python/requirements.txt` instead of pinned inline versions
+- Success modal elements use stable IDs; approximately 400 lines of dead renderer helper-fallback code removed
+- Named constants extracted to `src/constants.js` for cloud defaults and ZIP entry limit
+
 ## [1.5.0] - 2026-05-14
 ### Added
 - Windows 10 / 11 (x64) support: NSIS installer, bundled FFmpeg 8.1.1 and memory-organizer.exe for Windows x64
