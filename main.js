@@ -3064,11 +3064,11 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
         approvedAutoUploadDestinationDirs.clear();
         approvedAutoUploadStagingDirs.clear();
         approvedOutputDirs.add(canonicalOutputDir);
-        if (autoUploadOptions && autoUploadOptions.destinationDir) {
-            approvedAutoUploadDestinationDirs.add(autoUploadOptions.destinationDir);
+        if (autoUploadOptions && autoUploadOptions.canonicalDestinationDir) {
+            approvedAutoUploadDestinationDirs.add(autoUploadOptions.canonicalDestinationDir);
         }
-        if (autoUploadOptions && autoUploadOptions.stagingDir) {
-            approvedAutoUploadStagingDirs.add(autoUploadOptions.stagingDir);
+        if (autoUploadOptions && autoUploadOptions.canonicalStagingDir) {
+            approvedAutoUploadStagingDirs.add(autoUploadOptions.canonicalStagingDir);
         }
 
         // Build CLI arguments
