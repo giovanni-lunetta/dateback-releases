@@ -194,3 +194,13 @@ test('bundled license directory includes Python and Pillow license texts', () =>
         assert.ok(notices.includes(`licenses/${fileName}`), `${fileName} should be referenced in notices`);
     }
 });
+
+test('local-only agent docs are not tracked in the public app repo', () => {
+    const tracked = require('node:child_process')
+        .execFileSync('git', ['ls-files', 'CLAUDE.md', 'AGENTS.md'], { cwd: root, encoding: 'utf8' })
+        .trim()
+        .split('\n')
+        .filter(Boolean);
+
+    assert.deepEqual(tracked, []);
+});
