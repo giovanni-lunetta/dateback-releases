@@ -2751,6 +2751,30 @@ def retry_timestamp_name_from_date(date_str):
         return fallback, False
 
 
+def redact_result_for_shareable_report(result):
+    if not isinstance(result, dict):
+        return result
+    redacted = dict(result)
+    if "download_url" in redacted:
+        redacted["download_url"] = redact_url_for_human_report(redacted.get("download_url"))
+    if "reason" in redacted:
+        redacted["reason"] = redact_sensitive_text_for_human_report(redacted.get("reason"))
+    return redacted
+
+
+def normalize_saved_media_rows(rows):
+    if not isinstance(rows, list):
+        return [], 0
+    valid = []
+    invalid_count = 0
+    for row in rows:
+        if isinstance(row, dict):
+            valid.append(row)
+        else:
+            invalid_count += 1
+    return valid, invalid_count
+
+
 def save_error_report(mem_id, date_str, url, reason):
     """Saves a text file report for a corrupted/failed memory."""
     try:
@@ -2889,7 +2913,7 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
         if remote_size:
             matches = file_size_index.get(remote_size)
         if remote_size is None and not matches:
-            return {"id": mem_id, "status": "Skipped", "reason": "Network Error/Not Found", "file": None, "date": date_str, "download_url": download_url, "media_type": media_type}
+            matches = []
     local_path = None
     
     if matches:
@@ -3312,11 +3336,14 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         with open(JSON_PATH, 'r') as f:
             data = json.load(f)
             
+    invalid_row_count = 0
     if isinstance(data, dict):
-        memories = data.get('Saved Media', [])
+        memories, invalid_row_count = normalize_saved_media_rows(data.get('Saved Media', []))
+        if invalid_row_count:
+            print(f"Warning: Ignored {invalid_row_count} malformed Saved Media rows.", flush=True)
     else:
         memories = []
-        
+
     print(f"Loaded {len(memories)} memories.", flush=True)
     
     if limit:
@@ -4163,13 +4190,20 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         "manifest_processed_count": manifest_processed_count,  # From manifest (source of truth)
         "actual_files_on_disk": actual_files_on_disk,  # Verification count (should match success)
         "report_success_count": current_run_success,  # Number of success entries in report
-        "auto_upload": bool(AUTO_UPLOAD_ENABLED)
+        "auto_upload": bool(AUTO_UPLOAD_ENABLED),
+        "invalid_rows": invalid_row_count
     }
     if cloud_delivery_summary:
         stats.update(cloud_delivery_summary)
 
     with open(REPORT_FILE, 'w') as f:
         json.dump(results, f, indent=2)
+
+    redacted_report = [redact_result_for_shareable_report(item) for item in results]
+    redacted_report_file = os.path.join(os.path.dirname(REPORT_FILE), "detailed_report_redacted.json")
+    with open(redacted_report_file, "w") as f:
+        json.dump(redacted_report, f, indent=2)
+    print(f"Shareable redacted report saved to {redacted_report_file}", flush=True)
 
     print(f"Done! Detailed report saved to {REPORT_FILE}", flush=True)
     print(f"Stats: Success={success_count}, Duplicates={duplicate_count}, Missing={missing_count}, Skipped={skipped_count}, Errors={error_count}", flush=True)

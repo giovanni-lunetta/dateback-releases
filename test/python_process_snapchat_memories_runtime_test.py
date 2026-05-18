@@ -978,6 +978,43 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             expected = psm.datetime(2021, 5, 28, 20, 50, 7, tzinfo=psm.timezone.utc).timestamp()
             self.assertEqual(int(target_path.stat().st_mtime), int(expected))
 
+    def test_process_from_zip_skips_non_object_saved_media_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            valid_id = "11111111-1111-4111-8111-111111111111"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({
+                    "Saved Media": [
+                        "not-a-dict",
+                        {
+                            "Date": "2024-01-02 03:04:05 UTC",
+                            "Media Type": "Image",
+                            "Download Link": "",
+                            "Media Download Url": ""
+                        }
+                    ]
+                }))
+                zf.writestr(f"memories/2024-01-02_{valid_id}-main.jpg", b"image-bytes")
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            self.assertEqual(stats.get("invalid_rows"), 1)
+
+    def test_redacted_detailed_report_removes_download_query_tokens(self):
+        result = {
+            "id": "MEM_1",
+            "status": "Error",
+            "download_url": "https://cf-st.sc-cdn.net/media.jpg?token=secret&sid=abc",
+            "reason": "failed https://cf-st.sc-cdn.net/media.jpg?token=secret"
+        }
+
+        redacted = psm.redact_result_for_shareable_report(result)
+
+        self.assertEqual(redacted["download_url"], "https://cf-st.sc-cdn.net/media.jpg?[redacted]")
+        self.assertNotIn("token=secret", json.dumps(redacted))
+
 
 class BuildFileIndexCompanionModeTests(unittest.TestCase):
     """Tests for build_file_index_from_zip registry behavior (clear and additive modes)."""
