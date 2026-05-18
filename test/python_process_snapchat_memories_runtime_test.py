@@ -1360,6 +1360,31 @@ class ComputeZipSetFingerprintTests(unittest.TestCase):
             fp_after = psm.compute_zip_set_fingerprint(primary)
             self.assertNotEqual(fp_before, fp_after)
 
+    def test_retry_rejects_path_like_date_before_writing_outside_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            escaped = Path(temp_dir) / "escaped_retry_probe.jpg"
+            failed_entries = [{
+                "id": "MEM_1",
+                "status": "Error",
+                "reason": "download failed",
+                "file": None,
+                "date": str(escaped.with_suffix("")),
+                "download_url": "https://cf-st.sc-cdn.net/media.jpg",
+                "media_type": "Image"
+            }]
+
+            with mock.patch.object(psm, "stream_download_to_path", side_effect=AssertionError("download should not start")):
+                result = psm.retry_failed_entries(
+                    failed_entries=failed_entries,
+                    output_root=str(output_root)
+                )
+
+            self.assertFalse(escaped.exists())
+            self.assertEqual(result["errors"], 1)
+            self.assertIn("Unsafe retry date", result["results"][0]["retry_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

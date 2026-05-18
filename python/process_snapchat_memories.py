@@ -2728,6 +2728,29 @@ def redact_sensitive_text_for_human_report(value):
     return SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[redacted]", redacted)
 
 
+SAFE_RETRY_TIMESTAMP_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def retry_timestamp_name_from_date(date_str):
+    """Return a safe filename stem for retry output, or raise ValueError."""
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
+        return dt.strftime('%Y-%m-%d_%H-%M-%S'), True
+    except ValueError:
+        fallback = str(date_str or "").replace(':', '-').replace(' ', '_')
+        if (
+            not fallback
+            or os.path.isabs(fallback)
+            or "/" in fallback
+            or "\\" in fallback
+            or fallback in (".", "..")
+            or fallback.startswith(".")
+            or not SAFE_RETRY_TIMESTAMP_RE.match(fallback)
+        ):
+            raise ValueError("Unsafe retry date in report")
+        return fallback, False
+
+
 def save_error_report(mem_id, date_str, url, reason):
     """Saves a text file report for a corrupted/failed memory."""
     try:
@@ -4434,13 +4457,12 @@ def retry_failed_entries(
 
                 print(f"  [{idx + 1}/{total}] Retrying {original_file}...", flush=True)
 
-                can_restore_retry_timestamp = False
                 try:
-                    dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S UTC')
-                    timestamp_name = dt.strftime('%Y-%m-%d_%H-%M-%S')
-                    can_restore_retry_timestamp = True
-                except ValueError:
-                    timestamp_name = date_str.replace(':', '-').replace(' ', '_')
+                    timestamp_name, can_restore_retry_timestamp = retry_timestamp_name_from_date(date_str)
+                except ValueError as error:
+                    stats['errors'] += 1
+                    results.append({**entry, 'retry_status': 'Error', 'retry_reason': str(error)})
+                    continue
 
                 if not is_allowed_download_url(download_url):
                     print(f"  ❌ Blocked: Invalid download URL (not from Snapchat CDN)", flush=True)
@@ -4648,6 +4670,7 @@ def retry_failed_entries(
         print(f"Could not update report: {e}", flush=True)
 
     print(f"\nRetry Summary: {stats['success']} succeeded, {stats['errors']} failed", flush=True)
+    stats['results'] = results
     return stats
 
 if __name__ == "__main__":
