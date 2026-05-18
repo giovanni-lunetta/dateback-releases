@@ -64,5 +64,11 @@ On resume, a log line "Will continue filling it." could appear for an incomplete
 
 ---
 
+### Release metadata repair
+
+After publishing v1.5.2, the missing `DateBack-1.5.2-arm64-mac.zip` updater asset was uploaded so the public Mac updater metadata references only available assets.
+
+---
+
 **Previous Version:** [v1.5.1](https://github.com/giovanni-lunetta/dateback-releases/releases/tag/v1.5.1)
 **All Releases:** [github.com/giovanni-lunetta/dateback-releases/releases](https://github.com/giovanni-lunetta/dateback-releases/releases)
