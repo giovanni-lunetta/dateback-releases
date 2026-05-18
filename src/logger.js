@@ -14,6 +14,8 @@ const path = require('path');
 const os = require('os');
 const { app } = require('electron');
 
+const SECRET_KEY_PATTERN = /(^|_|-)(password|passwd|pwd|token|secret|api.?key|access.?token|refresh.?token|authorization|auth|session|cookie|signature|private.?key)(_|-|$)/i;
+
 // Constants
 const MAX_FIELD_SIZE = 50000; // 50k characters per field
 const MAX_LOG_FILE_SIZE = 5 * 1024 * 1024; // 5MB per log file
@@ -143,7 +145,7 @@ class Logger {
         const redacted = {};
         for (const [key, value] of Object.entries(obj)) {
             // Don't log these sensitive keys
-            if (['password', 'token', 'secret', 'key', 'apiKey', 'accessToken'].includes(key)) {
+            if (SECRET_KEY_PATTERN.test(key)) {
                 redacted[key] = '<redacted>';
             } else {
                 redacted[key] = this.redactObject(value);
