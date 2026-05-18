@@ -1763,6 +1763,8 @@ def save_batch_progress(
     batch_completed=True,
     raise_on_error=False,
     progress_callback=None,
+    images=None,
+    videos=None,
 ):
     """Save batch progress to disk without treating partial batches as completed."""
     try:
@@ -1797,6 +1799,10 @@ def save_batch_progress(
             data["output_dir"] = output_dir
         if icloud_mode is not None:
             data["icloud_mode"] = bool(icloud_mode)
+        if images is not None:
+            data["images_count"] = images
+        if videos is not None:
+            data["videos_count"] = videos
         serialize_start = time.perf_counter()
         payload = json.dumps(data)
         serialize_elapsed = time.perf_counter() - serialize_start
@@ -3301,11 +3307,15 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     memories_with_index = list(enumerate(memories))
     manifest = load_batch_manifest()
     manifest_processed_count = None
+    manifest_images_count = 0
+    manifest_videos_count = 0
     ignore_manifest_for_zip_mismatch = False
     manifest_missing_processed_indices = False
 
     if manifest:
         manifest_processed_count = manifest.get("processed_count")
+        manifest_images_count = manifest.get("images_count") or 0
+        manifest_videos_count = manifest.get("videos_count") or 0
 
     if trust_manifest or auto_upload:
         mode_label = "Resume mode: Skip Files Already Processed" if trust_manifest else "Auto Upload mode: Using manifest resume state"
@@ -3588,7 +3598,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             print(f"Found {orphaned_root_files} orphaned files in {root_label} (will be organized into batch)")
 
         if last_incomplete_batch and files_in_incomplete_batch > 0:
-            print(f"Found incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files. Will continue filling it.")
+            print(f"Found incomplete {last_incomplete_batch} with {files_in_incomplete_batch} files.")
 
         if batch_folders:
             print(f"Found {existing_batch_files} existing files in {len(batch_folders)} batch folder(s).")
@@ -3654,10 +3664,14 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     
     # Track processed count for correct indexing into memories list
     memories_processed_so_far = 0
-    
+
     # Track actual files organized (not memory entries)
     # Start with existing files already in the output directory
     total_files_organized = total_existing_files
+
+    # Track image/video counts for this session (accumulated into manifest on each save)
+    session_images = 0
+    session_videos = 0
 
     def emit_zip_batch_metrics(batch_name, completed_files, batch_started_at):
         if not (ZIP_METRICS_ENABLED and zip_file):
@@ -3735,6 +3749,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             future_to_mem = {}
             batch_count = 0
             batch_success_count = 0
+            batch_images = 0
+            batch_videos = 0
             pause_detected = False
             processed_orig_indices = []  # Track which indices actually completed
 
@@ -3775,6 +3791,11 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                         processed_orig_indices.append(orig_idx)
                     if res.get('status') == 'Success':
                         batch_success_count += 1
+                        file_name = res.get('file', '')
+                        if file_name.lower().endswith('.mp4'):
+                            batch_videos += 1
+                        elif file_name:
+                            batch_images += 1
                         if auto_upload and upload_manager:
                             output_file_path = res.get('output_path')
                             if output_file_path:
@@ -3821,8 +3842,10 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                 # already contain files that are included in total_files_organized.
                 files_in_batch = resolve_files_in_batch_for_accounting(batch_success_count)
                 total_files_organized += files_in_batch
+                session_images += batch_images
+                session_videos += batch_videos
                 emit_zip_batch_metrics(batch_name, files_in_batch, batch_started_at)
-                
+
                 # Save manifest with accurate count
                 save_batch_progress(
                     batch_num,
@@ -3836,6 +3859,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
                     batch_completed=False,
                     raise_on_error=bool(trust_manifest or auto_upload),
                     progress_callback=progress_callback,
+                    images=manifest_images_count + session_images,
+                    videos=manifest_videos_count + session_videos,
                 )
                 print(f"   ✓ Manifest saved: {total_files_organized} files processed.", flush=True)
                 
@@ -3872,8 +3897,10 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         print(f"  {batch_name} complete: {files_in_batch} files processed.", flush=True)
         emit_zip_batch_metrics(batch_name, files_in_batch, batch_started_at)
 
-        # Update cumulative file count
+        # Update cumulative file and media-type counts
         total_files_organized += files_in_batch
+        session_images += batch_images
+        session_videos += batch_videos
         
         # Send progress update with ACTUAL FILE COUNT (not memory entries)
         if progress_callback:
@@ -3893,9 +3920,11 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
             zip_fingerprint=zip_fingerprint,
             output_dir=OUTPUT_DIR,
             icloud_mode=pause_batches,
-            actual_file_count=total_files_organized,  # Pass actual file count (includes duplicates)
+            actual_file_count=total_files_organized,
             raise_on_error=bool(trust_manifest or auto_upload),
             progress_callback=progress_callback,
+            images=manifest_images_count + session_images,
+            videos=manifest_videos_count + session_videos,
         )
 
         if ABORT_PROCESSING.is_set():
@@ -4051,8 +4080,8 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
     # Count TOTAL files for summary.
     if auto_upload:
         success_count = resolve_final_auto_upload_success_count(manifest_processed_count, total_files_organized)
-        images_count = current_run_images
-        videos_count = current_run_videos
+        images_count = manifest_images_count + session_images
+        videos_count = manifest_videos_count + session_videos
     else:
         for root, _, files in os.walk(OUTPUT_DIR):
             for f in files:
@@ -4142,7 +4171,23 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         print(f"         The later file overwrote the earlier one. Both are in the report.", flush=True)
 
     if total_accounted == manifest_total_files:
-        if unrecoverable_count > 0:
+        # Losses not reflected in current-run stats (e.g. failures from a prior resumed run).
+        # Subtract all current-run explanations: unrecoverable, errors, duplicates, and
+        # timestamp collisions (two Success results writing to the same filename leave one
+        # fewer file on disk; report_success_entries > success_count captures that gap).
+        collisions_within_run = max(0, report_success_entries - success_count)
+        unexplained_losses = manifest_total_files - success_count - unrecoverable_count - error_count - duplicate_count - collisions_within_run
+        if unexplained_losses > 0:
+            total_not_recovered = manifest_total_files - success_count
+            noun = "memory" if total_not_recovered == 1 else "memories"
+            print(f"   ⚠️  {success_count} of {manifest_total_files} memories recovered.", flush=True)
+            print(f"      {total_not_recovered} {noun} had no downloadable media (CDN unavailable or no file in export).", flush=True)
+            if unrecoverable_count > 0:
+                print(f"      This session: Missing={missing_count}, Skipped={skipped_count}.", flush=True)
+            if error_count > 0:
+                noun_err = "memory" if error_count == 1 else "memories"
+                print(f"      This session: {error_count} {noun_err} ended with errors.", flush=True)
+        elif unrecoverable_count > 0:
             noun = "memory" if unrecoverable_count == 1 else "memories"
             print(f"   ⚠️  {unrecoverable_count} {noun} could not be recovered from this export.", flush=True)
             print(f"      DateBack reviewed all {manifest_total_files} metadata rows, but only saved {success_count} files.", flush=True)

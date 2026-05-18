@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.2] - 2026-05-18
+### Fixed
+- In Cloud mode, resuming a multi-session run could incorrectly display "All memories recovered!" even when prior sessions had CDN failures — those losses are now correctly attributed
+- In Cloud mode, the image and video counts in the success summary reflected only the current session instead of the cumulative totals across all sessions; both counts are now persisted to the batch manifest and accumulated correctly on resume
+- On resume, a log line "Will continue filling it." could be printed for an incomplete batch that was not actually going to be backfilled; the misleading phrase is removed
+
+### Changed
+- README download section updated to include a platform selection table for Apple Silicon, Intel Mac, and Windows, with guidance on identifying Mac chip type
+
 ## [1.5.1] - 2026-05-15
 ### Security
 - ZIP path is now authorized against the file-picker approval set before being passed to the subprocess — paths outside the user's home directory must be explicitly chosen with the picker
