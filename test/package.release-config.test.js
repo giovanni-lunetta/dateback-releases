@@ -7,7 +7,11 @@ const packageJson = require(path.resolve(__dirname, '..', 'package.json'));
 const root = path.resolve(__dirname, '..');
 
 test('package metadata matches the free proprietary release model', () => {
-    assert.equal(packageJson.version, '1.5.1');
+    assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
+    assert.ok(
+        fs.existsSync(path.join(root, 'docs', `release-notes-v${packageJson.version}.md`)),
+        `release notes should exist for v${packageJson.version}`
+    );
     assert.equal(packageJson.private, true);
     assert.equal(packageJson.license, 'UNLICENSED');
 });
