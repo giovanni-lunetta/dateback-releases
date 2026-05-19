@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.3] - 2026-05-18
+### Security
+- Retry output filenames derived from the `Date` field in `detailed_report.json` are now validated against an allowlist regex; entries with path-separator characters, absolute paths, or other unsafe values are recorded as errors instead of being written, preventing path traversal outside the output directory
+- Logger secret redaction broadened from an exact-match list to a pattern that covers common variants: `access_token`, `refresh_token`, `Authorization`, `client_secret`, `apiKey`, bare `key`, nested `PASSWORD`, and related forms regardless of casing or word-boundary style
+
+### Fixed
+- Non-object entries (strings, numbers, etc.) in the `Saved Media` array of `memories_history.json` no longer crash the worker with an `AttributeError`; malformed rows are filtered, counted, and reported in the final stats
+- In non-ZIP mode, a failed remote file-size HEAD request no longer silently marks the entry as Skipped; the entry now proceeds to the download attempt path
+- The retry completion message sent over stdout to the Electron main process now contains only scalar stats; the per-entry results list (which could include raw Snapchat CDN query tokens) is no longer serialised over the IPC pipe
+
+### Added
+- A `detailed_report_redacted.json` file is written alongside `detailed_report.json` after each run with download query strings and sensitive text removed, suitable for sharing in support requests
+
 ## [1.5.2] - 2026-05-18
 ### Fixed
 - In Cloud mode, resuming a multi-session run could incorrectly display "All memories recovered!" even when prior sessions had CDN failures — those losses are now correctly attributed
