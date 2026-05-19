@@ -17,9 +17,12 @@ Module._load = function patchedLoad(request, parent, isMain) {
     return originalLoad.call(this, request, parent, isMain);
 };
 
-const Logger = require('../src/logger');
-
-Module._load = originalLoad;
+let Logger;
+try {
+    Logger = require('../src/logger');
+} finally {
+    Module._load = originalLoad;
+}
 
 test('logger redacts common secret key variants case-insensitively', () => {
     const logger = new Logger({ appName: 'DateBack Test' });
@@ -30,6 +33,7 @@ test('logger redacts common secret key variants case-insensitively', () => {
         client_secret: 'd',
         apiKey: 'e',
         nested: { PASSWORD: 'f' },
+        key: 'g',
         safe: 'keep'
     });
 
@@ -39,5 +43,6 @@ test('logger redacts common secret key variants case-insensitively', () => {
     assert.equal(redacted.client_secret, '<redacted>');
     assert.equal(redacted.apiKey, '<redacted>');
     assert.equal(redacted.nested.PASSWORD, '<redacted>');
+    assert.equal(redacted.key, '<redacted>');
     assert.equal(redacted.safe, 'keep');
 });

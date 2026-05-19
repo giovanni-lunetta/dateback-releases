@@ -1015,6 +1015,21 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
         self.assertEqual(redacted["download_url"], "https://cf-st.sc-cdn.net/media.jpg?[redacted]")
         self.assertNotIn("token=secret", json.dumps(redacted))
 
+    def test_non_zip_head_failure_falls_through_to_download_not_skipped(self):
+        """When HEAD returns None in non-ZIP mode the entry must not be silently Skipped."""
+        memory = {
+            "Date": "2024-06-01 12:00:00 UTC",
+            "Media Type": "Image",
+            "Media Download Url": "https://cf-st.sc-cdn.net/media.jpg?token=abc"
+        }
+        with mock.patch.object(psm, "get_remote_file_size", return_value=None), \
+             mock.patch.object(psm, "is_allowed_download_url", return_value=False):
+            result = psm.process_memory(memory, index=0, zip_file=None)
+
+        self.assertNotEqual(result["status"], "Skipped", "HEAD failure must not silently skip in non-ZIP mode")
+        self.assertEqual(result["status"], "Error")
+        self.assertIn("Blocked", result["reason"])
+
 
 class BuildFileIndexCompanionModeTests(unittest.TestCase):
     """Tests for build_file_index_from_zip registry behavior (clear and additive modes)."""

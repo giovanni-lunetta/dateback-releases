@@ -89,7 +89,8 @@ def main():
                 max_upload_retries=args.max_upload_retries
             )
             
-            json_output("complete", {"stats": stats})
+            stats_for_output = {k: v for k, v in stats.items() if k != 'results'}
+            json_output("complete", {"stats": stats_for_output})
             print(f"Retry complete!")
             sys.exit(0)
             

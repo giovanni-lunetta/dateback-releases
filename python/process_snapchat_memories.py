@@ -4200,7 +4200,7 @@ def main(limit=None, clear_output=True, progress_callback=None, zip_file=None, j
         json.dump(results, f, indent=2)
 
     redacted_report = [redact_result_for_shareable_report(item) for item in results]
-    redacted_report_file = os.path.join(os.path.dirname(REPORT_FILE), "detailed_report_redacted.json")
+    redacted_report_file = os.path.join(os.path.dirname(REPORT_FILE) or ".", "detailed_report_redacted.json")
     with open(redacted_report_file, "w") as f:
         json.dump(redacted_report, f, indent=2)
     print(f"Shareable redacted report saved to {redacted_report_file}", flush=True)

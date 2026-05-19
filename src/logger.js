@@ -145,7 +145,7 @@ class Logger {
         const redacted = {};
         for (const [key, value] of Object.entries(obj)) {
             // Don't log these sensitive keys
-            if (SECRET_KEY_PATTERN.test(key)) {
+            if (key === 'key' || SECRET_KEY_PATTERN.test(key)) {
                 redacted[key] = '<redacted>';
             } else {
                 redacted[key] = this.redactObject(value);
