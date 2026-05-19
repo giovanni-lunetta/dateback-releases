@@ -40,7 +40,7 @@ The retry completion message sent over stdout to the Electron main process now c
 
 **SHA256:**
 ```
-<arm64-sha256>
+25ff55995ead05dfa6d09711bc24136289f4c559cbcbd9046820387b3895086b
 ```
 
 ### macOS — Intel Mac (x86_64)
@@ -48,7 +48,7 @@ The retry completion message sent over stdout to the Electron main process now c
 
 **SHA256:**
 ```
-<x64-sha256>
+a1e9daf8583afbb056c3f8150fd6b72a039f9754440c3064422b771a62ce1cd9
 ```
 
 ### Windows 10 / 11 (x64)
@@ -56,7 +56,7 @@ The retry completion message sent over stdout to the Electron main process now c
 
 **SHA256:**
 ```
-<win-sha256>
+409aaf9867d517030d5d1a0ad31cde24e47153958e096aa320376496d54e1fd2
 ```
 
 ---
