@@ -18,6 +18,20 @@
     },
     "target": { "target": "dmg", "arch": ["arm64"] }
   },
+  "files": [
+    "main.js",
+    "preload.js",
+    "src/**/*",
+    "assets/**/*",
+    "!assets/bin/**/*",
+    "LICENSE",
+    "licenses/**/*",
+    "THIRD_PARTY_NOTICES.txt"
+  ],
+  "asar": true,
+  "asarUnpack": [
+    "assets/bin/**/*"
+  ],
   "extraResources": [
     { "from": "assets/bin/mac-arm64/memory-organizer", "to": "bin/memory-organizer" },
     { "from": "assets/bin/mac-arm64/ffmpeg", "to": "bin/ffmpeg" }
