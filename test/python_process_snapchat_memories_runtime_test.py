@@ -20,6 +20,7 @@ if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
 import process_snapchat_memories as psm
+import zip_safety
 
 
 class FakeResponse:
@@ -485,7 +486,7 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
                 zf.writestr("mydata~123/json/memories_history.json", '{"Saved Media": []}')
 
             with zipfile.ZipFile(zip_path, "r") as zf:
-                with mock.patch.object(psm, "MAX_JSON_BYTES", 4):
+                with mock.patch.object(zip_safety, "MAX_JSON_BYTES", 4):
                     with self.assertRaisesRegex(ValueError, "memories_history.json is too large"):
                         psm.read_memories_history_json(zf, "mydata~123/json/memories_history.json")
 
@@ -1142,7 +1143,7 @@ class BuildCompanionZipIndexesTests(unittest.TestCase):
             with zipfile.ZipFile(primary) as zf:
                 psm.build_file_index_from_zip(zf, clear=True, source_zip_path=primary)
 
-            with mock.patch.object(psm, "MAX_NESTED_ZIP_ENTRY_BYTES", 5):
+            with mock.patch.object(zip_safety, "MAX_NESTED_ZIP_ENTRY_BYTES", 5):
                 with self.assertRaisesRegex(ValueError, "exceeds allowed size"):
                     psm._build_companion_zip_indexes(primary)
 
