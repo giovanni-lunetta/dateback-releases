@@ -17,7 +17,9 @@
     "build:mac": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac",
     "build:mac:arm64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --arm64",
     "build:mac:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --mac --x64",
-    "build:win:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --win --x64"
+    "build:win:x64": "env -u ELECTRON_RUN_AS_NODE USE_HARD_LINKS=false electron-builder --win --x64",
+    "clean": "rm -rf dist dist-qa build/memory-organizer build/memory-organizer-x64",
+    "clean:all": "npm run clean && rm -rf node_modules"
   },
   "author": "Giovanni Lunetta",
   "license": "UNLICENSED",
