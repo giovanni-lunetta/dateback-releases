@@ -1323,6 +1323,10 @@ textarea {
     opacity: 0.52;
 }
 
+#upload-mode {
+    max-width: 240px;
+}
+
 /* ==========================================
    Drop Zone
    ========================================== */
@@ -1722,6 +1726,10 @@ textarea {
     gap: 10px;
 }
 
+#resume-restart-container {
+    margin-top: 0;
+}
+
 .primary-actions {
     margin-top: 4px;
 }
@@ -2000,6 +2008,12 @@ textarea {
     align-items: center;
     gap: 8px;
     box-shadow: var(--shadow-1);
+}
+
+.storage-warning-icon {
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
 }
 
 .storage-tip {
@@ -2537,6 +2551,12 @@ textarea {
     line-height: 1.6;
 }
 
+.modal-subheading {
+    margin-bottom: 12px;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
 .modal-content h2 {
     font-size: 28px;
     font-weight: 700;
@@ -2550,7 +2570,8 @@ textarea {
     background-size: 200% 100%;
 }
 
-#storage-warning-modal .modal-content {
+#storage-warning-modal .modal-content,
+#expired-link-modal .modal-content {
     text-align: center;
 }
 
@@ -2560,6 +2581,11 @@ textarea {
     -webkit-text-fill-color: initial;
     color: var(--accent-red);
     text-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+}
+
+.modal-list {
+    color: var(--text-muted);
+    margin-left: 20px;
 }
 
 .modal-list li {
@@ -2987,10 +3013,20 @@ textarea {
     margin-bottom: 20px;
 }
 
+.thanks-fine-print {
+    font-size: 0.85rem;
+    opacity: 0.75;
+    margin-bottom: 0.75rem;
+}
+
 .modal-buttons {
     display: flex;
     gap: 10px;
     justify-content: center;
+}
+
+.modal-buttons-top-spaced {
+    margin-top: 16px;
 }
 
 /* Resume Modal - Stats Section */
@@ -3603,6 +3639,12 @@ textarea {
     line-height: 1.6;
 }
 
+.modal-note-fine {
+    font-size: 0.9em;
+    opacity: 0.8;
+    margin-bottom: 24px;
+}
+
 .modal-note-info {
     background: rgba(59, 142, 208, 0.1);
     border-color: rgba(59, 142, 208, 0.28);
@@ -3676,6 +3718,10 @@ textarea {
 
 .modal-email-button {
     min-width: 260px;
+}
+
+#btn-expired-link-ok {
+    min-width: 140px;
 }
 
 .form-status {

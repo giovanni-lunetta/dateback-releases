@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'none'">
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; worker-src 'none'">
     <title>DateBack</title>
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -242,7 +242,7 @@
                                     </div>
 
                                     <div id="transfer-method-section" class="hidden">
-                                        <select id="upload-mode" class="text-input" style="max-width: 240px;" title="Move is coming soon. DateBack currently uses safe copy behavior." aria-label="Transfer method (copy only for now)">
+                                        <select id="upload-mode" class="text-input" title="Move is coming soon. DateBack currently uses safe copy behavior." aria-label="Transfer method (copy only for now)">
                                             <option value="copy">Safe (Copy)</option>
                                             <option value="move" disabled>Move (Coming soon)</option>
                                         </select>
@@ -305,7 +305,7 @@
                 <button id="btn-stop" class="btn btn-danger-outline btn-large hidden">
                     Pause Processing
                 </button>
-                <div id="resume-restart-container" class="button-group hidden" style="margin-top: 0;">
+                <div id="resume-restart-container" class="button-group hidden">
                     <button id="btn-resume-proc" class="btn btn-primary btn-large">
                         Resume Processing
                     </button>
@@ -512,7 +512,7 @@
             </div>
 
             <p id="success-modal-thanks" class="thanks">Thanks for using DateBack!</p>
-            <p class="thanks" style="font-size: 0.85rem; opacity: 0.75; margin-bottom: 0.75rem;">DateBack is free. If it helped you recover memories you thought were lost, it means a lot.</p>
+            <p class="thanks thanks-fine-print">DateBack is free. If it helped you recover memories you thought were lost, it means a lot.</p>
             <div class="bmc-btn-wrap">
                 <a href="https://www.buymeacoffee.com/giovannilunetta" id="link-coffee-success" class="bmc-btn">
                     <span class="bmc-btn-icon">☕</span>
@@ -741,7 +741,7 @@
                 </button>
             </div>
 
-            <div class="modal-buttons" style="margin-top: 16px;">
+            <div class="modal-buttons modal-buttons-top-spaced">
                 <button id="btn-resume-cancel" class="btn btn-secondary">Cancel</button>
             </div>
         </div>
@@ -787,14 +787,14 @@
 
     <!-- Expired Links Modal -->
     <div id="expired-link-modal" class="modal hidden">
-        <div class="modal-content modal-medium" style="text-align: center;">
+        <div class="modal-content modal-medium">
             <h2 id="expired-link-title">⚠️ Download Links Expired</h2>
             <p class="modal-message">Your Snapchat download links are no longer valid (they expire after 7 days).</p>
 
             <div class="modal-section">
-                <p class="modal-subheading" style="margin-bottom: 12px; font-weight: 600; color: var(--text-main);">To
+                <p class="modal-subheading">To
                     fix this:</p>
-                <ol class="modal-list" style="color: var(--text-muted); margin-left: 20px;">
+                <ol class="modal-list">
                     <li>Go to Snapchat's <strong>Download My Data</strong> page</li>
                     <li>Request your data again</li>
                     <li>Wait for the new email and download the ZIP</li>
@@ -802,11 +802,11 @@
                 </ol>
             </div>
 
-            <p class="modal-note" style="font-size: 0.9em; opacity: 0.8; margin-bottom: 24px;">📁 <strong>Note:</strong>
+            <p class="modal-note modal-note-fine">📁 <strong>Note:</strong>
                 Files already processed are safe.</p>
 
-            <div class="modal-buttons" style="display: flex; justify-content: center;">
-                <button id="btn-expired-link-ok" class="btn btn-primary" style="min-width: 140px;">Got it</button>
+            <div class="modal-buttons">
+                <button id="btn-expired-link-ok" class="btn btn-primary">Got it</button>
             </div>
         </div>
     </div>
