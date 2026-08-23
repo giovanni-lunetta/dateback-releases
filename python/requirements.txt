@@ -3,9 +3,9 @@
 # Purpose: Track exact versions for security auditing and reproducible builds
 
 # Image processing
-Pillow==12.2.0
-# CVE Status: Clean (checked 2026-05-14)
-# Previous CVEs (fixed): CVE-2024-28219, CVE-2023-50447, CVE-2026-25990, CVE-2026-40192, CVE-2026-42308, CVE-2026-42309, CVE-2026-42310, CVE-2026-42311
+Pillow==12.3.0
+# CVE Status: Clean (checked 2026-08-23)
+# Previous CVEs (fixed): CVE-2024-28219, CVE-2023-50447, CVE-2026-25990, CVE-2026-40192, CVE-2026-42308, CVE-2026-42309, CVE-2026-42310, CVE-2026-42311, PYSEC-2026-2253, PYSEC-2026-2254, PYSEC-2026-2255, PYSEC-2026-2256, PYSEC-2026-2257, PYSEC-2026-3451, PYSEC-2026-3452, PYSEC-2026-3453, PYSEC-2026-3454, PYSEC-2026-3493, PYSEC-2026-3494, PYSEC-2026-3495, PYSEC-2026-3496
 # License: HPND
 
 # EXIF metadata read/write (lossless in-place patch of the JPEG APP1 segment,
