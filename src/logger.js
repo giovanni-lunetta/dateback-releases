@@ -118,7 +118,7 @@ class Logger {
         str = str.replace(/[A-Z]:\\[^\s]+/g, '<drive-path>');
 
         // Media filenames (privacy - don't expose user's media file names)
-        str = str.replace(/[^\s/\\]+\.(mp4|mov|avi|mkv|jpg|jpeg|png|heic|gif|webp)/gi, '<media-file>');
+        str = str.replace(/[^\s/\\]+\.(mp4|mov|avi|mkv|jpg|jpeg|png|heic|gif|webp|zip)/gi, '<media-file>');
 
         return str;
     }

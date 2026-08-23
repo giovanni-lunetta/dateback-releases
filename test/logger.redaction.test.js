@@ -67,3 +67,10 @@ test('logger redacts camelCase-compound secret keys', () => {
     assert.equal(redacted.cookieValue, '<redacted>');
     assert.equal(redacted.safeCamelKey, 'keep');
 });
+
+test('redactPath redacts .zip export filenames like other media files', () => {
+    const logger = new Logger({ appName: 'DateBack Test' });
+    const redacted = logger.redactPath('Loading /Users/shalyssa/Downloads/mydata~shalyssa123.zip now');
+    assert.ok(!redacted.includes('mydata~shalyssa123.zip'), `expected zip filename to be redacted, got: ${redacted}`);
+    assert.ok(redacted.includes('<media-file>'), `expected <media-file> placeholder, got: ${redacted}`);
+});
