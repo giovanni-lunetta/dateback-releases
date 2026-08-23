@@ -349,6 +349,15 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
         self.assertTrue(psm.is_allowed_download_url("https://snapchat.com/media.jpg"))
         self.assertTrue(psm.is_allowed_download_url("https://accounts.snapchat.com/media.jpg"))
 
+    def test_redirect_allowed_host_suffixes_no_longer_includes_cloudfront(self):
+        self.assertNotIn("cloudfront.net", psm.REDIRECT_ALLOWED_HOST_SUFFIXES)
+        self.assertEqual(psm.REDIRECT_ALLOWED_HOST_SUFFIXES, psm.ALLOWED_HOST_SUFFIXES)
+
+    def test_is_allowed_download_url_rejects_cloudfront_redirect_target(self):
+        self.assertFalse(
+            psm.is_allowed_download_url("https://d123456abcdef.cloudfront.net/media.jpg", psm.REDIRECT_ALLOWED_HOST_SUFFIXES)
+        )
+
     def test_stream_download_to_path_streams_bytes_without_automatic_redirects(self):
         response = FakeResponse(
             chunks=[b"abc", b"def"],

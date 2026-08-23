@@ -56,7 +56,11 @@ expired_link_lock = threading.Lock()  # Thread-safe counter access
 
 # Download URL Security - prevent SSRF and disk exhaustion
 ALLOWED_HOST_SUFFIXES = ("sc-cdn.net", "snapchat.com", "snap-dev.net")  # Snapchat CDNs only
-REDIRECT_ALLOWED_HOST_SUFFIXES = ALLOWED_HOST_SUFFIXES + ("cloudfront.net",)
+# Redirect hops are validated against the same strict Snapchat-only suffix
+# list as the initial request. A broader shared-infrastructure suffix like
+# "cloudfront.net" would let a compromised/open-redirect first hop terminate
+# on any AWS customer's CloudFront distribution, not just Snapchat's CDN.
+REDIRECT_ALLOWED_HOST_SUFFIXES = ALLOWED_HOST_SUFFIXES
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2GB per file limit
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 FFMPEG_TIMEOUT_SECONDS = 180
