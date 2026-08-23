@@ -1013,6 +1013,112 @@ test('retry-corrupted call-shape preserves resolveOrganizerCommand and runOrgani
     }
 });
 
+test('start-processing rejects a concurrent spawn while a job is already running', async () => {
+    const spawnRecorder = makeSpawnRecorder();
+    const tmpZipPath = mkTmpFile('sentinel.zip', 'PK\x03\x04');
+    const tmpOutDir = mkTmpDirReal('dateback-concurrent-guard-');
+
+    withOverrides({
+        validateSender: () => true,
+        validateZipPathForProcessing: allowStartZipPath(tmpZipPath),
+        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
+        resolveAndValidateAutoUploadOptions: async () => ({
+            success: true,
+            options: {
+                autoUploadEnabled: false,
+                normalizedUploadMode: 'copy',
+                resolvedCacheGb: 5,
+                resolvedCacheLowGb: 3,
+                resolvedMaxUploadRetries: 20,
+                providedStagingDir: false,
+                canonicalDestinationDir: null,
+                canonicalStagingDir: null
+            }
+        }),
+        buildOrganizerArgsForStart: () => ['--sentinel-start'],
+        resolveOrganizerCommand: () => ({ command: 'dummy-organizer', args: ['--sentinel-start'], ffmpegPath: '/ffmpeg' }),
+        cleanupOrphanedProcesses: () => { },
+        spawn: spawnRecorder.spawnStub
+    });
+
+    const firstRun = callHandler('start-processing', createAuthorizedEvent(), {
+        zipPath: tmpZipPath,
+        outputDir: tmpOutDir,
+        pauseBetweenBatches: false,
+        resumeMode: 'skip',
+        autoUpload: false
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const firstCall = spawnRecorder.calls.find((c) => c.command === 'dummy-organizer');
+    assert.ok(firstCall, 'expected the first run to actually spawn');
+
+    const secondResult = await callHandler('start-processing', createAuthorizedEvent(), {
+        zipPath: tmpZipPath,
+        outputDir: tmpOutDir,
+        pauseBetweenBatches: false,
+        resumeMode: 'skip',
+        autoUpload: false
+    });
+    assert.equal(secondResult.success, false);
+    assert.match(secondResult.error, /already running/i);
+    assert.equal(
+        spawnRecorder.calls.filter((c) => c.command === 'dummy-organizer').length,
+        1,
+        'a second spawn must not have happened while the first run is still active'
+    );
+
+    firstCall.proc.emit('close', 0);
+    await firstRun;
+    cleanupTmp([tmpZipPath, tmpOutDir]);
+});
+
+test('retry-corrupted rejects a concurrent spawn while a job is already running', async () => {
+    const spawnRecorder = makeSpawnRecorder();
+    const tmpOutDir = mkTmpDirReal('dateback-concurrent-retry-guard-');
+
+    withOverrides({
+        validateSender: () => true,
+        validateAndCanonicalizeOutputDir: () => ({ success: true, canonicalOutputDir: tmpOutDir }),
+        resolveAndValidateAutoUploadOptions: async () => ({
+            success: true,
+            options: {
+                autoUploadEnabled: false,
+                normalizedUploadMode: 'copy',
+                resolvedCacheGb: 5,
+                resolvedCacheLowGb: 3,
+                resolvedMaxUploadRetries: 20,
+                providedStagingDir: false,
+                canonicalDestinationDir: null,
+                canonicalStagingDir: null
+            }
+        }),
+        buildOrganizerArgsForRetry: () => ['--sentinel-retry'],
+        resolveOrganizerCommand: () => ({ command: 'dummy-retry-organizer', args: ['--sentinel-retry'], ffmpegPath: '/ffmpeg' }),
+        fsExistsSync: () => true,
+        spawn: spawnRecorder.spawnStub
+    });
+
+    const firstRun = callHandler('retry-corrupted', createAuthorizedEvent(), { outputDir: tmpOutDir });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const firstCall = spawnRecorder.calls.find((c) => c.command === 'dummy-retry-organizer');
+    assert.ok(firstCall, 'expected the first retry run to actually spawn');
+
+    const secondResult = await callHandler('retry-corrupted', createAuthorizedEvent(), { outputDir: tmpOutDir });
+    assert.equal(secondResult.success, false);
+    assert.match(secondResult.error, /already running/i);
+    assert.equal(
+        spawnRecorder.calls.filter((c) => c.command === 'dummy-retry-organizer').length,
+        1,
+        'a second retry spawn must not have happened while the first run is still active'
+    );
+
+    firstCall.proc.emit('close', 0);
+    await firstRun;
+    cleanupTmp([tmpOutDir]);
+});
+
 test('start-processing session output dir is active during run and cleared after close', async () => {
     const tmpZipPath = mkTmpFile('lifecycle.zip', 'zip');
     const tmpOutDir = mkTmpDirReal('dateback-out-');

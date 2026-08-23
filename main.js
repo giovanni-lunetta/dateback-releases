@@ -2774,6 +2774,9 @@ ipcMain.handle('start-processing', async (event, payload = {}) => {
     if (!validateSenderFn(event)) {
         return { success: false, error: 'Unauthorized sender' };
     }
+    if (organizerProcess) {
+        return { success: false, error: 'A processing job is already running.' };
+    }
     const validateZipPathForProcessingFn = getMainDep('validateZipPathForProcessing', validateZipPathForProcessing);
     const validateOutputDirFn = getMainDep('validateAndCanonicalizeOutputDir', validateAndCanonicalizeOutputDir);
     const resolveAutoUploadOptionsFn = getMainDep('resolveAndValidateAutoUploadOptions', resolveAndValidateAutoUploadOptions);
@@ -2943,6 +2946,9 @@ ipcMain.handle('retry-corrupted', async (event, {
     const validateSenderFn = getMainDep('validateSender', validateSender);
     if (!validateSenderFn(event)) {
         return { success: false, error: 'Unauthorized sender' };
+    }
+    if (organizerProcess) {
+        return { success: false, error: 'A processing job is already running.' };
     }
     const validateOutputDirFn = getMainDep('validateAndCanonicalizeOutputDir', validateAndCanonicalizeOutputDir);
     const resolveAutoUploadOptionsFn = getMainDep('resolveAndValidateAutoUploadOptions', resolveAndValidateAutoUploadOptions);

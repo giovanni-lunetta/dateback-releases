@@ -128,6 +128,7 @@ const multiZipModalButtons = document.getElementById('multi-zip-modal-buttons');
 // State
 let isProcessing = false;
 let startProcessingInFlight = false;
+let retryCorruptedInFlight = false;
 let currentOutputDir = '';
 let currentMemoryCount = 0;
 let hadPartialRun = false;  // Track if user stopped mid-processing
@@ -3558,6 +3559,11 @@ btnViewSummary.addEventListener('click', () => {
 
 // Retry Corrupted Files button
 btnRetryCorrupted.addEventListener('click', async () => {
+    if (retryCorruptedInFlight) {
+        return;
+    }
+    retryCorruptedInFlight = true;
+    btnRetryCorrupted.disabled = true;
     successModal.classList.add('hidden');
     btnRetryCorrupted.classList.add('hidden');
 
@@ -3648,6 +3654,8 @@ btnRetryCorrupted.addEventListener('click', async () => {
         if (!progressSection || !progressSection.classList.contains('needs-attention')) {
             progressBar.classList.add('ready');
         }
+        retryCorruptedInFlight = false;
+        btnRetryCorrupted.disabled = false;
     }
 });
 
