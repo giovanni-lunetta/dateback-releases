@@ -2427,6 +2427,26 @@ btnRestartComplete.addEventListener('click', () => {
 // Stop Processing
 let stoppedByUser = false;
 
+// Poll until processing stops, with a bounded timeout so a hung subprocess
+// or unsettled promise can't leave the UI stuck forever.
+function waitForProcessingToStop(getIsProcessing, onStopped, { intervalMs = 100, timeoutMs = 30000, onTimeout } = {}) {
+    const startedAt = Date.now();
+    const handle = setInterval(() => {
+        if (!getIsProcessing()) {
+            clearInterval(handle);
+            onStopped();
+            return;
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+            clearInterval(handle);
+            if (typeof onTimeout === 'function') {
+                onTimeout();
+            }
+        }
+    }, intervalMs);
+    return handle;
+}
+
 // Stop Confirmation Modal Elements
 const stopConfirmModal = document.getElementById('stop-confirm-modal');
 const btnResume = document.getElementById('btn-resume');
@@ -2492,33 +2512,41 @@ btnConfirmStop.addEventListener('click', async () => {
         progressEta.textContent = 'DateBack is finishing the current cleanup step.';
 
         // Wait for Python to fully exit (indicated by isProcessing becoming false)
-        // This happens in the finally block of startProcessingRoutine
-        const checkCleanupComplete = setInterval(() => {
-            if (!isProcessing) {
-                clearInterval(checkCleanupComplete);
+        // This happens in the finally block of startProcessingRoutine. Bounded so a
+        // hung subprocess can't leave the UI stuck on "Saving progress safely..." forever.
+        waitForProcessingToStop(() => isProcessing, () => {
+            // Cleanup complete - enable buttons
+            btnResumeProc.disabled = false;
+            btnContinueLater.disabled = false;
+            btnRestartProc.disabled = false;
 
-                // Cleanup complete - enable buttons
+            setProgressPhase('Paused', 'paused');
+            progressTextContent.textContent = 'Paused safely';
+            progressEta.textContent = 'Resume when you are ready, or save this run for later.';
+            btnOpenFolder.disabled = false;
+
+            // Hide "Start Over" when either storage mode is selected to prevent accidental deletion.
+            const modeActive = getStorageMode() !== 'NONE';
+            if (modeActive) {
+                btnRestartProc.classList.add('hidden'); // Hide Start Over
+            } else {
+                btnRestartProc.classList.remove('hidden'); // Show Start Over
+            }
+
+            // Show warning/info log
+            appendToLog('\n⚠️ Process paused by user.\n');
+        }, {
+            onTimeout: () => {
                 btnResumeProc.disabled = false;
                 btnContinueLater.disabled = false;
                 btnRestartProc.disabled = false;
-
-                setProgressPhase('Paused', 'paused');
-                progressTextContent.textContent = 'Paused safely';
-                progressEta.textContent = 'Resume when you are ready, or save this run for later.';
-                btnOpenFolder.disabled = false;
-
-                // Hide "Start Over" when either storage mode is selected to prevent accidental deletion.
-                const modeActive = getStorageMode() !== 'NONE';
-                if (modeActive) {
-                    btnRestartProc.classList.add('hidden'); // Hide Start Over
-                } else {
-                    btnRestartProc.classList.remove('hidden'); // Show Start Over
-                }
-
-                // Show warning/info log
-                appendToLog('\n⚠️ Process paused by user.\n');
+                enterNeedsAttentionState({
+                    message: 'Stopping is taking longer than expected.',
+                    hint: 'DateBack may still be finishing a file operation. You can try Resume, or restart the app if this does not clear up.',
+                    showResumeOptions: true
+                });
             }
-        }, 100); // Check every 100ms
+        });
     }
 });
 
@@ -2746,26 +2774,34 @@ btnPauseAfterBatch.addEventListener('click', async () => {
         progressTextContent.textContent = 'Saving progress safely...';
         progressEta.textContent = 'DateBack is finishing cleanup before this run can be resumed.';
 
-        // Wait for Python to fully exit (indicated by isProcessing becoming false)
-        const checkCleanupComplete = setInterval(() => {
-            if (!isProcessing) {
-                clearInterval(checkCleanupComplete);
+        // Wait for Python to fully exit (indicated by isProcessing becoming false).
+        // Bounded so a hung subprocess can't leave the UI stuck forever.
+        waitForProcessingToStop(() => isProcessing, () => {
+            // Cleanup complete - enable buttons
+            btnResumeProc.disabled = false;
+            btnContinueLater.disabled = false;
+            btnRestartProc.disabled = false;
 
-                // Cleanup complete - enable buttons
+            setProgressPhase('Paused', 'paused');
+            progressTextContent.textContent = 'Paused safely';
+            progressEta.textContent = 'Resume when you are ready, or save this run for later.';
+            btnOpenFolder.disabled = false;
+
+            // Pause-after-batch UX: Hide "Start Over" button (since this modal is only for pause-after-batch flow)
+            btnRestartProc.classList.add('hidden');
+            console.log('[Pause-After-Batch] UI updated - showing Resume/Continue Later buttons');
+        }, {
+            onTimeout: () => {
                 btnResumeProc.disabled = false;
                 btnContinueLater.disabled = false;
                 btnRestartProc.disabled = false;
-
-                setProgressPhase('Paused', 'paused');
-                progressTextContent.textContent = 'Paused safely';
-                progressEta.textContent = 'Resume when you are ready, or save this run for later.';
-                btnOpenFolder.disabled = false;
-
-                // Pause-after-batch UX: Hide "Start Over" button (since this modal is only for pause-after-batch flow)
-                btnRestartProc.classList.add('hidden');
-                console.log('[Pause-After-Batch] UI updated - showing Resume/Continue Later buttons');
+                enterNeedsAttentionState({
+                    message: 'Stopping is taking longer than expected.',
+                    hint: 'DateBack may still be finishing a file operation. You can try Resume, or restart the app if this does not clear up.',
+                    showResumeOptions: true
+                });
             }
-        }, 100); // Check every 100ms
+        });
 
     } catch (err) {
         console.error('Error pausing after batch:', err);

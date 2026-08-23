@@ -369,3 +369,68 @@ test('startProcessingRoutine has a synchronous in-flight guard before awaited va
     assert.ok(guardSetIndex < firstAwaitIndex, 'Expected in-flight guard to be set before any await');
     assert.ok(guardClearIndex > guardSetIndex, 'Expected in-flight guard to be cleared after the guarded work');
 });
+
+test('waitForProcessingToStop times out and invokes onTimeout instead of polling forever', async () => {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const waitForProcessingToStopSource = extractNamedFunctionSource(rendererSource, 'waitForProcessingToStop');
+
+    const context = vm.createContext({
+        console: { log() {}, warn() {}, error() {} },
+        setInterval,
+        clearInterval,
+        Date
+    });
+
+    new vm.Script(`
+${waitForProcessingToStopSource}
+this.__waitForProcessingToStop = waitForProcessingToStop;
+`).runInContext(context);
+
+    let stoppedCalls = 0;
+    let timeoutCalls = 0;
+
+    context.__waitForProcessingToStop(
+        () => true, // isProcessing never becomes false
+        () => { stoppedCalls += 1; },
+        { intervalMs: 5, timeoutMs: 20, onTimeout: () => { timeoutCalls += 1; } }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    assert.equal(stoppedCalls, 0, 'onStopped must not fire when isProcessing never clears');
+    assert.equal(timeoutCalls, 1, 'onTimeout must fire exactly once after timeoutMs elapses');
+});
+
+test('waitForProcessingToStop calls onStopped as soon as isProcessing clears, without waiting for timeout', async () => {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const waitForProcessingToStopSource = extractNamedFunctionSource(rendererSource, 'waitForProcessingToStop');
+
+    const context = vm.createContext({
+        console: { log() {}, warn() {}, error() {} },
+        setInterval,
+        clearInterval,
+        Date
+    });
+
+    new vm.Script(`
+${waitForProcessingToStopSource}
+this.__waitForProcessingToStop = waitForProcessingToStop;
+`).runInContext(context);
+
+    let processing = true;
+    let stoppedCalls = 0;
+    let timeoutCalls = 0;
+
+    context.__waitForProcessingToStop(
+        () => processing,
+        () => { stoppedCalls += 1; },
+        { intervalMs: 5, timeoutMs: 5000, onTimeout: () => { timeoutCalls += 1; } }
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    processing = false;
+    await new Promise((resolve) => setTimeout(resolve, 12));
+
+    assert.equal(stoppedCalls, 1);
+    assert.equal(timeoutCalls, 0);
+});
