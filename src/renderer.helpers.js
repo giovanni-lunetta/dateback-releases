@@ -457,7 +457,7 @@
             items.push({
                 type: 'row',
                 label: 'Already Existed (Skipped):',
-                value: stats.duplicates.toLocaleString(),
+                value: (stats.duplicates || 0).toLocaleString(),
                 valueClass: 'orange',
                 isDivider: true
             });
@@ -465,7 +465,7 @@
                 items.push({
                     type: 'note',
                     noteClass: 'info',
-                    text: `ℹ️ Skipped ${stats.duplicates.toLocaleString()} files that already exist in the destination folder.`,
+                    text: `ℹ️ Skipped ${(stats.duplicates || 0).toLocaleString()} files that already exist in the destination folder.`,
                     style: null
                 });
             }

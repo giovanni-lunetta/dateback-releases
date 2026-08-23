@@ -262,7 +262,18 @@ test('showSuccessModal: COMPUTER mode renders non-cloud rows/copy and retry visi
     assert.equal(elements.btnNextStepsGuide.classList.contains('hidden'), false);
     assert.equal(elements.btnRetryCorrupted.classList.contains('hidden'), false);
     assert.equal(elements.btnOpenStagingFolder.classList.contains('hidden'), true);
-    assert.deepEqual(calls.configureNextStepsGuide, [stats]);
+    // showSuccessModal normalizes core numeric fields (defaulting any that are
+    // absent to 0) before passing stats onward, so the object it hands to
+    // configureNextStepsGuide is a superset of the raw input. JSON round-trip
+    // both sides before comparing: the normalized object is constructed
+    // inside the vm-sandboxed realm this test runs showSuccessModal in, so it
+    // has a different (but structurally identical) Object.prototype than a
+    // plain literal built in this file — deepStrictEqual treats those as
+    // unequal even though the values match.
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(calls.configureNextStepsGuide)),
+        [{ ...stats, missing: 0, skipped: 0 }]
+    );
 });
 
 test('showSuccessModal: CLOUD mode success renders cloud delivery rows and single cloud subtitle behavior', () => {
@@ -373,4 +384,19 @@ test('showPartialSummaryModal: paused summary avoids completion copy and hides n
         'Total in Export:',
         'Remaining:'
     ]);
+});
+
+test('showSuccessModal: tolerates an undefined stats payload without throwing', () => {
+    const { context, elements } = buildSuccessModalContext();
+
+    // A malformed/incomplete 'complete' progress-update IPC payload (e.g.
+    // {"type":"complete"} with no "stats" field) must not crash the handler.
+    assert.doesNotThrow(() => runShowSuccessModal(context, undefined));
+    assert.equal(elements.successModal.classList.contains('hidden'), false);
+    assert.ok(elements.modalTitle.textContent.length > 0, 'a fallback headline should still be set');
+});
+
+test('showSuccessModal: tolerates a null stats payload without throwing', () => {
+    const { context } = buildSuccessModalContext();
+    assert.doesNotThrow(() => runShowSuccessModal(context, null));
 });

@@ -277,3 +277,54 @@ this.__handleProgressUpdate = handleProgressUpdate;
 
     assert.deepEqual(successModalStats, { success: 5, duplicates: 0, errors: 0 });
 });
+
+test('handleProgressUpdate progress branch tolerates missing/non-numeric count and total', () => {
+    const rendererSource = fs.readFileSync(path.resolve(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+    const handleProgressUpdateSource = extractNamedFunctionSource(rendererSource, 'handleProgressUpdate');
+
+    const progressTextContent = createElement();
+    const progressEta = createElement();
+    const progressFill = createElement();
+
+    const context = vm.createContext({
+        Date,
+        console: { log() {}, warn() {}, error() {} },
+        progressTextContent,
+        progressEta,
+        progressFill,
+        etaTimestamps: [],
+        lastProgressCount: 0,
+        lastProgressTime: 0,
+        stoppedByUser: false,
+        setProgressPhase: () => {},
+        setProgressStatusVisibility: () => {},
+        formatTimeRemaining: (seconds) => `${seconds} sec`,
+        showBatchPauseModal: () => {},
+        lastUploadUiUpdateAt: 0,
+        formatBytes: (value) => `${value}B`,
+        enterNeedsAttentionState: () => {},
+        enterRuntimeDiskFullState: () => {},
+        showSuccessModal: () => {}
+    });
+
+    new vm.Script(`
+${handleProgressUpdateSource}
+this.__handleProgressUpdate = handleProgressUpdate;
+`).runInContext(context);
+
+    // total missing entirely
+    assert.doesNotThrow(() => context.__handleProgressUpdate({ type: 'progress', count: 5 }));
+    assert.equal(progressFill.style.width, '0%');
+
+    // total is zero
+    assert.doesNotThrow(() => context.__handleProgressUpdate({ type: 'progress', count: 0, total: 0 }));
+    assert.equal(progressFill.style.width, '0%');
+});
+
+// Note: handleProgressUpdate's 'complete' branch just forwards data.stats to
+// showSuccessModal unchanged (undefined and all) — the actual guard against a
+// missing stats field lives inside showSuccessModal itself, and is covered by
+// "showSuccessModal: tolerates an undefined stats payload without throwing"
+// in test/renderer.successModal.characterization.test.js, which exercises the
+// real function (not a mock), since that's where the real DOM-manipulation
+// harness for showSuccessModal already exists.

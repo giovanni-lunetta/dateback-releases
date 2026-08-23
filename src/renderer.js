@@ -3108,7 +3108,8 @@ function formatTimeRemaining(seconds) {
 // Progress callback from Python
 function handleProgressUpdate(data) {
     if (data.type === 'progress') {
-        const { count, total } = data;
+        const count = Number.isFinite(data.count) ? data.count : 0;
+        const total = Number.isFinite(data.total) ? data.total : 0;
 
         // Handle verification phase (Fast Pass check)
         if (count === -1) {
@@ -3126,7 +3127,7 @@ function handleProgressUpdate(data) {
             return;
         }
 
-        const percent = (count / total) * 100;
+        const percent = total > 0 ? (count / total) * 100 : 0;
         progressFill.style.width = `${percent}%`;
         setProgressPhase('Processing', 'processing');
         if (typeof setProgressStatusVisibility === 'function') {
@@ -3307,6 +3308,22 @@ if (window.api.onUpdateAvailable) {
 let lastStats = null;
 
 function showSuccessModal(stats) {
+    // Guard against a malformed/incomplete IPC 'complete' payload (e.g. no
+    // "stats" field at all, or one missing core counters). buildSuccessModalCopy
+    // and buildSuccessModalRows read these core fields directly (not
+    // defensively) in several places, so a missing field there would throw.
+    // Real values (spread last) always win over these zero defaults.
+    const rawStats = (stats && typeof stats === 'object') ? stats : {};
+    stats = {
+        success: 0,
+        duplicates: 0,
+        errors: 0,
+        images: 0,
+        videos: 0,
+        missing: 0,
+        skipped: 0,
+        ...rawStats
+    };
     lastStats = stats; // Store for View Summary button
     if (typeof clearRecoveryUi === 'function') {
         clearRecoveryUi();
