@@ -16,6 +16,15 @@ const { app } = require('electron');
 
 const SECRET_KEY_PATTERN = /(^|_|-)(password|passwd|pwd|token|secret|api.?key|access.?token|refresh.?token|authorization|auth|session|cookie|signature|private.?key)(_|-|$)/i;
 
+// SECRET_KEY_PATTERN requires a `_`/`-`/boundary immediately around each
+// sensitive word, which camelCase compounds (authToken, sessionToken,
+// clientSecret, ...) don't have. Insert an underscore at each lower-to-upper
+// camelCase transition before re-testing, so "authToken" is checked as
+// "auth_Token" — matching the same boundary rules snake_case keys already get.
+function insertCamelCaseBoundaries(key) {
+    return String(key).replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+}
+
 // Constants
 const MAX_FIELD_SIZE = 50000; // 50k characters per field
 const MAX_LOG_FILE_SIZE = 5 * 1024 * 1024; // 5MB per log file
@@ -145,7 +154,7 @@ class Logger {
         const redacted = {};
         for (const [key, value] of Object.entries(obj)) {
             // Don't log these sensitive keys
-            if (key === 'key' || SECRET_KEY_PATTERN.test(key)) {
+            if (key === 'key' || SECRET_KEY_PATTERN.test(key) || SECRET_KEY_PATTERN.test(insertCamelCaseBoundaries(key))) {
                 redacted[key] = '<redacted>';
             } else {
                 redacted[key] = this.redactObject(value);

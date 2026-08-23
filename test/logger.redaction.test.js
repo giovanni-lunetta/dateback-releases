@@ -46,3 +46,24 @@ test('logger redacts common secret key variants case-insensitively', () => {
     assert.equal(redacted.key, '<redacted>');
     assert.equal(redacted.safe, 'keep');
 });
+
+test('logger redacts camelCase-compound secret keys', () => {
+    const logger = new Logger({ appName: 'DateBack Test' });
+    const redacted = logger.redactObject({
+        authToken: '1',
+        sessionToken: '2',
+        clientSecret: '3',
+        bearerToken: '4',
+        idToken: '5',
+        cookieValue: '6',
+        safeCamelKey: 'keep'
+    });
+
+    assert.equal(redacted.authToken, '<redacted>');
+    assert.equal(redacted.sessionToken, '<redacted>');
+    assert.equal(redacted.clientSecret, '<redacted>');
+    assert.equal(redacted.bearerToken, '<redacted>');
+    assert.equal(redacted.idToken, '<redacted>');
+    assert.equal(redacted.cookieValue, '<redacted>');
+    assert.equal(redacted.safeCamelKey, 'keep');
+});
