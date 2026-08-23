@@ -3250,7 +3250,9 @@ function handleProgressUpdate(data) {
         etaTimestamps = [];
         lastProgressCount = 0;
         lastProgressTime = 0;
-        showSuccessModal(data.stats);
+        if (!stoppedByUser) {
+            showSuccessModal(data.stats);
+        }
     }
 }
 
