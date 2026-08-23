@@ -8,6 +8,12 @@ Pillow==12.2.0
 # Previous CVEs (fixed): CVE-2024-28219, CVE-2023-50447, CVE-2026-25990, CVE-2026-40192, CVE-2026-42308, CVE-2026-42309, CVE-2026-42310, CVE-2026-42311
 # License: HPND
 
+# EXIF metadata read/write (lossless in-place patch of the JPEG APP1 segment,
+# no pixel decode/recompress needed)
+piexif==1.1.3
+# CVE Status: Clean (checked 2026-08-23)
+# License: MIT
+
 # HTTP client for downloading from Snapchat CDN
 requests==2.33.0
 # CVE Status: Clean (checked 2026-05-14)

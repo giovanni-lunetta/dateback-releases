@@ -80,6 +80,10 @@ Requests - Apache License 2.0
   Copyright 2019 Kenneth Reitz
   https://github.com/psf/requests
 
+piexif - MIT License
+  Copyright (c) hMatoba
+  https://github.com/hMatoba/Piexif
+
 ================================================================================
 
 For questions or source code requests, contact:

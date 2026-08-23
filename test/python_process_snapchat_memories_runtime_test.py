@@ -8,10 +8,12 @@ import unittest
 import zipfile
 import contextlib
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 import requests
+import piexif
 from PIL import Image
 
 
@@ -274,6 +276,203 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             # this check *before* creating the directory instead of after.
             with self.assertRaises(ValueError):
                 zip_safety.ensure_no_symlink_ancestor(symlink_path, extract_dir, is_dir_target=True)
+
+    def test_write_jpeg_exif_date_sets_original_and_digitized_tags(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+        expected = b"2026:02:03 17:35:01"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            jpeg_path = os.path.join(temp_dir, "memory.jpg")
+            Image.new("RGB", (8, 8), (10, 20, 30)).save(jpeg_path, format="JPEG")
+
+            psm.write_jpeg_exif_date(jpeg_path, ts_epoch)
+
+            exif_dict = piexif.load(jpeg_path)
+            self.assertEqual(exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal], expected)
+            self.assertEqual(exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized], expected)
+            self.assertEqual(exif_dict["0th"][piexif.ImageIFD.DateTime], expected)
+
+    def test_write_jpeg_exif_date_ignores_non_jpeg_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            png_path = os.path.join(temp_dir, "memory.png")
+            Image.new("RGB", (8, 8), (1, 2, 3)).save(png_path, format="PNG")
+            original_bytes = Path(png_path).read_bytes()
+
+            # Must not raise, and must not touch a file it doesn't know how to patch.
+            psm.write_jpeg_exif_date(png_path, datetime.now(tz=timezone.utc).timestamp())
+
+            self.assertEqual(Path(png_path).read_bytes(), original_bytes)
+
+    def test_write_jpeg_exif_date_does_not_raise_on_corrupted_jpeg(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_jpeg_path = os.path.join(temp_dir, "corrupted.jpg")
+            Path(fake_jpeg_path).write_bytes(b"not actually a jpeg")
+
+            try:
+                psm.write_jpeg_exif_date(fake_jpeg_path, datetime.now(tz=timezone.utc).timestamp())
+            except Exception as error:  # pragma: no cover - failure path under test
+                self.fail(f"write_jpeg_exif_date must be best-effort, but raised: {error}")
+
+    def test_write_jpeg_exif_date_noop_when_ts_epoch_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            jpeg_path = os.path.join(temp_dir, "memory.jpg")
+            Image.new("RGB", (8, 8), (4, 5, 6)).save(jpeg_path, format="JPEG")
+            original_bytes = Path(jpeg_path).read_bytes()
+
+            psm.write_jpeg_exif_date(jpeg_path, None)
+
+            self.assertEqual(Path(jpeg_path).read_bytes(), original_bytes)
+
+    def test_stamp_video_creation_time_remuxes_with_metadata_flag(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_path = os.path.join(temp_dir, "memory.mp4")
+            Path(video_path).write_bytes(b"original-video-bytes")
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                self.assertEqual(timeout, psm.FFMPEG_TIMEOUT_SECONDS)
+                Path(cmd[-1]).write_bytes(b"remuxed-video-bytes")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg) as run_mock:
+                psm.stamp_video_creation_time(video_path, ts_epoch)
+
+            cmd = run_mock.call_args.args[0]
+            self.assertIn("-c", cmd)
+            self.assertEqual(cmd[cmd.index("-c") + 1], "copy")
+            self.assertIn("-metadata", cmd)
+            self.assertEqual(cmd[cmd.index("-metadata") + 1], "creation_time=2026-02-03T17:35:01.000000Z")
+            self.assertEqual(Path(video_path).read_bytes(), b"remuxed-video-bytes")
+
+    def test_stamp_video_creation_time_leaves_original_untouched_when_ffmpeg_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_path = os.path.join(temp_dir, "memory.mp4")
+            Path(video_path).write_bytes(b"original-video-bytes")
+
+            def failing_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                raise psm.subprocess.CalledProcessError(1, cmd, stderr=b"boom")
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=failing_ffmpeg):
+                try:
+                    psm.stamp_video_creation_time(video_path, datetime.now(tz=timezone.utc).timestamp())
+                except Exception as error:  # pragma: no cover - failure path under test
+                    self.fail(f"stamp_video_creation_time must be best-effort, but raised: {error}")
+
+            # Original file must survive untouched, and no leftover temp file.
+            self.assertEqual(Path(video_path).read_bytes(), b"original-video-bytes")
+            leftovers = [name for name in os.listdir(temp_dir) if name != "memory.mp4"]
+            self.assertEqual(leftovers, [])
+
+    def test_stamp_video_creation_time_ignores_non_mp4_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            other_path = os.path.join(temp_dir, "memory.mov")
+            Path(other_path).write_bytes(b"original-bytes")
+
+            with mock.patch.object(psm.subprocess, "run") as run_mock:
+                psm.stamp_video_creation_time(other_path, datetime.now(tz=timezone.utc).timestamp())
+
+            run_mock.assert_not_called()
+            self.assertEqual(Path(other_path).read_bytes(), b"original-bytes")
+
+    def test_stamp_video_creation_time_noop_when_ts_epoch_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_path = os.path.join(temp_dir, "memory.mp4")
+            Path(video_path).write_bytes(b"original-bytes")
+
+            with mock.patch.object(psm.subprocess, "run") as run_mock:
+                psm.stamp_video_creation_time(video_path, None)
+
+            run_mock.assert_not_called()
+
+    def test_process_top_level_overlay_sibling_video_merge_bakes_metadata_into_ffmpeg_cmd(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main_path = os.path.join(temp_dir, "main.mp4")
+            Path(main_path).write_bytes(b"fake-video")
+            overlay_path = os.path.join(temp_dir, "overlay.png")
+            Path(overlay_path).write_bytes(self._image_bytes((0, 0, 255, 128)))
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                Path(cmd[-1]).write_bytes(b"merged-video")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg) as run_mock:
+                result = psm.process_top_level_overlay_sibling(
+                    main_path, overlay_path, output_path, ts_epoch, media_type="Video"
+                )
+
+            self.assertEqual(result["status"], "Success")
+            cmd = run_mock.call_args.args[0]
+            self.assertIn("-metadata", cmd)
+            self.assertEqual(cmd[cmd.index("-metadata") + 1], "creation_time=2026-02-03T17:35:01.000000Z")
+            # Exactly one ffmpeg call: the metadata rides along on the merge
+            # itself, so there must be no separate remux pass afterward.
+            self.assertEqual(run_mock.call_count, 1)
+
+    def test_process_top_level_overlay_sibling_image_merge_writes_exif_date(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main_path = os.path.join(temp_dir, "main.jpg")
+            Image.new("RGB", (8, 8), (200, 0, 0)).save(main_path, format="JPEG")
+            overlay_path = os.path.join(temp_dir, "overlay.png")
+            Path(overlay_path).write_bytes(self._image_bytes((0, 0, 255, 128)))
+            output_path = os.path.join(temp_dir, "output.jpg")
+
+            result = psm.process_top_level_overlay_sibling(
+                main_path, overlay_path, output_path, ts_epoch, media_type="Photo"
+            )
+
+            self.assertEqual(result["status"], "Success")
+            exif_dict = piexif.load(output_path)
+            self.assertEqual(
+                exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal],
+                b"2026:02:03 17:35:01"
+            )
+
+    def test_process_top_level_overlay_sibling_fallback_still_stamps_video_metadata(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main_path = os.path.join(temp_dir, "main.mp4")
+            Path(main_path).write_bytes(b"fake-video")
+            # A corrupted overlay path makes normalize_overlay_image_for_ffmpeg
+            # raise, forcing the exception/fallback (main-only) branch.
+            overlay_path = os.path.join(temp_dir, "overlay.png")
+            Path(overlay_path).write_bytes(b"not-a-real-image")
+            output_path = os.path.join(temp_dir, "output.mp4")
+
+            remux_calls = []
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                remux_calls.append(cmd)
+                Path(cmd[-1]).write_bytes(b"remuxed-video-bytes")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg):
+                result = psm.process_top_level_overlay_sibling(
+                    main_path, overlay_path, output_path, ts_epoch, media_type="Video"
+                )
+
+            self.assertEqual(result["status"], "Success")
+            self.assertIn("Overlay Merge Failed", result["reason"])
+            # The fallback path is a raw copy (no ffmpeg merge happened), so
+            # the metadata can only have been set by the post-hoc remux call.
+            self.assertEqual(len(remux_calls), 1)
+            self.assertIn("-metadata", remux_calls[0])
+            self.assertEqual(
+                remux_calls[0][remux_calls[0].index("-metadata") + 1],
+                "creation_time=2026-02-03T17:35:01.000000Z"
+            )
+            self.assertEqual(Path(output_path).read_bytes(), b"remuxed-video-bytes")
 
     def test_emit_runtime_disk_full_classifies_staging_scope(self):
         events = []
@@ -983,6 +1182,154 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
             with Image.open(output_path) as img:
                 self.assertEqual(img.convert("RGB").getpixel((0, 0)), (255, 0, 0))
 
+    def test_process_zip_image_writes_exif_date_regardless_of_overlay_path(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "plain.zip"
+            output_path = Path(temp_dir) / "out" / "exif_memory.jpg"
+            output_path.parent.mkdir()
+            jpeg_buf = io.BytesIO()
+            Image.new("RGB", (8, 8), (255, 0, 0)).save(jpeg_buf, format="JPEG")
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("main.jpg", jpeg_buf.getvalue())
+
+            with mock.patch.object(psm, "TEMP_DIR", str(Path(temp_dir) / "tmp")):
+                result = psm.process_zip(str(zip_path), str(output_path), ts_epoch)
+
+            self.assertEqual(result["status"], "Success")
+            exif_dict = piexif.load(str(output_path))
+            self.assertEqual(
+                exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal],
+                b"2026:02:03 17:35:01"
+            )
+
+    def test_process_zip_video_merge_bakes_metadata_into_ffmpeg_cmd(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "video_overlay.zip"
+            output_path = Path(temp_dir) / "out" / "merged_memory.mp4"
+            output_path.parent.mkdir()
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("main.mp4", b"fake-video")
+                zf.writestr("overlay.png", self._image_bytes((0, 0, 255, 128)))
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                Path(cmd[-1]).write_bytes(b"merged-video")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm, "TEMP_DIR", str(Path(temp_dir) / "tmp")), \
+                 mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg) as run_mock:
+                result = psm.process_zip(str(zip_path), str(output_path), ts_epoch)
+
+            self.assertEqual(result["status"], "Success")
+            self.assertIn("Video Merge", result["reason"])
+            cmd = run_mock.call_args.args[0]
+            self.assertIn("-metadata", cmd)
+            self.assertEqual(cmd[cmd.index("-metadata") + 1], "creation_time=2026-02-03T17:35:01.000000Z")
+            self.assertEqual(run_mock.call_count, 1)
+
+    def test_process_zip_video_no_overlay_still_stamps_creation_time(self):
+        recovered_dt = datetime(2026, 2, 3, 17, 35, 1, tzinfo=timezone.utc)
+        ts_epoch = recovered_dt.timestamp()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            zip_path = Path(temp_dir) / "plain_video.zip"
+            output_path = Path(temp_dir) / "out" / "plain_memory.mp4"
+            output_path.parent.mkdir()
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("main.mp4", b"fake-video")
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                Path(cmd[-1]).write_bytes(b"remuxed-video-bytes")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm, "TEMP_DIR", str(Path(temp_dir) / "tmp")), \
+                 mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg) as run_mock:
+                result = psm.process_zip(str(zip_path), str(output_path), ts_epoch)
+
+            self.assertEqual(result["status"], "Success")
+            self.assertIn("Video Extract", result["reason"])
+            run_mock.assert_called_once()
+            cmd = run_mock.call_args.args[0]
+            self.assertIn("-metadata", cmd)
+            self.assertEqual(cmd[cmd.index("-metadata") + 1], "creation_time=2026-02-03T17:35:01.000000Z")
+            self.assertEqual(Path(output_path).read_bytes(), b"remuxed-video-bytes")
+
+    def test_process_from_zip_top_level_plain_image_gets_exif_date(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            image_id = "33333333-3333-4333-8333-333333333333"
+            memories = [
+                {
+                    "Date": "2026-02-03 17:35:01 UTC",
+                    "Media Type": "Image",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            jpeg_buf = io.BytesIO()
+            Image.new("RGB", (8, 8), (9, 9, 9)).save(jpeg_buf, format="JPEG")
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                image_info = zipfile.ZipInfo(f"memories/2026-02-03_{image_id}-main.jpg")
+                image_info.date_time = (2026, 2, 3, 17, 35, 0)
+                zf.writestr(image_info, jpeg_buf.getvalue())
+
+            stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            output_file = Path(stats["processed_dir"]) / "Batch_01" / "2026-02-03_17-35-01.jpg"
+            self.assertTrue(output_file.exists())
+            exif_dict = piexif.load(str(output_file))
+            self.assertEqual(
+                exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal],
+                b"2026:02:03 17:35:01"
+            )
+
+    def test_process_from_zip_top_level_plain_video_gets_creation_time_stamped(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_root = Path(temp_dir) / "output"
+            output_root.mkdir()
+            zip_path = Path(temp_dir) / "mydata~1700000000000.zip"
+            video_id = "44444444-4444-4444-8444-444444444444"
+            memories = [
+                {
+                    "Date": "2026-02-03 17:35:01 UTC",
+                    "Media Type": "Video",
+                    "Download Link": "",
+                    "Media Download Url": "",
+                }
+            ]
+
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr("json/memories_history.json", json.dumps({"Saved Media": memories}))
+                video_info = zipfile.ZipInfo(f"memories/2026-02-03_{video_id}-main.mp4")
+                video_info.date_time = (2026, 2, 3, 17, 35, 0)
+                zf.writestr(video_info, b"fake-video-bytes")
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                Path(cmd[-1]).write_bytes(b"remuxed-video-bytes")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg) as run_mock:
+                stats = psm.process_from_zip(str(zip_path), output_root=str(output_root))
+
+            self.assertEqual(stats["success"], 1)
+            output_file = Path(stats["processed_dir"]) / "Batch_01" / "2026-02-03_17-35-01.mp4"
+            self.assertEqual(output_file.read_bytes(), b"remuxed-video-bytes")
+            run_mock.assert_called_once()
+            cmd = run_mock.call_args.args[0]
+            self.assertIn("-metadata", cmd)
+            self.assertEqual(cmd[cmd.index("-metadata") + 1], "creation_time=2026-02-03T17:35:01.000000Z")
+
     def test_save_error_report_redacts_query_strings_from_human_readable_output(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             corrupted_dir = Path(temp_dir) / "corrupted"
@@ -1007,6 +1354,37 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
 
             expected = psm.datetime(2021, 5, 28, 20, 50, 7, tzinfo=psm.timezone.utc).timestamp()
             self.assertEqual(int(target_path.stat().st_mtime), int(expected))
+
+    def test_apply_retry_timestamp_also_writes_jpeg_exif_date(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = Path(temp_dir) / "retry.jpg"
+            Image.new("RGB", (8, 8), (7, 7, 7)).save(target_path, format="JPEG")
+
+            psm.apply_retry_timestamp(str(target_path), "2026-02-03 17:35:01 UTC")
+
+            exif_dict = piexif.load(str(target_path))
+            self.assertEqual(
+                exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal],
+                b"2026:02:03 17:35:01"
+            )
+
+    def test_apply_retry_timestamp_also_stamps_video_creation_time(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_path = Path(temp_dir) / "retry.mp4"
+            target_path.write_bytes(b"original-video-bytes")
+
+            def fake_ffmpeg(cmd, check, stdout, stderr, timeout=None):
+                Path(cmd[-1]).write_bytes(b"remuxed-video-bytes")
+                return mock.Mock(returncode=0)
+
+            with mock.patch.object(psm.subprocess, "run", side_effect=fake_ffmpeg) as run_mock:
+                psm.apply_retry_timestamp(str(target_path), "2026-02-03 17:35:01 UTC")
+
+            run_mock.assert_called_once()
+            cmd = run_mock.call_args.args[0]
+            self.assertIn("-metadata", cmd)
+            self.assertEqual(cmd[cmd.index("-metadata") + 1], "creation_time=2026-02-03T17:35:01.000000Z")
+            self.assertEqual(target_path.read_bytes(), b"remuxed-video-bytes")
 
     def test_process_from_zip_skips_non_object_saved_media_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:

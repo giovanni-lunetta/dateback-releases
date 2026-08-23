@@ -9,6 +9,7 @@ from requests.adapters import HTTPAdapter
 import secrets  # For secure random temp file names
 from datetime import datetime, timezone, timedelta
 from PIL import Image
+import piexif
 import mimetypes
 import time
 import threading
@@ -1127,6 +1128,82 @@ def atomic_copy_file(src_path, dst_path):
                 pass
 
 
+def recovered_datetime(ts_epoch):
+    """Reconstruct the original Snapchat wall-clock datetime from ts_epoch.
+
+    ts_epoch is produced elsewhere as dt.replace(tzinfo=timezone.utc).timestamp()
+    where dt is the raw (UTC-labeled) datetime parsed from Snapchat's export
+    JSON -- the same values already used for the output filename. Converting
+    back through timezone.utc is the exact inverse, so this always returns
+    the same wall-clock values as the filename, keeping filename/file-dates/
+    EXIF/video-metadata all in agreement.
+    """
+    return datetime.fromtimestamp(ts_epoch, tz=timezone.utc)
+
+
+def write_jpeg_exif_date(path, ts_epoch):
+    """Best-effort: stamp DateTimeOriginal/DateTimeDigitized/DateTime into a
+    JPEG's EXIF so photo apps (which sort by EXIF capture date, not filesystem
+    dates) show memories on their real date. Patches the EXIF segment in
+    place -- no pixel decode/recompress, so no quality loss and negligible
+    cost even across large batches. Never raises: metadata is best-effort and
+    must not block saving the memory itself.
+    """
+    if not ts_epoch:
+        return
+    if not path.lower().endswith((".jpg", ".jpeg")):
+        return
+
+    exif_date = recovered_datetime(ts_epoch).strftime("%Y:%m:%d %H:%M:%S").encode("ascii")
+
+    try:
+        try:
+            exif_dict = piexif.load(path)
+        except Exception:
+            exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+        exif_dict.setdefault("0th", {})[piexif.ImageIFD.DateTime] = exif_date
+        exif_dict.setdefault("Exif", {})[piexif.ExifIFD.DateTimeOriginal] = exif_date
+        exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exif_date
+        piexif.insert(piexif.dump(exif_dict), path)
+    except Exception:
+        pass
+
+
+def stamp_video_creation_time(path, ts_epoch):
+    """Best-effort: remux an MP4's container metadata so its creation_time
+    matches the recovered memory date -- photo apps read this (not filesystem
+    dates) to sort/order videos, same as EXIF for images. Uses '-c copy' so
+    this is a lossless stream copy (no re-encode), just a container rewrite.
+    Never raises: metadata is best-effort and must not block saving the
+    memory itself; on any failure the original file is left untouched.
+    """
+    if not ts_epoch:
+        return
+    if not path.lower().endswith(".mp4"):
+        return
+
+    creation_time = recovered_datetime(ts_epoch).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    temp_output = temp_output_path_with_extension(path)
+    cmd = [
+        FFMPEG_PATH, '-y',
+        '-i', path,
+        '-c', 'copy',
+        '-metadata', f'creation_time={creation_time}',
+        temp_output
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT_SECONDS)
+        os.replace(temp_output, path)
+    except Exception:
+        pass
+    finally:
+        if os.path.exists(temp_output):
+            try:
+                os.remove(temp_output)
+            except OSError:
+                pass
+
+
 def normalize_overlay_image_for_ffmpeg(overlay_path):
     """Convert overlay artwork to a static PNG before ffmpeg reads it.
 
@@ -1407,6 +1484,10 @@ def parse_snapchat_utc_timestamp(date_str):
 def apply_retry_timestamp(path_value, date_str):
     ts_epoch = parse_snapchat_utc_timestamp(date_str)
     os.utime(path_value, (ts_epoch, ts_epoch))
+    if path_value.lower().endswith((".mp4", ".mov", ".m4v")):
+        stamp_video_creation_time(path_value, ts_epoch)
+    else:
+        write_jpeg_exif_date(path_value, ts_epoch)
     return ts_epoch
 
 
@@ -2161,6 +2242,7 @@ def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_e
     output_ext = os.path.splitext(final_output)[1].lower()
     is_video = normalize_media_kind(media_type) == "Video" or main_ext in (".mp4", ".mov", ".m4v") or output_ext in (".mp4", ".mov", ".m4v")
     normalized_overlay = None
+    video_metadata_already_set = False
 
     try:
         if is_video:
@@ -2173,8 +2255,12 @@ def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_e
                 '-filter_complex', '[1:v][0:v]scale2ref[ov][base];[base][ov]overlay=0:0:shortest=1',
                 '-c:a', 'copy',
                 '-shortest',
-                temp_output
             ]
+            if ts_epoch:
+                creation_time = recovered_datetime(ts_epoch).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+                cmd += ['-metadata', f'creation_time={creation_time}']
+                video_metadata_already_set = True
+            cmd.append(temp_output)
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT_SECONDS)
             os.replace(temp_output, final_output)
             result_msg = "Success (Video Overlay Merge)"
@@ -2200,6 +2286,7 @@ def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_e
                 pass
         atomic_copy_file(main_path, final_output)
         result_msg = f"Success (Overlay Merge Failed - Main Saved: {str(e)})"
+        video_metadata_already_set = False
     finally:
         if normalized_overlay and os.path.exists(normalized_overlay):
             try:
@@ -2212,6 +2299,11 @@ def process_top_level_overlay_sibling(main_path, overlay_path, output_path, ts_e
             os.utime(final_output, (ts_epoch, ts_epoch))
         except (OSError, IOError):
             pass
+        if is_video:
+            if not video_metadata_already_set:
+                stamp_video_creation_time(final_output, ts_epoch)
+        else:
+            write_jpeg_exif_date(final_output, ts_epoch)
 
     try:
         if os.path.getsize(final_output) <= 0:
@@ -2267,6 +2359,7 @@ def process_zip(zip_path, output_path, ts_epoch=None):
             reserved_output = final_output
 
             result_msg = ""
+            video_metadata_already_set = False
             if overlay_file:
                 temp_output = temp_output_path_with_extension(final_output)
                 normalized_overlay = None
@@ -2280,8 +2373,12 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                         '-filter_complex', "[1:v][0:v]scale2ref[ov][base];[base][ov]overlay=0:0:shortest=1",
                         '-c:a', 'copy',
                         '-shortest',
-                        temp_output  # Write to temp first
                     ]
+                    if ts_epoch:
+                        creation_time = recovered_datetime(ts_epoch).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+                        cmd += ['-metadata', f'creation_time={creation_time}']
+                        video_metadata_already_set = True
+                    cmd.append(temp_output)  # Write to temp first
                     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT_SECONDS)
                     os.replace(temp_output, final_output)
                     result_msg = "Success (Video Merge)"
@@ -2295,6 +2392,7 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                     # Fallback still uses atomic write
                     atomic_copy_file(main_file, final_output)
                     result_msg = "Success (Video Extract - No Overlay)"
+                    video_metadata_already_set = False
                 finally:
                     if normalized_overlay and os.path.exists(normalized_overlay):
                         try:
@@ -2310,6 +2408,8 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                     os.utime(final_output, (ts_epoch, ts_epoch))
                 except (OSError, IOError):
                     pass
+                if not video_metadata_already_set:
+                    stamp_video_creation_time(final_output, ts_epoch)
 
             try:
                 if os.path.getsize(final_output) <= 0:
@@ -2365,6 +2465,7 @@ def process_zip(zip_path, output_path, ts_epoch=None):
                     os.utime(final_output, (ts_epoch, ts_epoch))
                 except (OSError, IOError):
                     pass
+                write_jpeg_exif_date(final_output, ts_epoch)
 
             try:
                 if os.path.getsize(final_output) <= 0:
@@ -2886,6 +2987,10 @@ def process_memory(memory, index, progress_callback=None, zip_file=None, zip_loc
                 os.utime(output_path, (ts_epoch, ts_epoch))
             except (OSError, IOError):
                 pass
+            if normalize_media_kind(media_type) == "Video" or ext.lower() in (".mp4", ".mov", ".m4v"):
+                stamp_video_creation_time(output_path, ts_epoch)
+            else:
+                write_jpeg_exif_date(output_path, ts_epoch)
 
         try:
             if os.path.getsize(output_path) <= 0:
