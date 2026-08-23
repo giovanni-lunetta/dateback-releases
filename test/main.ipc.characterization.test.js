@@ -1797,8 +1797,8 @@ test('resume-batch happy path writes signal file in active session dir', async (
     cleanupTmp([tmpOutDir, tmpZipPath]);
 });
 
-test('select-folder returns null for unauthorized sender', async () => {
-    await expectUnauthorized('select-folder', undefined, null);
+test('select-folder rejects unauthorized sender', async () => {
+    await expectUnauthorized('select-folder', undefined, { success: false, error: 'Unauthorized sender' });
 });
 
 test('select-folder returns null when no folder is selected', async () => {

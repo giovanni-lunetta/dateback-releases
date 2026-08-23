@@ -2476,7 +2476,7 @@ ipcMain.handle('organize-zip-set', async (event, { zipPaths, destFolderName } = 
 
 // Open folder dialog for purpose-specific folder selection
 ipcMain.handle('select-folder', async (event, purpose = 'output') => {
-    const unauthorizedResponse = enforceAuthorizedSender(event, null);
+    const unauthorizedResponse = enforceAuthorizedSender(event, { success: false, error: 'Unauthorized sender' });
     if (unauthorizedResponse !== null) {
         return unauthorizedResponse;
     }
