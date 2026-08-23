@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.4] - 2026-08-23
+### Fixed
+- Saved memories now carry their real date in the media file itself (JPEG EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime`, and the MP4 `creation_time` container tag), not just in the filename and file-system dates — apps like Photos read this embedded date for sorting, so memories now land in the correct place instead of under today's date. Covers every processing path, including Retry Corrupted Files.
+- `select-folder`'s sender-authorization check was dead code due to a sentinel collision (`null` used as both the authorized and rejected-sender return value); an unauthorized sender could reach the folder picker exactly as if it came from the trusted window
+- The `'complete'` progress event could pop the success modal over a run the user had just clicked Stop on, if the stop and finish raced
+- A malformed progress/complete event from the worker process could throw inside the renderer (missing `count`/`total`/`stats`) or write `NaN%`/`Infinity%` into the progress bar
+- The post-stop cleanup poll (both the Stop-confirm and Pause-After-Batch flows) had no timeout, so a hung worker process could leave the UI stuck indefinitely; both are now bounded and de-duplicated into one shared helper
+- `start-processing` and `retry-corrupted` had no mutex against each other or themselves; a fast double-activation could spawn two organizer processes against the same output directory concurrently
+
+### Security
+- Logger secret-key redaction now catches camelCase-compound keys (`authToken`, `sessionToken`, `clientSecret`, `bearerToken`, `idToken`, `cookieValue`, etc.) that the existing snake_case/kebab-case pattern missed
+- `redactPath` now redacts `.zip` export filenames (which often embed account/real-name strings) alongside the other media extensions it already covered
+- Python `safe_extract` now checks for a symlinked path ancestor before creating a directory, not after (hardening; the specific pre-existing-symlink scenario was already blocked earlier by `safe_join`'s realpath containment check)
+- The CDN redirect-target allowlist no longer trusts the bare `cloudfront.net` suffix — redirect hops are validated against the same Snapchat-only suffix list as the initial request
+- `validateZipArchive` now rejects an oversized `memories_history.json` ZIP entry before reading it, closing the reachable path for GHSA-xcpc-8h2w-3j85 (adm-zip's uncapped `Buffer.alloc` on a declared entry size) in this app without the breaking adm-zip 0.6.0 bump
+- Dependency updates: `electron-updater` 6.8.3 → 6.8.9 and `js-yaml` → 4.3.1 (fixes a cross-origin redirect header leak and a quadratic-DoS range in the runtime tree), `brace-expansion` → 5.0.9 (DoS range), Pillow 12.2.0 → 12.3.0 (13 CVEs, including a native heap out-of-bounds write reachable via the image `resize()`/`paste()` coordinate paths this app calls directly on export-supplied images), new `piexif==1.1.3` dependency (EXIF read/write, MIT, no known CVEs)
+
 ## [1.5.3] - 2026-05-18
 ### Security
 - Retry output filenames derived from the `Date` field in `detailed_report.json` are now validated against an allowlist regex; entries with path-separator characters, absolute paths, or other unsafe values are recorded as errors instead of being written, preventing path traversal outside the output directory
