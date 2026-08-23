@@ -55,12 +55,30 @@
         "NSDesktopFolderUsageDescription": "DateBack can search your Desktop for your Snapchat export ZIP file."
       },
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "extraResources": [
-        { "from": "assets/bin/mac-${arch}/memory-organizer", "to": "bin/memory-organizer" },
-        { "from": "assets/bin/mac-${arch}/ffmpeg",           "to": "bin/ffmpeg" }
+        {
+          "from": "assets/bin/mac-${arch}/memory-organizer",
+          "to": "bin/memory-organizer"
+        },
+        {
+          "from": "assets/bin/mac-${arch}/ffmpeg",
+          "to": "bin/ffmpeg"
+        }
       ]
     },
     "win": {
@@ -68,11 +86,19 @@
       "artifactName": "${productName}-${version}-x64-win.${ext}",
       "target": {
         "target": "nsis",
-        "arch": ["x64"]
+        "arch": [
+          "x64"
+        ]
       },
       "extraResources": [
-        { "from": "assets/bin/win-x64/memory-organizer.exe", "to": "bin/memory-organizer.exe" },
-        { "from": "assets/bin/win-x64/ffmpeg.exe",           "to": "bin/ffmpeg.exe" }
+        {
+          "from": "assets/bin/win-x64/memory-organizer.exe",
+          "to": "bin/memory-organizer.exe"
+        },
+        {
+          "from": "assets/bin/win-x64/ffmpeg.exe",
+          "to": "bin/ffmpeg.exe"
+        }
       ]
     },
     "nsis": {
@@ -101,7 +127,7 @@
   "dependencies": {
     "adm-zip": "^0.5.17",
     "check-disk-space": "^3.4.0",
-    "electron-updater": "^6.8.3",
+    "electron-updater": "^6.8.9",
     "glob": "^13.0.6"
   }
 }

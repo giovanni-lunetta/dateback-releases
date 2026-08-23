@@ -54,7 +54,7 @@ BlueOak-1.0.0, or Python-2.0/PSF). For a complete list, run: npm list --producti
 Direct production dependencies:
 - adm-zip@0.5.17 - MIT
 - check-disk-space@3.4.0 - MIT
-- electron-updater@6.8.3 - MIT
+- electron-updater@6.8.9 - MIT
 - glob@13.0.6 - BlueOak-1.0.0
 
 Notable transitive dependency:
