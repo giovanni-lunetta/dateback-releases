@@ -83,11 +83,20 @@ def safe_join(root_dir, relative_name):
     return candidate
 
 
-def ensure_no_symlink_ancestor(path_value, root_dir):
-    """Refuse to write when any existing path component under root is a symlink."""
+def ensure_no_symlink_ancestor(path_value, root_dir, is_dir_target=None):
+    """Refuse to write when any existing path component under root is a symlink.
+
+    is_dir_target: when True, path_value itself is treated as the directory
+    to validate even if it does not exist yet (needed when this is called
+    *before* creating the directory). When None (default), existence is
+    auto-detected via os.path.isdir, preserving prior behavior for callers
+    that only need to validate an already-existing path.
+    """
     root_real = os.path.realpath(root_dir)
     target_abs = os.path.abspath(path_value)
-    target_dir = target_abs if os.path.isdir(target_abs) else os.path.dirname(target_abs)
+    if is_dir_target is None:
+        is_dir_target = os.path.isdir(target_abs)
+    target_dir = target_abs if is_dir_target else os.path.dirname(target_abs)
 
     try:
         rel_dir = os.path.relpath(target_dir, root_real)
@@ -203,14 +212,14 @@ def safe_extract(zf, extract_dir):
         target_path = safe_join(extract_dir, member)
         is_dir = member_info.is_dir() or member.endswith("/")
         if is_dir:
+            ensure_no_symlink_ancestor(target_path, extract_dir, is_dir_target=True)
             os.makedirs(target_path, exist_ok=True)
-            ensure_no_symlink_ancestor(target_path, extract_dir)
             continue
 
         parent_dir = os.path.dirname(target_path)
         if parent_dir:
+            ensure_no_symlink_ancestor(parent_dir, extract_dir, is_dir_target=True)
             os.makedirs(parent_dir, exist_ok=True)
-            ensure_no_symlink_ancestor(parent_dir, extract_dir)
 
         written_for_member = 0
         open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL

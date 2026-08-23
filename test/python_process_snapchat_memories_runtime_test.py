@@ -255,6 +255,26 @@ class ProcessSnapchatMemoriesRuntimeTests(unittest.TestCase):
 
             self.assertFalse(psm.is_zip_file(str(link)))
 
+    def test_ensure_no_symlink_ancestor_checks_final_segment_before_it_exists(self):
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlink support unavailable")
+
+        with tempfile.TemporaryDirectory() as extract_dir:
+            evil_target = os.path.join(extract_dir, "..", "evil_outside")
+            os.makedirs(evil_target, exist_ok=True)
+            symlink_path = os.path.join(extract_dir, "planted")
+            try:
+                os.symlink(evil_target, symlink_path)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            # is_dir_target=True forces the function to treat "planted" itself
+            # as the directory to validate, even though nothing has been
+            # makedirs'd yet at this path — this is what lets safe_extract call
+            # this check *before* creating the directory instead of after.
+            with self.assertRaises(ValueError):
+                zip_safety.ensure_no_symlink_ancestor(symlink_path, extract_dir, is_dir_target=True)
+
     def test_emit_runtime_disk_full_classifies_staging_scope(self):
         events = []
 
