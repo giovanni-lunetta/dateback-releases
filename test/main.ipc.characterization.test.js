@@ -1220,6 +1220,40 @@ test('validate-zip rejects unapproved ZIP paths outside the home directory', asy
     }
 });
 
+test('validate-zip rejects an oversized memories_history.json entry before reading it', async () => {
+    // GHSA-xcpc-8h2w-3j85: adm-zip's entry.getData() does
+    // Buffer.alloc(declaredSize) with no bound. This app's own 500MB
+    // per-entry cap already limits the blast radius, but the JSON entry
+    // itself never needs to be anywhere near that large -- so it gets a
+    // much tighter cap, checked before getData() is ever called.
+    let getDataCalls = 0;
+    withOverrides({
+        fsLstatSync: () => ({
+            isFile: () => true,
+            isSymbolicLink: () => false
+        }),
+        AdmZip: function MockAdmZip() {
+            return {
+                getEntries: () => ([
+                    {
+                        entryName: 'json/memories_history.json',
+                        header: { size: 200 * 1024 * 1024 }, // under the 500MB generic cap, over the JSON-specific one
+                        getData: () => {
+                            getDataCalls += 1;
+                            return Buffer.from('{}');
+                        }
+                    }
+                ])
+            };
+        }
+    });
+
+    const result = await callHandler('validate-zip', createAuthorizedEvent(), '/home/test/mock.zip');
+    assert.equal(result.found, false);
+    assert.match(result.error, /memories_history\.json.*too large/i);
+    assert.equal(getDataCalls, 0, 'getData() must never be called on an oversized JSON entry');
+});
+
 test('select-zip-or-folder approves selected ZIP paths outside the home directory for validation', async () => {
     const tmpZip = mkTmpFile('selected-outside-home.zip', 'zip bytes');
 

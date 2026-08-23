@@ -1359,6 +1359,21 @@ function validateZipArchive(canonicalZipPath) {
 
         let count = 0;
         if (jsonEntry) {
+            // GHSA-xcpc-8h2w-3j85: adm-zip's entry.getData() does
+            // Buffer.alloc(declaredSize) with no upper bound, straight from
+            // the (attacker-controlled) central-directory header. The
+            // MAX_ENTRY_SIZE check above already limits every entry to
+            // 500MB, but memories_history.json never needs to be anywhere
+            // near that large (matches MAX_JSON_BYTES in
+            // python/zip_safety.py) -- checked before getData() is called.
+            const MAX_JSON_ENTRY_SIZE = 100 * 1024 * 1024; // 100MB
+            if (jsonEntry.header.size > MAX_JSON_ENTRY_SIZE) {
+                return {
+                    found: false,
+                    error: 'ZIP contains a memories_history.json entry that is too large to be a legitimate Snapchat export.',
+                    count: 0
+                };
+            }
             try {
                 const jsonText = jsonEntry.getData().toString('utf8');
                 const jsonData = JSON.parse(jsonText);
