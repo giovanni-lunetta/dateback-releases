@@ -1,28 +1,23 @@
-## 🔒 Critical Security Release
+## 🔒 Security Release
 
-**This release fixes 17 vulnerabilities (3 CRITICAL, 8 HIGH severity).**  
-**All users should upgrade immediately.**
+**This release includes a broad set of security hardening improvements following an internal security review.**
+**All users should upgrade.**
 
 ---
 
-### Security Fixes (85% risk reduction)
+### Security Improvements
 
-**CRITICAL:**
-- ✅ Rotated exposed credentials (GitHub token + Apple password)
-- ✅ Fixed command injection in process cleanup (4 locations)
-- ✅ Added ZIP bomb protection (100k files, 50GB max)
-
-**HIGH:**
-- ✅ Fixed path traversal (Zip Slip) attacks in ZIP extraction
-- ✅ Fixed TOCTOU race condition in directory validation
-- ✅ Added ZIP path validation before subprocess execution
-- ✅ Added recursive symlink protection in directory deletion
-
-**MEDIUM:**
-- ✅ Rate limiting on license validation (5 attempts/minute)
-- ✅ Auto-updater downgrade attack protection
-- ✅ Website security headers (CSP, X-Frame-Options, XSS protection)
-- ✅ Python dependency tracking (requirements.txt)
+- Rotated internal credentials as a precaution
+- Hardened process cleanup against unsafe input
+- Added protection against maliciously oversized ZIP archives
+- Strengthened ZIP extraction safety checks
+- Hardened directory validation against race conditions
+- Added ZIP path validation before subprocess execution
+- Added protection against unsafe symlinks during directory cleanup
+- Added rate limiting on license validation
+- Added downgrade-attack protection to the auto-updater
+- Added standard website security headers
+- Improved tracking of Python dependency versions
 
 ---
 
@@ -47,14 +42,6 @@
 
 ---
 
-### Security Posture
-
-- **Risk Level:** VERY LOW ✅ (down from MEDIUM-HIGH)
-- **Vulnerabilities Fixed:** 17 out of 27 (63%)
-- **Remaining Issues:** 10 (all MEDIUM/LOW, deferred to v1.0.9)
-
----
-
 ### Installation
 
 1. Download the DMG above
@@ -63,9 +50,3 @@
 4. Enter your license key if prompted
 
 **Recommended for all users.**
-
----
-
-### Full Documentation
-
-See [v1.0.8 Complete Documentation](https://github.com/giovanni-lunetta/dateback-releases/blob/main/docs/DateBack_v1.0.8_Complete_Documentation.md) for detailed security fix descriptions.

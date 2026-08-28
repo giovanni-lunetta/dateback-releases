@@ -4,33 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [1.5.4] - 2026-08-23
 ### Fixed
-- Saved memories now carry their real date in the media file itself (JPEG EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime`, and the MP4 `creation_time` container tag), not just in the filename and file-system dates — apps like Photos read this embedded date for sorting, so memories now land in the correct place instead of under today's date. Covers every processing path, including Retry Corrupted Files.
-- `select-folder`'s sender-authorization check was dead code due to a sentinel collision (`null` used as both the authorized and rejected-sender return value); an unauthorized sender could reach the folder picker exactly as if it came from the trusted window
-- The `'complete'` progress event could pop the success modal over a run the user had just clicked Stop on, if the stop and finish raced
-- A malformed progress/complete event from the worker process could throw inside the renderer (missing `count`/`total`/`stats`) or write `NaN%`/`Infinity%` into the progress bar
-- The post-stop cleanup poll (both the Stop-confirm and Pause-After-Batch flows) had no timeout, so a hung worker process could leave the UI stuck indefinitely; both are now bounded and de-duplicated into one shared helper
-- `start-processing` and `retry-corrupted` had no mutex against each other or themselves; a fast double-activation could spawn two organizer processes against the same output directory concurrently
+- Saved memories now carry their real date in the media file itself, not just the filename and file-system dates — apps like Photos read this embedded date for sorting, so memories now land in the correct place instead of under today's date. Covers every processing path, including Retry Corrupted Files.
+- Fixed several reliability issues around stopping or pausing an active run, retrying failed files, and handling unexpected data from the background worker process, so the app behaves more predictably during long runs.
 
 ### Security
-- Logger secret-key redaction now catches camelCase-compound keys (`authToken`, `sessionToken`, `clientSecret`, `bearerToken`, `idToken`, `cookieValue`, etc.) that the existing snake_case/kebab-case pattern missed
-- `redactPath` now redacts `.zip` export filenames (which often embed account/real-name strings) alongside the other media extensions it already covered
-- Python `safe_extract` now checks for a symlinked path ancestor before creating a directory, not after (hardening; the specific pre-existing-symlink scenario was already blocked earlier by `safe_join`'s realpath containment check)
-- The CDN redirect-target allowlist no longer trusts the bare `cloudfront.net` suffix — redirect hops are validated against the same Snapchat-only suffix list as the initial request
-- `validateZipArchive` now rejects an oversized `memories_history.json` ZIP entry before reading it, closing the reachable path for GHSA-xcpc-8h2w-3j85 (adm-zip's uncapped `Buffer.alloc` on a declared entry size) in this app without the breaking adm-zip 0.6.0 bump
-- Dependency updates: `electron-updater` 6.8.3 → 6.8.9 and `js-yaml` → 4.3.1 (fixes a cross-origin redirect header leak and a quadratic-DoS range in the runtime tree), `brace-expansion` → 5.0.9 (DoS range), Pillow 12.2.0 → 12.3.0 (13 CVEs, including a native heap out-of-bounds write reachable via the image `resize()`/`paste()` coordinate paths this app calls directly on export-supplied images), new `piexif==1.1.3` dependency (EXIF read/write, MIT, no known CVEs)
+- Hardened an internal folder-selection permission check.
+- Broadened redaction of sensitive data in diagnostic logs.
+- Strengthened ZIP file validation and extraction safety checks.
+- Updated several bundled dependencies to their latest secure versions.
 
 ## [1.5.3] - 2026-05-18
 ### Security
-- Retry output filenames derived from the `Date` field in `detailed_report.json` are now validated against an allowlist regex; entries with path-separator characters, absolute paths, or other unsafe values are recorded as errors instead of being written, preventing path traversal outside the output directory
-- Logger secret redaction broadened from an exact-match list to a pattern that covers common variants: `access_token`, `refresh_token`, `Authorization`, `client_secret`, `apiKey`, bare `key`, nested `PASSWORD`, and related forms regardless of casing or word-boundary style
+- Strengthened validation of retry-generated filenames.
+- Broadened redaction of sensitive data in diagnostic logs.
 
 ### Fixed
-- Non-object entries (strings, numbers, etc.) in the `Saved Media` array of `memories_history.json` no longer crash the worker with an `AttributeError`; malformed rows are filtered, counted, and reported in the final stats
-- In non-ZIP mode, a failed remote file-size HEAD request no longer silently marks the entry as Skipped; the entry now proceeds to the download attempt path
-- The retry completion message sent over stdout to the Electron main process now contains only scalar stats; the per-entry results list (which could include raw Snapchat CDN query tokens) is no longer serialised over the IPC pipe
+- Non-object entries in the `Saved Media` array of `memories_history.json` no longer crash the worker; malformed rows are filtered, counted, and reported in the final stats
+- In non-ZIP mode, a failed remote file-size check no longer silently marks the entry as Skipped; the entry now proceeds to the download attempt path
+- Reduced the amount of raw diagnostic data included in retry completion output
 
 ### Added
-- A `detailed_report_redacted.json` file is written alongside `detailed_report.json` after each run with download query strings and sensitive text removed, suitable for sharing in support requests
+- A redacted copy of the detailed report is written alongside the full report, safe to share in support requests
 
 ## [1.5.2] - 2026-05-18
 ### Fixed
@@ -43,21 +37,16 @@ All notable changes to this project will be documented in this file.
 
 ## [1.5.1] - 2026-05-15
 ### Security
-- ZIP path is now authorized against the file-picker approval set before being passed to the subprocess — paths outside the user's home directory must be explicitly chosen with the picker
-- `requireApprovedWritableDirectory`: destination and staging directories are checked against the approval set before being created, preventing unapproved directory creation
-- Batch output directories (`Batch_01`, etc.) are now created without following symlink entries; existing symlinked Batch_ directories are rejected at scan time, creation time, and retry time
-- ZIP central-directory metadata is validated before indexing: 250 000-member cap, 5 TB declared-size cap, and symlink-member blocking
-- Duplicate ZIP member paths across multi-part exports are detected and rejected at index time
-- Windows drive roots (`C:\`) and network share roots (`\\server\share`) are now explicitly blocked as output directories
-- URL query strings and common secret assignments (`token=`, `sig=`, etc.) are redacted from human-readable error reports
+- Strengthened path and directory-permission validation throughout the folder-selection and processing pipeline
+- Hardened ZIP handling against several classes of malformed or unsafe archives
+- Broadened redaction of sensitive data in error reports
 
 ### Fixed
 - Overlay merge failure now saves the main image instead of writing an error record — users get the photo even when the overlay cannot be composited
 - Manifest index replay is bounded by the actual number of memories in the export, preventing runaway expansion from malformed manifests
-- Approved-directory Sets are cleared and correctly repopulated (using canonical paths) at the start of each new run — fixes cloud-mode runs breaking after the first launch of a session
-- Logger `redactPath` now strips `/var/folders` and `/Volumes` paths from log output
+- Approved-directory tracking is cleared and correctly repopulated at the start of each new run — fixes cloud-mode runs breaking after the first launch of a session
+- Logger `redactPath` now strips additional local filesystem paths from log output
 - Logger `flush()` performs a second drain to capture entries enqueued during the first drain pass
-- Python `set_config` validates against sensitive roots before calling `canonical_dir`/`makedirs`
 - `getLastTimestamp` in support-logs rewritten with async `fs.promises` (removes sync I/O from thread executor)
 - `btnFindZip` handler guards against re-entry while a scan is already running
 - Warning modals resolve any prior pending call before opening a new one
@@ -90,9 +79,9 @@ All notable changes to this project will be documented in this file.
 - Production builds now include macOS folder permission usage descriptions for automatic ZIP discovery in Downloads, Documents, and Desktop
 - QA build metadata now mirrors production folder permission descriptions
 - Public website license dependency table now matches the app production dependency tree
-- Bundled helper binaries now live under an explicit `assets/bin/mac-arm64/` source path for production and QA packaging
-- ZIP validation and disk-space IPC now reject unapproved paths outside the user's home folder unless selected through the picker
-- Python worker events now include a schema version, large resume manifests use compact processed-index ranges, and ZIP magic-byte checks refuse symlinks
+- Bundled helper binaries now live under an explicit source path for production and QA packaging
+- Strengthened path validation for ZIP selection and disk-space checks
+- Python worker events now include a schema version, large resume manifests use compact processed-index ranges, and ZIP handling was further hardened
 - Electron and dotenv dev tooling were updated to current major versions
 
 ## [1.4.1] - 2026-05-09
@@ -102,7 +91,7 @@ All notable changes to this project will be documented in this file.
 - Build scripts disable hard-link packaging, and bundled helper binaries are signed before app packaging
 - Python HEAD retry handling now honors bounded `Retry-After` responses
 - Public website social metadata and sitemap priority order corrected
-- Regression coverage added for release notices, social metadata, retry handling, and bare exception handlers
+- Regression coverage added for release notices, social metadata, retry handling, and error handling
 
 ## [1.4.0] - 2026-05-06
 ### Added
@@ -140,7 +129,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Organizer worker state tracking via persistent state file — enables reliable cleanup and prevents orphaned processes on quit or restart
 - Cloud resume now considers both staged batches and already-delivered `Batch_*` folders in the synced destination; batch numbering continues correctly instead of restarting at `Batch_01`
-- IPC lifecycle guards and security checks around process cleanup events
+- Additional lifecycle safeguards around process cleanup events
 
 ### Fixed
 - Cloud resume could incorrectly restart at `Batch_01` when completed batches had already been delivered to the destination folder
@@ -157,11 +146,11 @@ All notable changes to this project will be documented in this file.
 ## [1.1.3] - 2026-03-11
 ### Fixed
 - Replaced directory-glob `extraResources` with explicit per-file mappings for `memory-organizer` and `ffmpeg` — eliminates silent binary drop in QA config override builds
-- Corrected Polar sandbox API host from `sandbox.polar.sh` to `sandbox-api.polar.sh` (QA/internal only; no production impact)
+- Corrected Polar sandbox API host (QA/internal only; no production impact)
 
 ## [1.1.2] - 2026-02-21
 ### Added
-- Polar sandbox validation mode for internal QA, double-guarded by `DATEBACK_POLAR_ENV=sandbox` AND `DATEBACK_ALLOW_SANDBOX=1`
+- Polar sandbox validation mode for internal QA, double-guarded by two independent environment flags
 - Three new tests for Polar endpoint config (production default, sandbox guard, sandbox enabled)
 
 ## [1.1.1] - 2026-02-20
@@ -175,7 +164,9 @@ All notable changes to this project will be documented in this file.
 - Cache threshold management: processing pauses when staging cache reaches limit and resumes when it drops below threshold
 - Cloud-specific success modal copy with delivery stats (uploaded count, upload errors)
 - Cloud storage warning when local disk is low during a cloud run
-- Security: renderer document trust verification — IPC calls rejected if renderer document is not trusted
+
+### Security
+- Additional verification added around renderer-to-main IPC calls
 
 ## [1.0.9] - 2026-02-13
 ### Changed
@@ -188,7 +179,7 @@ All notable changes to this project will be documented in this file.
 ## [1.0.8] - 2026-01-30
 ### Security
 - Fixed critical security vulnerabilities in dependencies
-- Updated electron to v39.2.7
+- Updated electron to a current version
 
 ## [1.0.7] - 2026-01-15
 ### Fixed

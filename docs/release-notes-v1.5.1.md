@@ -9,13 +9,10 @@
 
 ### Security Hardening
 
-- ZIP path is now authorized against the file-picker approval set before being passed to the subprocess — paths outside the user's home directory must be explicitly chosen with the picker
-- Destination and staging directories are checked against the approval set before creation, preventing unapproved directory creation
-- Batch output directories (`Batch_01`, etc.) are created without following symlink entries; existing symlinked Batch_ directories are rejected at scan, creation, and retry time
-- ZIP central-directory metadata is validated before indexing: 250,000-member cap, 5 TB declared-size cap, and symlink-member blocking
-- Duplicate ZIP member paths across multi-part exports are detected and rejected at index time
-- Windows drive roots (`C:\`) and network share roots (`\\server\share`) are now explicitly blocked as output directories
-- URL query strings and common secret assignments (`token=`, `sig=`, etc.) are redacted from human-readable error reports
+- Strengthened path and directory-permission validation throughout the folder-selection and processing pipeline
+- Hardened ZIP handling against several classes of malformed or unsafe archives
+- Restricted output directory selection to safe, expected locations
+- Broadened redaction of sensitive data in error reports
 
 ### Bug Fixes
 

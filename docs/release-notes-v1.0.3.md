@@ -5,21 +5,16 @@
 
 ---
 
-## 🔒 Critical Security Updates
+## 🔒 Security Updates
 
 ### Electron & Dependencies
-- **Upgraded Electron** 27.x → 39.2.7 (Fixed CVE GHSA-6r2x-8pq8-9489, GHSA-vmqv-hx8q-j7mg)
+- **Upgraded Electron** 27.x → 39.2.7
 - **Upgraded electron-builder** 24.9.1 → 26.0.12
 - **Result:** 0 npm audit vulnerabilities
 
 ### Security Fixes
-- **Fixed XSS vulnerability** in license activation flow
-  - Replaced `innerHTML` with safe DOM creation (`document.createElementNS`)
-  - Prevents malicious API responses from executing JavaScript
-- **Path validation** for IPC handlers
-  - Added strict validation to `open-folder` and `retry-corrupted` handlers
-  - Only approved output directories or safe defaults (Pictures, Downloads, Documents) can be accessed
-  - Prevents unauthorized file access
+- Replaced unsafe HTML rendering in the license activation flow with safe DOM creation
+- Strengthened path validation across several IPC handlers so only approved output directories or safe defaults (Pictures, Downloads, Documents) can be accessed
 
 ### Verification
 - ✅ `contextIsolation: true` - Renderer isolated from Node.js
@@ -65,7 +60,7 @@
 
 ### External Drive Storage Detection
 - **Issue:** Storage check failed for external drives when subfolder didn't exist yet
-- **Fix:** Path traversal logic finds nearest existing parent directory
+- **Fix:** Storage lookup now walks up to the nearest existing parent directory
 - **Result:** Correct capacity shown for flash drives and external SSDs
 
 ### Warning Icon Colors
@@ -105,14 +100,6 @@ Starting with v1.0.3, we follow Apple's recommended approach:
 - **Code Signed:** Developer ID Application: GIOVANNI ANTHONY LUNETTA (ZK25MD36ZM)
 - **Notarized:** Yes (verified with `spctl -a -vvv`)
 - **Stapled:** Yes (app bundle)
-
----
-
-## 📝 Full Changelog
-
-For complete technical documentation and implementation details, see:
-- [Complete v1.0.3 Documentation](../docs/DateBack_v1.0.3_Complete_Documentation.md)
-- [Implementation Walkthrough](../../../.gemini/antigravity/brain/50b7679a-345a-453c-bf9e-d685cccd49a5/walkthrough.md)
 
 ---
 
